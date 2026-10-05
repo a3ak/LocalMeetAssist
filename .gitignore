@@ -1,0 +1,10 @@
+/data/
+/dist/
+/engines/
+/models/
+/runtime/
+/config.toml
+/localmeetassist
+*.download.part
+*.part
+*.log

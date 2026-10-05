@@ -1,0 +1,121 @@
+# Copyright 2021 The golang.design Initiative Authors.
+# All rights reserved. Use of this source code is governed
+# by a MIT license that can be found in the LICENSE file.
+#
+# Written by Changkun Ou <changkun.de>
+
+name: hotkey
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # Native tests on GitHub-hosted runners, covering both amd64 and arm64.
+  test:
+    name: test (${{ matrix.os }}, go${{ matrix.go }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        go: [ '1.24.x', 'stable' ]
+        os:
+          - ubuntu-latest       # linux/amd64
+          - ubuntu-24.04-arm    # linux/arm64
+          - macos-15            # darwin/arm64 (macOS 15 Sequoia)
+          - macos-26            # darwin/arm64 (macOS 26 Tahoe)
+          - windows-latest      # windows/amd64
+          - windows-11-arm      # windows/arm64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+
+      - name: Install and start Xvfb (Linux)
+        if: ${{ runner.os == 'Linux' }}
+        env:
+          DISPLAY: ':0.0'
+        run: |
+          sudo apt update
+          sudo apt install -y xvfb libx11-dev x11-utils
+          Xvfb :0 -screen 0 1024x768x24 > /dev/null 2>&1 &
+          MAX_ATTEMPTS=120
+          COUNT=0
+          echo -n "Waiting for Xvfb to be ready..."
+          while ! xdpyinfo -display "${DISPLAY}" >/dev/null 2>&1; do
+            echo -n "."
+            sleep 0.50s
+            COUNT=$(( COUNT + 1 ))
+            if [ "${COUNT}" -ge "${MAX_ATTEMPTS}" ]; then
+              echo "  Gave up waiting for X server on ${DISPLAY}"
+              exit 1
+            fi
+          done
+          echo "Done - Xvfb is ready!"
+
+      - name: Test (CGO_ENABLED=1)
+        if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }}
+        env:
+          DISPLAY: ':0.0'
+        run: CGO_ENABLED=1 go test -v -covermode=atomic .
+
+      - name: Test (CGO_ENABLED=0)
+        if: ${{ runner.os == 'Linux' || runner.os == 'macOS' }}
+        run: CGO_ENABLED=0 go test -v -covermode=atomic .
+
+      - name: Test (Windows)
+        if: ${{ runner.os == 'Windows' }}
+        run: go test -v -covermode=atomic .
+
+  # Build-only cross-compilation sweep to catch breakage on platforms that
+  # have no hosted runner. CGO is disabled so a single host can build them all.
+  cross-build:
+    name: cross-build (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - linux/386
+          - linux/arm
+          - windows/386
+          - openbsd/amd64
+          - freebsd/amd64
+          - netbsd/amd64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+      - name: go build
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          export GOOS=${TARGET%/*}
+          export GOARCH=${TARGET#*/}
+          echo "Building for $GOOS/$GOARCH"
+          CGO_ENABLED=0 go build -v ./...
+
+  # Real OpenBSD run inside a VM. This exercises the X11 cgo build/link path
+  # (libX11 lives under /usr/X11R6 in the OpenBSD base system) that the
+  # CGO_ENABLED=0 cross-build job cannot validate. The hotkey runtime tests
+  # need an X server, so here we compile- and vet-check with cgo enabled.
+  openbsd:
+    name: openbsd (X11, cgo)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and vet on OpenBSD
+        uses: vmactions/openbsd-vm@v1
+        with:
+          usesh: true
+          prepare: |
+            pkg_add -I go
+          run: |
+            go version
+            CGO_ENABLED=1 go build -v ./...
+            CGO_ENABLED=1 go vet ./...

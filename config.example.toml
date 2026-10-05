@@ -1,0 +1,148 @@
+config_version = 1
+
+[app]
+# Язык интерфейса: ru или en.
+language = "ru"
+data_dir = "./data"
+listen_host = "127.0.0.1"
+listen_port = 0
+open_browser = true
+# Пусто — имя по умолчанию на языке интерфейса.
+microphone_owner_name = ""
+
+[audio]
+backend = "native"
+sample_rate = 16000
+channels = 1
+block_ms = 250
+input_mode = "auto"
+input_device_id = ""
+input_device_name = ""
+output_mode = "native"
+output_device_id = ""
+output_device_name = ""
+microphone_gain = 1.0
+system_gain = 1.0
+normalize = true
+# WebRTC AEC3: auto включает обработку только при обнаруженном акустическом эхо.
+echo_cancellation = "auto"
+echo_delay_ms = 100
+
+[desktop]
+tray_enabled = true
+# Формат: Ctrl+Alt+R, Cmd+Shift+R. Пустая строка отключает действие.
+# Для одной общей комбинации задайте только toggle_record.
+toggle_record = ""
+start_recording = ""
+stop_recording = ""
+open_ui = ""
+
+[inference]
+# Можно указать точный путь к вручную установленному .dll/.dylib/.so.
+# Если указан каталог, LocalMeetAssist добавляет подпапку <os>-<arch> и имя библиотеки.
+runtime_path = "./runtime/onnxruntime"
+auto_download = true
+runtime_version = "1.23.2"
+whisper_runtime_path = "./runtime/whisper.cpp"
+
+[transcription]
+# Только автоматический запуск после остановки записи; ручной запуск доступен всегда.
+auto_run = false
+engine = "gigaam-onnx"
+model_path = "./models/asr/gigaam-v3-e2e-rnnt-int8"
+language = "ru"
+threads = 0
+timeout_seconds = 3600
+# Максимальная длина одного найденного VAD речевого фрагмента.
+chunk_seconds = 20
+source_mode = "auto"
+echo_dedup_enabled = true
+echo_time_tolerance_ms = 1500
+echo_text_similarity = 0.72
+vad_enabled = true
+vad_model_path = "./models/vad/silero-v6.2/silero_vad.onnx"
+vad_threshold = 0.50
+vad_min_speech_ms = 250
+vad_min_silence_ms = 300
+suppress_non_speech = true
+no_fallback = true
+silence_filter = true
+min_segment_rms = 0.0015
+mixed_fallback_enabled = true
+
+[diarization]
+# Только автоматический запуск после успешной транскрибации.
+auto_run = false
+engine = "pyannote-wespeaker-onnx"
+segmentation_model = "./models/diarization/pyannote-segmentation-3/model.onnx"
+embedding_model = "./models/diarization/wespeaker-resnet34-lm/voxceleb_resnet34_LM.onnx"
+# Если во встрече задано количество участников, оно имеет приоритет.
+# Для system.wav из него автоматически вычитается владелец микрофона.
+num_speakers = 0
+cluster_threshold = 0.60
+max_auto_speakers = 16
+microphone_enabled = false
+timeout_seconds = 3600
+num_threads = 4
+# Оставлены для чтения старых конфигураций; новый пайплайн всегда использует
+# окна PyAnnote по 10 секунд с перекрытием 5 секунд.
+chunk_seconds = 0
+chunk_overlap_seconds = 0
+
+[models]
+download_timeout_seconds = 7200
+gigaam_encoder_url = "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_rnnt_encoder.int8.onnx"
+gigaam_encoder_sha256 = "4e0e076a6076cd110277e529b8ac8f32cd5297f7fbebad5341ae8ddb7d00817b"
+gigaam_decoder_url = "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_rnnt_decoder.int8.onnx"
+gigaam_decoder_sha256 = "89014e134865615b91e037157e46e389b1271e6072460efc010ea08e61e23146"
+gigaam_joint_url = "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_rnnt_joint.int8.onnx"
+gigaam_joint_sha256 = "ade116563dbf66e503b0994efab6b5861412743e52bf31c39fc3fffa3783d5d1"
+gigaam_vocab_url = "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_rnnt_vocab.txt"
+gigaam_vocab_sha256 = ""
+vad_url = "https://huggingface.co/istupakov/silero-vad-onnx/resolve/main/silero_vad.onnx"
+vad_sha256 = "1a153a22f4509e292a94e67d6f9b85e8deb25b4988682b7e174c65279d8788e3"
+segmentation_url = "https://huggingface.co/onnx-community/pyannote-segmentation-3.0/resolve/main/onnx/model.onnx"
+segmentation_sha256 = "057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25"
+embedding_url = "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx"
+embedding_sha256 = "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068"
+whisper_small_url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-small-q5_1.bin"
+whisper_small_sha256 = "ae85e4a935d7a567bd102fe55afc16bb595bdb618e11b2fc7591bc08120411bb"
+whisper_medium_url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-medium-q5_0.bin"
+whisper_medium_sha256 = "19fea4b380c3a618ec4723c3eef2eb785ffba0d0538cf43f8f235e7b3b34220f"
+whisper_turbo_url = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin"
+whisper_turbo_sha256 = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a55ffa7e2"
+
+[summary]
+# Только автоматический запуск после успешных предыдущих выбранных этапов.
+auto_run = false
+base_url = "http://127.0.0.1:8080/v1"
+model = ""
+token = ""
+token_env = "MEETING_LLM_TOKEN"
+timeout_seconds = 300
+max_retries = 2
+system_prompt = ""
+prompt_file = "./prompts/meeting_summary.md"
+# Язык ответа протокола: пусто — как язык интерфейса; либо ru/en.
+language = ""
+tls_verify = true
+tls_ca_file = ""
+tls_server_name = ""
+
+[storage]
+file_name_template = "{{date}}_{{time}}_{{title_slug}}_{{uid_short}}_{{artifact_type}}"
+date_format = "2006-01-02"
+time_format = "15-04-05"
+audio_after_processing = "wav"
+mp3_bitrate_kbps = 96
+opus_bitrate_kbps = 32
+keep_source_on_failure = true
+database_path = "./data/database/meetings.db"
+backup_count = 3
+encoder_command = ""
+
+[logging]
+level = "info"
+directory = "./data/logs"
+max_file_mb = 20
+max_files = 5

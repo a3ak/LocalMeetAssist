@@ -1,0 +1,53 @@
+LocalMeetAssist vendors the following source dependencies for reproducible offline builds:
+
+1. go.etcd.io/bbolt v1.3.8 — MIT License
+   https://github.com/etcd-io/bbolt
+
+2. golang.org/x/sys v0.17.0 — BSD 3-Clause License
+   https://github.com/golang/sys
+
+3. miniaudio v0.11.22 — MIT No Attribution / Public Domain
+   https://miniaud.io
+   The vendored header includes both complete license alternatives.
+
+4. github.com/pion/opus — MIT License
+   https://github.com/pion/opus
+   Used for pure-Go Opus encoding; no FFmpeg process is invoked.
+
+5. github.com/yalue/onnxruntime_go — MIT License
+   https://github.com/yalue/onnxruntime_go
+   Go bindings used to load ONNX Runtime directly in the LocalMeetAssist process.
+
+6. gonum.org/v1/gonum — BSD 3-Clause License
+   https://gonum.org
+   FFT implementation used by the GigaAM and WeSpeaker feature extractors.
+
+7. WebRTC Audio Processing / Echo Canceller 3 — BSD 3-Clause License
+   https://webrtc.googlesource.com/src
+   Selected AEC3 sources are compiled into LocalMeetAssist; the license is stored
+   in internal/aec3/native/licenses.
+
+8. github.com/getlantern/systray — Apache License 2.0
+   https://github.com/getlantern/systray
+   Cross-platform system tray integration.
+
+9. golang.design/x/hotkey — MIT License
+   https://golang.design/x/hotkey
+   Cross-platform global keyboard shortcuts.
+
+10. whisper.cpp headers/runtime — MIT License
+    https://github.com/ggml-org/whisper.cpp
+    LocalMeetAssist contains the C API headers and bridge. Platform runtime
+    libraries are downloaded separately; no CLI executable is installed.
+
+The complete license texts are stored in the corresponding third_party directories.
+
+Downloaded runtime/model files are not included in this source tree and retain
+their own licenses displayed by the model manager:
+
+- ONNX Runtime — MIT License
+- Whisper small/medium/large-v3-turbo GGML files — MIT License
+- GigaAM v3 ONNX files — MIT License
+- Silero VAD ONNX — MIT License
+- PyAnnote Segmentation 3.0 ONNX community export — MIT License metadata
+- WeSpeaker ResNet34-LM VoxCeleb — CC BY 4.0

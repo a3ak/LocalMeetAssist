@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LocalMeetAssist — локальные протоколы встреч</title>
+  <link rel="icon" type="image/svg+xml" href="/web/favicon.svg">
+  <link rel="stylesheet" href="/web/app.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand"><span class="logo">LMA</span><div><strong>LocalMeetAssist</strong><small data-i18n="app.tagline">Локальные протоколы встреч</small></div></div>
+    <div class="record-actions">
+      <button id="themeBtn" class="ghost" data-i18n-title="app.themeToggle" title="Переключить цветовую тему">☀ Светлая</button>
+      <button id="settingsBtn" class="ghost" data-i18n="nav.settings">Настройки</button>
+      <button id="modelsBtn" class="ghost" data-i18n="nav.models">Модели</button>
+      <button id="diagBtn" class="ghost" data-i18n="nav.diagnostics">Диагностика</button>
+      <span id="timer" class="timer hidden">00:00</span>
+      <button id="startBtn" class="primary" data-i18n="record.startBtn">● Начать запись</button>
+      <button id="stopBtn" class="danger hidden" data-i18n="record.stopBtn">■ Завершить</button>
+      <button id="createBtn" class="ghost" data-i18n="create.btn">＋ Создать встречу</button>
+    </div>
+  </header>
+  <div id="diagBar" class="diag-bar" data-i18n="app.audioChecking">Проверка аудиоподсистемы…</div>
+
+  <section class="search-panel" aria-label="Поиск встреч">
+    <div class="search-line">
+      <input id="meetingSearch" autocomplete="off" data-i18n-placeholder="search.placeholder" placeholder="Найти фразу или использовать ключи: Speakers:, Meeting:, Discussion:, Date:">
+      <button id="clearSearch" type="button" class="ghost small hidden" data-i18n="search.clear">Очистить</button>
+    </div>
+    <div id="searchSuggestions" class="search-suggestions">
+      <span data-i18n="search.addCondition">Добавить условие:</span>
+      <button type="button" data-search-key="Speakers: " data-i18n="search.key.speakers">Спикеры</button>
+      <button type="button" data-search-key="Meeting: " data-i18n="search.key.meeting">Встреча</button>
+      <button type="button" data-search-key="Discussion: " data-i18n="search.key.discussion">Обсуждение</button>
+      <button type="button" data-search-key="Transcript: " data-i18n="search.key.transcript">Транскрипт</button>
+      <button type="button" data-search-key="Summary: " data-i18n="search.key.summary">Саммари</button>
+      <button type="button" data-search-key="Date: after " data-i18n="search.key.dateAfter">Дата после</button>
+      <button type="button" data-search-key="Date: before " data-i18n="search.key.dateBefore">Дата до</button>
+      <span id="speakerSuggestions"></span>
+    </div>
+    <div id="searchStatus" class="search-status" data-i18n="search.hint">Введите точную фразу. Условия через точку с запятой объединяются по правилу «И».</div>
+  </section>
+
+  <main>
+    <section class="calendar-panel">
+      <div class="calendar-head">
+        <button id="prevMonth" class="icon-btn">‹</button>
+        <h1 id="monthTitle"></h1>
+        <button id="nextMonth" class="icon-btn">›</button>
+        <button id="todayBtn" class="ghost small" data-i18n="calendar.today">Сегодня</button>
+      </div>
+      <div class="weekdays"><span data-i18n="weekday.mon">Пн</span><span data-i18n="weekday.tue">Вт</span><span data-i18n="weekday.wed">Ср</span><span data-i18n="weekday.thu">Чт</span><span data-i18n="weekday.fri">Пт</span><span data-i18n="weekday.sat">Сб</span><span data-i18n="weekday.sun">Вс</span></div>
+      <div id="calendar" class="calendar"></div>
+    </section>
+
+    <aside class="sidebar">
+      <div class="sidebar-head"><h2 data-i18n="meetings.title">Встречи</h2><span id="meetingCount" class="count">0</span></div>
+      <div id="meetingList" class="meeting-list"></div>
+    </aside>
+  </main>
+
+  <dialog id="recordDialog">
+    <form class="dialog-card" id="recordForm">
+      <div class="dialog-head"><h2 data-i18n="record.title">Новая запись</h2><button id="closeRecord" type="button" class="icon-btn">×</button></div>
+      <label><span data-i18n="record.name">Название</span><input id="recordTitle" autocomplete="off" data-i18n-placeholder="record.namePlaceholder" placeholder="Например, Планирование спринта"></label>
+      <label><span data-i18n="record.mic">Микрофон</span><select id="micSelect"></select></label>
+      <label><span data-i18n="record.systemAudio">Системный звук</span><select id="outputSelect"></select><small data-i18n="record.captureHint">Захват выполняет приложение напрямую. Браузер не запрашивает экран или вкладку.</small></label>
+      <label><span data-i18n="record.participants">Количество участников</span><input id="speakerCount" type="number" min="0" max="65" value="0"><small data-i18n="record.participantsHint">Включая вас у микрофона. 0 — определить автоматически; для системного звука приложение использует это число минус один.</small></label>
+      <div id="permissionHint" class="hint"></div>
+      <div class="dialog-actions"><button id="cancelRecord" type="button" class="ghost" data-i18n="common.cancel">Отмена</button><button id="confirmRecord" type="submit" class="primary" data-i18n="record.confirm">Начать</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="createDialog">
+    <form class="dialog-card" id="createForm">
+      <div class="dialog-head"><h2 data-i18n="create.title">Создать встречу</h2><button id="closeCreate" type="button" class="icon-btn">×</button></div>
+      <label><span data-i18n="create.name">Название</span><input id="manualTitle" required></label>
+      <label><span data-i18n="create.datetime">Дата и время</span><input id="manualDate" type="datetime-local" required></label>
+      <div class="dialog-actions"><button id="cancelCreate" type="button" class="ghost" data-i18n="common.cancel">Отмена</button><button id="confirmCreate" type="submit" class="primary" data-i18n="create.confirm">Создать</button></div>
+    </form>
+  </dialog>
+
+  <dialog id="diagDialog">
+    <div class="dialog-card diagnostics-card">
+      <div class="dialog-head"><h2 data-i18n="diag.title">Диагностика</h2><button id="closeDiag" type="button" class="icon-btn">×</button></div>
+      <pre id="diagDetails" class="diagnostics"></pre>
+      <div class="dialog-head"><h3 data-i18n="diag.recentLogs">Последние строки лога</h3><button id="refreshLogs" type="button" class="ghost small" data-i18n="common.refresh">Обновить</button></div>
+      <pre id="logDetails" class="diagnostics logs"></pre>
+      <div class="dialog-actions"><button id="closeDiag2" type="button" class="primary" data-i18n="common.close">Закрыть</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="modelsDialog">
+    <div class="dialog-card models-card">
+      <div class="dialog-head"><div><h2 data-i18n="models.title">Модели</h2><div class="meta" data-i18n="models.meta">ONNX Runtime и модели загружаются отдельно. LocalMeetAssist обращается к ним напрямую — без CLI, Python и GigaAMGUI.</div></div><button id="closeModels" type="button" class="icon-btn">×</button></div>
+      <div id="modelsList" class="models-list"></div>
+      <div class="dialog-actions"><button id="refreshModels" type="button" class="ghost" data-i18n="common.refresh">Обновить</button><button id="closeModels2" type="button" class="primary" data-i18n="common.close">Закрыть</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="settingsDialog" class="settings-dialog">
+    <div class="dialog-card settings-card">
+      <div class="dialog-head"><div><h2 data-i18n="settings.title">Настройки</h2><div class="meta" data-i18n="settings.meta">Рабочие параметры применяются сразу. Адрес сервера, каталоги данных/логов и БД — после перезапуска.</div></div><button id="closeSettings" type="button" class="icon-btn">×</button></div>
+      <div id="settingsRestart" class="settings-restart hidden"></div>
+      <div class="settings-layout">
+        <nav id="settingsNav" class="settings-nav"></nav>
+        <form id="settingsForm" class="settings-form">
+          <div id="settingsGroupTitle" class="settings-group-title"></div>
+          <div id="settingsFields" class="settings-fields"></div>
+        </form>
+      </div>
+      <div class="dialog-actions"><span id="settingsDirty" class="meta"></span><button id="closeSettings2" type="button" class="ghost" data-i18n="common.close">Закрыть</button><button id="saveSettings" type="button" class="primary" data-i18n="common.save">Сохранить</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="detailDialog" class="detail-dialog">
+    <div class="detail-card">
+      <div class="dialog-head"><div><input id="detailTitle" class="title-input"><div id="detailMeta" class="meta"></div></div><button id="closeDetail" class="icon-btn">×</button></div>
+      <div id="statusStrip" class="status-strip"></div>
+      <div class="tabs"><button data-tab="summary" class="active" data-i18n="tab.summary">Протокол</button><button data-tab="transcript" data-i18n="tab.transcript">Транскрипт</button><button data-tab="speakers" data-i18n="tab.speakers">Спикеры</button><button data-tab="artifacts" data-i18n="tab.artifacts">Файлы</button><button data-tab="jobs" data-i18n="tab.jobs">Обработка</button></div>
+      <section id="tab-summary" class="tab-content"><div id="summaryStale" class="stale-warning hidden" data-i18n="summary.stale">Протокол создан по предыдущей версии транскрипта или списка спикеров. Последний успешный результат сохранён; рекомендуется повторить саммаризацию.</div><textarea id="summaryText" data-i18n-placeholder="summary.placeholder" placeholder="Саммари ещё не создано"></textarea><button id="saveSummary" class="primary small" data-i18n="common.save">Сохранить</button></section>
+      <section id="tab-transcript" class="tab-content hidden"><textarea id="transcriptText" data-i18n-placeholder="transcript.placeholder" placeholder="Транскрипт ещё не создан"></textarea><button id="saveTranscript" class="primary small" data-i18n="common.save">Сохранить</button></section>
+      <section id="tab-speakers" class="tab-content hidden"><div class="speaker-editor-help" data-i18n="speakers.help">Измените все имена, перенесите фрагменты между карточками или перетащите карточку одного Speaker на другого для объединения. Изменения применятся только после общего сохранения.</div><div id="speakerBulkActions" class="speaker-bulk-actions hidden"><span id="speakerDirtyText"></span><select id="speakerMoveTarget"></select><button id="moveSelectedSpeakerFragments" type="button" class="ghost small" data-i18n="speakers.moveSelected">Переместить выбранные</button><button id="discardSpeakerChanges" type="button" class="ghost small" data-i18n="speakers.discard">Отменить</button><button id="saveSpeakerChanges" type="button" class="primary small" data-i18n="speakers.saveAll">Сохранить все изменения</button></div><div id="speakersList"></div></section>
+      <section id="tab-artifacts" class="tab-content hidden"><div id="audioPlayer"></div><div id="artifactsList"></div><form id="importForm" class="import-form"><input type="file" id="importFile" accept="audio/wav,audio/x-wav,audio/ogg,audio/opus,audio/mpeg,.wav,.opus,.ogg,.mp3" required><select id="importType"><optgroup data-i18n-label="import.audioGroup" label="Источник аудио (WAV, Opus или MP3)"><option value="audio_microphone" data-i18n="import.microphone">Микрофон</option><option value="audio_system" data-i18n="import.systemAudio">Системный звук</option><option value="audio_mixed" data-i18n="import.mixed">Общий поток mixed</option></optgroup><optgroup data-i18n-label="import.materialGroup" label="Готовые материалы"><option value="transcript" data-i18n="import.transcript">Транскрипт</option><option value="summary" data-i18n="import.summary">Саммари</option><option value="attachment" data-i18n="import.attachment">Другой файл</option></optgroup></select><button class="ghost small" data-i18n="import.importBtn">Импортировать</button></form><div class="hint import-hint" data-i18n="import.hint">Аудио автоматически преобразуется в рабочий PCM16 mono 16 кГц. Исходный файл после успешной проверки не сохраняется. Микрофон и системный звук можно загрузить последовательно; импорт mixed заменяет раздельную пару.</div></section>
+      <section id="tab-jobs" class="tab-content hidden">
+        <div class="meeting-processing-settings">
+          <label><span data-i18n="jobs.participants">Количество участников</span><input id="detailSpeakerCount" type="number" min="0" max="65" value="0"><small data-i18n="jobs.participantsHint">Включая владельца микрофона. 0 — определить автоматически; для system.wav будет использовано N−1.</small></label>
+          <button id="saveMeetingProcessing" type="button" class="ghost small" data-i18n="jobs.saveForMeeting">Сохранить для встречи</button>
+        </div>
+        <div class="hint processing-audio-hint" data-i18n="jobs.audioHint">Если у старой встречи остался только Opus или MP3, при повторной обработке LocalMeetAssist автоматически восстановит рабочие PCM16 WAV. Сжатый исходник сохраняется.</div>
+        <div id="jobsList"></div><div class="processing-actions"><button id="retryBtn" class="ghost small" data-i18n="jobs.retry">Повторить обработку</button><button id="cancelProcessingBtn" class="danger ghost small hidden" data-i18n="jobs.cancel">Остановить обработку</button></div>
+      </section>
+      <footer class="detail-footer"><button id="deleteMeeting" class="danger ghost" data-i18n="detail.delete">Удалить встречу</button><button id="closeDetail2" class="primary" data-i18n="common.close">Закрыть</button></footer>
+    </div>
+  </dialog>
+
+  <div id="toast" class="toast hidden"></div>
+  <script src="/web/app.js"></script>
+</body>
+</html>
