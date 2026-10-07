@@ -48,7 +48,7 @@ export function fakeApi({ firefox = false, data = {}, tabs = [], history = true,
   const session = history ? { tabHistory: { version: 1, entries: tabs.map(tab => ({ id: tab.id, url: tab.url || '',
     enteredAt: Date.now() - 10000, admitted: false })) } } : {};
   const api = {
-    id: 'test-extension', version: '1.4.0', firefox, store, session, tabs, notifications: {}, deliveries: [], alarms: [], badges: [], scanDeadlines: [],
+    id: 'test-extension', version: '0.1.0', firefox, store, session, tabs, notifications: {}, deliveries: [], alarms: [], badges: [], scanDeadlines: [],
     sessionGet: async key => ({ [key]: structuredClone(session[key]) }),
     sessionSet: async values => Object.assign(session, structuredClone(values)),
     storageGet: async keys => {

@@ -1,6 +1,6 @@
 # Протокол и совместимость — спецификация 1.0, protocol_version 1
 
-Нормативный документ: [BROWSER_PLUGIN.md](BROWSER_PLUGIN.md). Версия расширений — 1.4.0.
+Нормативный документ: [BROWSER_PLUGIN.md](BROWSER_PLUGIN.md). Версия расширений — 0.1.0.
 WebSocket: `ws://127.0.0.1:<port>/api/v1/ws`. Первое сообщение — hello с токеном,
 постоянным client_id и `protocol_version: 1`. Config также объявляет версию 1 и обе capability:
 `manual_tabs`, `recording_state`. До config и state управляющий набор не отправляется.

@@ -1,6 +1,6 @@
 {
   "name": "localmeetassist-browser-extension",
-  "version": "1.4.0",
+  "version": "0.1.0",
   "private": true,
   "description": "LocalMeetAssist WebSocket companion for Chrome, Edge and Firefox",
   "type": "module",

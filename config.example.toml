@@ -3,6 +3,8 @@ config_version = 1
 [app]
 # Язык интерфейса: ru или en.
 language = "ru"
+# Тема оформления интерфейса: dark или light.
+theme = "dark"
 data_dir = "./data"
 listen_host = "127.0.0.1"
 listen_port = 0

@@ -9,9 +9,6 @@
 
   "app.title": "LocalMeetAssist — local meeting minutes",
   "app.tagline": "Local meeting minutes",
-  "app.themeToggle": "Toggle color theme",
-  "app.themeLight": "☀ Light",
-  "app.themeDark": "☾ Dark",
   "app.audioChecking": "Checking audio subsystem…",
   "app.bootstrapError": "UI startup error: {message}",
 
@@ -62,6 +59,9 @@
   "search.matchesInMonth": "Matching meetings this month: {visible} of {total}. The rest are dimmed.",
 
   "calendar.today": "Today",
+  "calendar.month": "Month",
+  "calendar.week": "Week",
+  "calendar.filters": "Filters",
   "weekday.mon": "Mon",
   "weekday.tue": "Tue",
   "weekday.wed": "Wed",
@@ -202,6 +202,7 @@
 
   "settings.title": "Settings",
   "settings.meta": "Working settings apply immediately. Server address, data/log directories and DB — after restart.",
+  "settings.version": "Version",
   "settings.loading": "Loading settings…",
   "settings.changedCount": "Changed settings: {n}",
   "settings.noChanges": "No unsaved changes",

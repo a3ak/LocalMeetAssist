@@ -130,6 +130,7 @@ func settingsSchema(cfg config.Config) []settingGroup {
 	groups := []settingGroup{
 		{ID: "app", Title: "Приложение", Description: "Интерфейс, каталог данных и локальный HTTP-сервер.", Fields: []settingField{
 			selectSetting("app.language", "Язык интерфейса", "Язык интерфейса LocalMeetAssist. Применяется после перезагрузки страницы.", cfg.App.Language, option("ru", "Русский"), option("en", "English")),
+			selectSetting("app.theme", "Тема оформления", "Цветовая тема интерфейса. Применяется сразу в этом браузере.", cfg.App.Theme, option("dark", "Тёмная"), option("light", "Светлая")),
 			textSetting("app.microphone_owner_name", "Владелец микрофона", "Имя локального участника, автоматически используемое в новых встречах. Пусто — значение по языку интерфейса.", cfg.App.MicrophoneOwnerName),
 			textSetting("app.data_dir", "Каталог данных", "База, записи, транскрипты и логи.", cfg.App.DataDir),
 			textSetting("app.listen_host", "Адрес", "Разрешён только loopback: 127.0.0.1, localhost или ::1.", cfg.App.ListenHost),

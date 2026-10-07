@@ -123,6 +123,7 @@ func UpdateFile(path string, updates map[string]string) error {
 // App holds interface, storage location and local HTTP server settings.
 type App struct {
 	Language            string
+	Theme               string
 	DataDir             string
 	ListenHost          string
 	ListenPort          int
@@ -361,7 +362,7 @@ func DefaultMicrophoneOwnerName(language string) string {
 func Defaults() Config {
 	return Config{
 		ConfigVersion: 1,
-		App:           App{Language: "ru", DataDir: "./data", ListenHost: "127.0.0.1", ListenPort: 0, OpenBrowser: true, MicrophoneOwnerName: ""},
+		App:           App{Language: "ru", Theme: "dark", DataDir: "./data", ListenHost: "127.0.0.1", ListenPort: 0, OpenBrowser: true, MicrophoneOwnerName: ""},
 		Audio:         Audio{Backend: "native", SampleRate: 16000, Channels: 1, BlockMS: 250, InputMode: "auto", OutputMode: "native", MicrophoneGain: 1, SystemGain: 1, Normalize: true, EchoCancellation: "auto", EchoDelayMS: 100},
 		Desktop:       Desktop{TrayEnabled: true},
 		Inference:     Inference{RuntimePath: "./runtime/onnxruntime", AutoDownload: true, RuntimeVersion: "1.23.2", WhisperRuntimePath: "./runtime/whisper.cpp"},
@@ -651,6 +652,11 @@ func apply(c *Config, sec, key, raw string) error {
 		c.ConfigVersion, _ = integer(raw)
 	case "app.language":
 		c.App.Language = s
+	case "app.theme":
+		if s != "dark" && s != "light" {
+			return fmt.Errorf("app.theme must be dark or light")
+		}
+		c.App.Theme = s
 	case "app.data_dir":
 		c.App.DataDir = s
 	case "app.listen_host":

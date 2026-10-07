@@ -7,6 +7,18 @@ import (
 	"testing"
 )
 
+// TestExampleConfigLoads keeps the shipped template usable: a typo or a removed
+// key in config.example.toml would break the documented `cp` and first run.
+func TestExampleConfigLoads(t *testing.T) {
+	cfg, err := Load(filepath.Join("..", "..", "config.example.toml"))
+	if err != nil {
+		t.Fatalf("config.example.toml does not load: %v", err)
+	}
+	if cfg.App.Theme != "dark" && cfg.App.Theme != "light" {
+		t.Fatalf("example theme = %q, want dark or light", cfg.App.Theme)
+	}
+}
+
 func TestLoadOverridesDefaults(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

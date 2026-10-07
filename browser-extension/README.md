@@ -1,4 +1,4 @@
-# LocalMeetAssist Browser Extensions 1.4.0
+# LocalMeetAssist Browser Extensions 0.1.0
 
 Расширения Chrome/Edge и Firefox для локального LocalMeetAssist. Одна кодовая база WebExtensions,
 две сборки Manifest V3, готовые файлы установки и проект для GitHub. Расширение не записывает аудио.
@@ -56,9 +56,9 @@ npm run package
 
 Последняя команда делает все проверки и создаёт:
 
-- `artifacts/localmeetassist-chrome-1.4.0.zip`;
-- `artifacts/localmeetassist-firefox-1.4.0.zip`;
-- `artifacts/LocalMeetAssist_Browser_Extensions_1.4.0.zip`.
+- `artifacts/localmeetassist-chrome-0.1.0.zip`;
+- `artifacts/localmeetassist-firefox-0.1.0.zip`;
+- `artifacts/LocalMeetAssist_Browser_Extensions_0.1.0.zip`.
 
 В общем ZIP: `src/`, `dist/chrome`, `dist/firefox`, browser ZIP в `packages/`, manifests, tests, scripts, docs,
 MIT LICENSE и GitHub Actions. Реальные токены, `.git`, `node_modules`, `artifacts` туда не попадают.
@@ -72,7 +72,7 @@ MIT LICENSE и GitHub Actions. Реальные токены, `.git`, `node_modu
 ```sh
 git init
 git add .
-git commit -m "LocalMeetAssist browser extensions 1.4.0"
+git commit -m "LocalMeetAssist browser extensions 0.1.0"
 git branch -M main
 git remote add origin <URL_ВАШЕГО_РЕПОЗИТОРИЯ>
 git push -u origin main
@@ -90,7 +90,7 @@ CI проверяет проект и сохраняет ZIP; автоматич
 
 ## English
 
-LocalMeetAssist 1.4.0 companion extensions for Chrome/Edge and Firefox. Shared dependency-free WebExtensions
+LocalMeetAssist 0.1.0 companion extensions for Chrome/Edge and Firefox. Shared dependency-free WebExtensions
 codebase, separate MV3 builds. Requires published server specification 1.0 (wire protocol 1); see `docs/SERVER_CHANGES.md`.
 Manual start/stop use reserved URLs in authenticated `tabs` messages. The server publishes global recording state;
 the extension tracks fresh meeting pages, a controlling tab and a 60-second transfer window. It never captures audio.

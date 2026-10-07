@@ -35,6 +35,8 @@ var settingSectionsEN = map[string]string{
 var settingOptionsEN = map[string]string{
 	"app.language.ru": "Russian",
 	"app.language.en": "English",
+	"app.theme.dark":  "Dark",
+	"app.theme.light": "Light",
 
 	"audio.backend.native":         "Native",
 	"audio.sample_rate.8000":       "8 kHz",
@@ -80,6 +82,7 @@ var settingOptionLabelsEN = map[string]string{
 var settingFieldsEN = map[string]settingTextEN{
 	// Application
 	"app.language":              {"Interface language", "LocalMeetAssist interface language. Applies after the page reloads."},
+	"app.theme":                 {"Theme", "Interface colour theme. Applied immediately in this browser."},
 	"app.microphone_owner_name": {"Microphone owner", "Name of the local participant, used automatically in new meetings. Empty — value depends on the interface language."},
 	"app.data_dir":              {"Data directory", "Database, recordings, transcripts and logs."},
 	"app.listen_host":           {"Address", "Only loopback is allowed: 127.0.0.1, localhost or ::1."},

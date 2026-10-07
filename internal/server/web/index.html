@@ -9,23 +9,20 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="logo">LMA</span><div><strong>LocalMeetAssist</strong><small data-i18n="app.tagline">Локальные протоколы встреч</small></div></div>
+    <div class="brand"><span class="brand-mark"><span class="logo">LMA</span><span id="appVersion" class="brand-version hidden"></span></span><div><strong>LocalMeetAssist</strong><small data-i18n="app.tagline">Локальные протоколы встреч</small></div></div>
     <div class="record-actions">
-      <button id="themeBtn" class="ghost" data-i18n-title="app.themeToggle" title="Переключить цветовую тему">☀ Светлая</button>
       <button id="settingsBtn" class="ghost" data-i18n="nav.settings">Настройки</button>
       <button id="modelsBtn" class="ghost" data-i18n="nav.models">Модели</button>
-      <button id="diagBtn" class="ghost" data-i18n="nav.diagnostics">Диагностика</button>
+      <button id="diagBtn" class="ghost" data-i18n="nav.diagnostics">Диагностика<span id="diagBadge" class="nav-badge hidden" aria-hidden="true">!</span></button>
       <button id="integrationsBtn" class="ghost" data-i18n="nav.integrations">Интеграции</button>
       <span id="timer" class="timer hidden">00:00</span>
       <button id="startBtn" class="primary" data-i18n="record.startBtn">● Начать запись</button>
       <button id="stopBtn" class="danger hidden" data-i18n="record.stopBtn">■ Завершить</button>
-      <button id="createBtn" class="ghost" data-i18n="create.btn">＋ Создать встречу</button>
     </div>
   </header>
-  <div id="diagBar" class="diag-bar" data-i18n="app.audioChecking">Проверка аудиоподсистемы…</div>
   <div id="authHint" class="auth-hint hidden" data-i18n="auth.hint">Страница открыта вручную без авторизации. Откройте LocalMeetAssist из меню трея «Открыть Web UI» или перезапустите приложение.</div>
 
-  <section class="search-panel" aria-label="Поиск встреч">
+  <section id="searchPanel" class="search-panel hidden" aria-label="Поиск встреч">
     <div class="search-line">
       <input id="meetingSearch" autocomplete="off" data-i18n-placeholder="search.placeholder" placeholder="Найти фразу или использовать ключи: Speakers:, Meeting:, Discussion:, Date:">
       <button id="clearSearch" type="button" class="ghost small hidden" data-i18n="search.clear">Очистить</button>
@@ -51,9 +48,18 @@
         <h1 id="monthTitle"></h1>
         <button id="nextMonth" class="icon-btn">›</button>
         <button id="todayBtn" class="ghost small" data-i18n="calendar.today">Сегодня</button>
+        <div class="head-actions">
+          <div id="calendarView" class="segmented">
+            <button type="button" data-view="month" class="active" data-i18n="calendar.month">Месяц</button>
+            <button type="button" data-view="week" data-i18n="calendar.week">Неделя</button>
+          </div>
+          <button id="filterToggle" type="button" class="icon-action" data-i18n-title="calendar.filters" title="Фильтры"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 5h18l-7 8v6l-4-2v-4z"/></svg></button>
+          <button id="createBtn" type="button" class="icon-action" data-i18n-title="create.btn" title="Создать встречу"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+        </div>
       </div>
-      <div class="weekdays"><span data-i18n="weekday.mon">Пн</span><span data-i18n="weekday.tue">Вт</span><span data-i18n="weekday.wed">Ср</span><span data-i18n="weekday.thu">Чт</span><span data-i18n="weekday.fri">Пт</span><span data-i18n="weekday.sat">Сб</span><span data-i18n="weekday.sun">Вс</span></div>
+      <div id="weekdaysRow" class="weekdays"><span data-i18n="weekday.mon">Пн</span><span data-i18n="weekday.tue">Вт</span><span data-i18n="weekday.wed">Ср</span><span data-i18n="weekday.thu">Чт</span><span data-i18n="weekday.fri">Пт</span><span data-i18n="weekday.sat">Сб</span><span data-i18n="weekday.sun">Вс</span></div>
       <div id="calendar" class="calendar"></div>
+      <div id="weekCalendar" class="week-calendar hidden"></div>
     </section>
 
     <aside class="sidebar">
@@ -86,6 +92,7 @@
   <dialog id="diagDialog">
     <div class="dialog-card diagnostics-card">
       <div class="dialog-head"><h2 data-i18n="diag.title">Диагностика</h2><button id="closeDiag" type="button" class="icon-btn">×</button></div>
+      <div id="diagAudio" class="diag-status hidden"></div>
       <pre id="diagDetails" class="diagnostics"></pre>
       <div class="dialog-head"><h3 data-i18n="diag.recentLogs">Последние строки лога</h3><button id="refreshLogs" type="button" class="ghost small" data-i18n="common.refresh">Обновить</button></div>
       <pre id="logDetails" class="diagnostics logs"></pre>

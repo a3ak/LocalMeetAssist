@@ -13,10 +13,13 @@ const state = {
   modelTimer: null,
   settings: null,
   settingsDirty: new Map(),
+  appVersion: "",
+  serverTheme: "dark",
   tokenSecrets: new Map(),
   speakerEditor: null,
   speakerPlayer: null,
   searchQuery: "",
+  calendarView: "month",
   searchMatches: null,
   searchSpeakers: [],
   searchTimer: null,
@@ -51,10 +54,6 @@ function applyStaticTranslations() {
   $$("[data-i18n-placeholder]").forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
   $$("[data-i18n-title]").forEach((node) => { node.title = t(node.dataset.i18nTitle); });
   $$("[data-i18n-label]").forEach((node) => { node.label = t(node.dataset.i18nLabel); });
-  // The theme button label depends on the active theme and is set dynamically
-  // by applyTheme, which may run before the translation dictionary is loaded.
-  const themeButton = $("#themeBtn");
-  if (themeButton) themeButton.textContent = document.documentElement.dataset.theme === "dark" ? t("app.themeLight") : t("app.themeDark");
 }
 
 async function loadLanguage(code) {
@@ -135,7 +134,7 @@ function monthBounds(date) {
 }
 
 async function loadMeetings() {
-  const { from, to } = monthBounds(state.month);
+  const { from, to } = calendarBounds(state.month);
   const result = await api(`/api/v1/meetings?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
   state.meetings = Array.isArray(result) ? result : [];
   renderCalendar();
@@ -306,6 +305,14 @@ function stageText(value) {
 
 function renderCalendar() {
   const date = state.month;
+  const month = state.calendarView !== "week";
+  $("#weekdaysRow").classList.toggle("hidden", !month);
+  $("#calendar").classList.toggle("hidden", !month);
+  $("#weekCalendar").classList.toggle("hidden", month);
+  if (!month) {
+    renderWeek();
+    return;
+  }
   $("#monthTitle").textContent = new Intl.DateTimeFormat(LOCALE, { month: "long", year: "numeric" }).format(date);
   const first = new Date(date.getFullYear(), date.getMonth(), 1);
   const offset = (first.getDay() + 6) % 7;
@@ -328,10 +335,162 @@ function renderCalendar() {
       event.className = `event ${meeting.status}${state.searchMatches ? (matches ? " search-match" : " search-dimmed") : ""}`;
       event.textContent = `${new Date(meeting.started_at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })} ${meeting.title}`;
       event.onclick = () => openDetail(meeting.uid);
+      bindMeetingHover(event, meeting.uid);
       cell.appendChild(event);
     });
     root.appendChild(cell);
   }
+}
+
+const WEEKDAY_KEYS = ["weekday.mon", "weekday.tue", "weekday.wed", "weekday.thu", "weekday.fri", "weekday.sat", "weekday.sun"];
+
+// meetingInterval returns the wall-clock start and end of a meeting.
+function meetingInterval(meeting) {
+  const start = new Date(meeting.started_at);
+  const durationMS = Math.max(0, Number(meeting.duration_ms || 0));
+  return { start, end: new Date(start.getTime() + durationMS) };
+}
+
+function fmtClock(date) {
+  return date.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
+}
+
+// weekTitle renders a range such as "9 — 15 февраля 2026 г." for the week header.
+function weekTitle(first, last) {
+  const day = String(last.getDate());
+  const month = new Intl.DateTimeFormat(LOCALE, { day: "numeric", month: "long" })
+    .format(last).replace(day, "").replace(/^[,\s]+|[,\s]+$/g, "");
+  const year = new Intl.DateTimeFormat(LOCALE, { year: "numeric" }).format(last);
+  return `${first.getDate()} — ${last.getDate()} ${month} ${year}`;
+}
+
+// layoutDayEvents assigns overlapping meetings to lanes so they sit side by side
+// instead of hiding each other.
+function layoutDayEvents(items) {
+  const placed = [];
+  let cluster = [];
+  let clusterEnd = null;
+  const flush = () => {
+    if (!cluster.length) return;
+    const lanes = [];
+    cluster.forEach((item) => {
+      let lane = lanes.findIndex((end) => end <= item.start);
+      if (lane < 0) { lanes.push(item.end); lane = lanes.length - 1; } else { lanes[lane] = item.end; }
+      item.lane = lane;
+    });
+    cluster.forEach((item) => { item.lanes = lanes.length; });
+    placed.push(...cluster);
+    cluster = [];
+    clusterEnd = null;
+  };
+  items.forEach((item) => {
+    if (clusterEnd && item.start >= clusterEnd) flush();
+    cluster.push(item);
+    clusterEnd = clusterEnd && clusterEnd > item.end ? clusterEnd : item.end;
+  });
+  flush();
+  return placed;
+}
+
+// renderWeek draws the timeline: one column per day, hour marks shared by all
+// columns, and every meeting placed at its own time.
+function renderWeek() {
+  const { start } = weekBounds(state.month);
+  const days = [];
+  for (let index = 0; index < 7; index += 1) {
+    const day = new Date(start);
+    day.setDate(start.getDate() + index);
+    days.push(day);
+  }
+  $("#monthTitle").textContent = weekTitle(days[0], days[6]);
+
+  const perDay = days.map((day) => state.meetings
+    .map((meeting) => ({ meeting, ...meetingInterval(meeting) }))
+    .filter((item) => sameDay(item.start, day))
+    .sort((a, b) => a.start - b.start));
+
+  // The visible window follows the meetings but never gets shorter than 09–19.
+  let firstHour = 9;
+  let lastHour = 19;
+  perDay.flat().forEach((item) => {
+    firstHour = Math.min(firstHour, item.start.getHours());
+    lastHour = Math.max(lastHour, item.end.getHours() + (item.end.getMinutes() ? 1 : 0));
+  });
+  firstHour = Math.max(0, firstHour);
+  lastHour = Math.min(24, Math.max(lastHour, firstHour + 2));
+  const rows = lastHour - firstHour;
+
+  const today = new Date();
+  const root = $("#weekCalendar");
+  root.innerHTML = "";
+  const head = document.createElement("div");
+  head.className = "week-head";
+  head.innerHTML = `<div class="wh"></div>${days.map((day, index) => `<div class="wh${sameDay(day, today) ? " today" : ""}">${esc(t(WEEKDAY_KEYS[index]))}<b>${day.getDate()}</b></div>`).join("")}`;
+  root.appendChild(head);
+
+  const body = document.createElement("div");
+  body.className = "week-body";
+  const hours = document.createElement("div");
+  hours.className = "week-hours";
+  hours.style.gridTemplateRows = `repeat(${rows},1fr)`;
+  for (let hour = firstHour; hour < lastHour; hour += 1) {
+    const label = document.createElement("span");
+    label.textContent = `${String(hour).padStart(2, "0")}:00`;
+    hours.appendChild(label);
+  }
+  body.appendChild(hours);
+
+  perDay.forEach((items) => {
+    const column = document.createElement("div");
+    column.className = "week-col";
+    for (let row = 0; row < rows; row += 1) {
+      const line = document.createElement("div");
+      line.className = "hour-line";
+      line.style.top = `${(row / rows) * 100}%`;
+      column.appendChild(line);
+    }
+    layoutDayEvents(items).forEach((item) => {
+      const event = document.createElement("button");
+      const matches = meetingMatchesSearch(item.meeting);
+      event.className = `event ${item.meeting.status}${state.searchMatches ? (matches ? " search-match" : " search-dimmed") : ""}`;
+      const startHour = item.start.getHours() + item.start.getMinutes() / 60;
+      const lengthHours = Math.max(item.end - item.start, 15 * 60 * 1000) / 3600000;
+      event.style.top = `${((startHour - firstHour) / rows) * 100}%`;
+      event.style.height = `${(lengthHours / rows) * 100}%`;
+      if (item.lanes > 1) {
+        event.style.left = `calc(${(item.lane / item.lanes) * 100}% + 3px)`;
+        event.style.width = `calc(${100 / item.lanes}% - 5px)`;
+        event.style.right = "auto";
+      }
+      const startText = fmtClock(item.start);
+      const endText = fmtClock(item.end);
+      const range = startText === endText ? startText : `${startText} – ${endText}`;
+      event.innerHTML = `<small>${esc(range)}</small>${esc(item.meeting.title)}`;
+      event.onclick = () => openDetail(item.meeting.uid);
+      bindMeetingHover(event, item.meeting.uid);
+      column.appendChild(event);
+    });
+    body.appendChild(column);
+  });
+  root.appendChild(body);
+}
+
+// revealMeetingCard mirrors a hovered calendar entry onto its card in the
+// sidebar, so a block too small for a title still shows the full text,
+// participants and topic. The list only scrolls when the card is out of view.
+function revealMeetingCard(uid, active) {
+  const card = document.querySelector(`.meeting-item[data-uid="${uid}"]`);
+  if (!card) return;
+  card.classList.toggle("hovered", active);
+  if (active) card.scrollIntoView({ block: "nearest", behavior: "smooth" });
+}
+
+// bindMeetingHover wires a calendar entry to its sidebar card.
+function bindMeetingHover(element, uid) {
+  element.onmouseenter = () => revealMeetingCard(uid, true);
+  element.onmouseleave = () => revealMeetingCard(uid, false);
+  element.onblur = () => revealMeetingCard(uid, false);
+  element.onfocus = () => revealMeetingCard(uid, true);
 }
 
 function renderList() {
@@ -349,6 +508,7 @@ function renderList() {
       ? `${participants.names.map(esc).join(", ")}${participants.more ? ` <span class="more-participants">+${participants.more}</span>` : ""}`
       : t("list.noParticipants");
     node.innerHTML = `<strong>${esc(meeting.title)}</strong><div class="meta">${fmtDate(meeting.started_at)} · ${formatDuration(meeting.duration_ms)}</div>${topic ? `<div class="meeting-topic" title="${esc(topic)}">${esc(topic)}</div>` : ""}<div class="meeting-participants">${participantText}</div><span class="badge ${meeting.status}">${statusText(meeting.status)}</span>`;
+    node.dataset.uid = meeting.uid;
     node.onclick = () => openDetail(meeting.uid);
     root.appendChild(node);
   });
@@ -392,15 +552,61 @@ function activeParticipants(transcript = "", limit = 5) {
   return { names: all.slice(0, limit), more: Math.max(0, all.length - limit) };
 }
 
+// applyTheme switches the colour scheme and caches it so the next paint does not
+// flash the wrong theme while /api/v1/config is still in flight. The stored value
+// is only a cache: config.toml stays the source of truth.
 function applyTheme(theme) {
   const selected = theme === "light" ? "light" : "dark";
   document.documentElement.dataset.theme = selected;
   localStorage.setItem("localmeetassist-theme", selected);
-  // Until the translation dictionary is loaded, keep the HTML fallback label
-  // instead of flashing the raw "app.themeLight" key. applyStaticTranslations
-  // refreshes the label once the language is ready.
-  const button = $("#themeBtn");
-  if (button && I18N["app.themeLight"]) button.textContent = selected === "dark" ? t("app.themeLight") : t("app.themeDark");
+}
+
+// calendarBounds returns the fetch window for the current view: a whole week in
+// week mode, so a week that spans two months still has all its meetings.
+function calendarBounds(date) {
+  if (state.calendarView !== "week") return monthBounds(date);
+  const { start, end } = weekBounds(date);
+  return { from: start, to: end };
+}
+
+// weekBounds returns Monday..Sunday around the anchor date.
+function weekBounds(date) {
+  const start = new Date(date.getFullYear(), date.getMonth(), date.getDate());
+  start.setDate(start.getDate() - ((start.getDay() + 6) % 7));
+  start.setHours(0, 0, 0, 0);
+  const end = new Date(start);
+  end.setDate(start.getDate() + 7);
+  return { start, end };
+}
+
+// shiftCalendar moves the anchor by one month or one week, depending on the view.
+function shiftCalendar(direction) {
+  if (state.calendarView === "week") {
+    const next = new Date(state.month);
+    next.setDate(next.getDate() + direction * 7);
+    state.month = next;
+  } else {
+    state.month = new Date(state.month.getFullYear(), state.month.getMonth() + direction, 1);
+  }
+  loadMeetings().catch((error) => toast(error.message));
+}
+
+// setCalendarView switches between the month grid and the week timeline.
+function setCalendarView(view) {
+  state.calendarView = view === "week" ? "week" : "month";
+  localStorage.setItem("localmeetassist-calendar-view", state.calendarView);
+  $$("#calendarView button").forEach((button) => {
+    button.classList.toggle("active", button.dataset.view === state.calendarView);
+  });
+  renderCalendar();
+}
+
+// toggleSearchPanel reveals the filter row behind the funnel icon.
+function toggleSearchPanel(force) {
+  const panel = $("#searchPanel");
+  const show = typeof force === "boolean" ? force : panel.classList.contains("hidden");
+  panel.classList.toggle("hidden", !show);
+  $("#filterToggle").classList.toggle("active", show);
 }
 
 function fillDeviceSelect(element, items, emptyText, configuredID) {
@@ -430,11 +636,14 @@ async function refreshDevices() {
   $("#permissionHint").textContent = warnings.length ? warnings.join(" ") : t("record.devicesOk");
   const ready = devices.available && devices.microphones?.length > 0 && devices.system_sources?.length > 0;
   $("#confirmRecord").disabled = !ready;
-  const bar = $("#diagBar");
-  bar.className = `diag-bar ${ready ? "ok" : "error"}`;
+  // The audio line lives in the diagnostics dialog; the button only carries a
+  // small marker while something is wrong.
+  const bar = $("#diagAudio");
+  bar.className = `diag-status ${ready ? "ok" : "error"}`;
   bar.textContent = ready
     ? t("record.audioReady", { mics: devices.microphones.length, systems: devices.system_sources.length })
     : t("record.audioNotReady", { reason: warnings.join(" ") || t("record.noMic") });
+  $("#diagBadge").classList.toggle("hidden", ready);
   return devices;
 }
 
@@ -1070,6 +1279,16 @@ function bindHotkeyCapture(input, captureButton, clearButton) {
   });
 }
 
+// applyAppVersion renders the build version next to the logo. It stays muted and
+// stays hidden when the server did not report a version.
+function applyAppVersion() {
+  const badge = $("#appVersion");
+  if (!badge) return;
+  badge.textContent = state.appVersion || "";
+  badge.classList.toggle("hidden", !state.appVersion);
+  badge.title = state.appVersion ? `${t("settings.version")} ${state.appVersion}` : "";
+}
+
 function renderSettingsGroup(groupID) {
   const groups = state.settings?.groups || [];
   const group = groups.find((item) => item.id === groupID) || groups[0];
@@ -1163,6 +1382,14 @@ function renderSettingsGroup(groupID) {
     }
     root.appendChild(row);
   });
+  // The version is informational, not a setting: it is appended below the last
+  // field of the application group and never part of the edited values.
+  if (group.id === "app" && state.appVersion) {
+    const version = document.createElement("div");
+    version.className = "settings-version";
+    version.textContent = `${t("settings.version")} ${state.appVersion}`;
+    root.appendChild(version);
+  }
   // Prefill the port field with the currently bound port when the user focuses
   // it, so a random port can be pinned to a stable value for the browser plugin.
   const portField = root.querySelector("[data-key='app.listen_port']");
@@ -1234,6 +1461,9 @@ async function saveSettings() {
     $("#settingsRestart").textContent = result.restart_required
       ? t("settings.restartRequired", { keys: (result.restart_keys || []).join(", ") })
       : "";
+    if (Object.prototype.hasOwnProperty.call(values, "app.theme")) {
+      applyTheme(values["app.theme"]);
+    }
     if (Object.prototype.hasOwnProperty.call(values, "app.language")) {
       setTimeout(() => window.location.reload(), 500);
       return;
@@ -1283,8 +1513,8 @@ $("#createForm").onsubmit = async (event) => {
 };
 $("#closeCreate").onclick = $("#cancelCreate").onclick = () => closeDialog("#createDialog");
 
-$("#prevMonth").onclick = () => { state.month = new Date(state.month.getFullYear(), state.month.getMonth() - 1, 1); loadMeetings().catch((e) => toast(e.message)); };
-$("#nextMonth").onclick = () => { state.month = new Date(state.month.getFullYear(), state.month.getMonth() + 1, 1); loadMeetings().catch((e) => toast(e.message)); };
+$("#prevMonth").onclick = () => shiftCalendar(-1);
+$("#nextMonth").onclick = () => shiftCalendar(1);
 $("#todayBtn").onclick = () => { state.month = new Date(); loadMeetings().catch((e) => toast(e.message)); };
 $("#meetingSearch").addEventListener("input", () => {
   renderSearchSuggestions();
@@ -1383,7 +1613,8 @@ $("#importForm").onsubmit = async (event) => {
 };
 
 $("#diagBtn").onclick = showDiagnostics;
-$("#themeBtn").onclick = () => applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+$$("#calendarView button").forEach((button) => { button.onclick = () => setCalendarView(button.dataset.view); });
+$("#filterToggle").onclick = () => toggleSearchPanel();
 $("#refreshLogs").onclick = refreshLogs;
 $("#closeDiag").onclick = $("#closeDiag2").onclick = () => closeDialog("#diagDialog");
 $("#modelsBtn").onclick = showModels;
@@ -1748,8 +1979,16 @@ async function bootstrap() {
       const config = await api("/api/v1/config");
       language = config.language || "ru";
       state.listenPort = config.listen_port || 0;
+      state.appVersion = config.version || "";
+      state.serverTheme = config.theme || "dark";
     } catch {}
     await loadLanguage(language);
+    // config.toml stays the source of truth for the theme; the cached value only
+    // avoids flashing the wrong colours on the first paint.
+    applyTheme(state.serverTheme);
+    setCalendarView(localStorage.getItem("localmeetassist-calendar-view") || "month");
+    // After the language is loaded, so the tooltip is translated.
+    applyAppVersion();
     try {
       await Promise.all([loadMeetings(), refreshDevices(), refreshRecordingState(), executeMeetingSearch()]);
       connectEvents();
@@ -1758,8 +1997,10 @@ async function bootstrap() {
     }
   } catch (error) {
     toast(error.message);
-    $("#diagBar").className = "diag-bar error";
-    $("#diagBar").textContent = t("app.bootstrapError", { message: error.message });
+    const bar = $("#diagAudio");
+    bar.className = "diag-status error";
+    bar.textContent = t("app.bootstrapError", { message: error.message });
+    $("#diagBadge").classList.remove("hidden");
   }
 }
 

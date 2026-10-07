@@ -8,7 +8,7 @@ test('real popup scripts render source/list, send controls and never render URL 
   const nodes=Object.fromEntries([...html.matchAll(/\bid="([^"]+)"/g)].map(m=>[m[1],node()]));
   const malicious='https://meet.google.com/<img onerror=alert(1)>';
   const row={id:1,url:malicious,glob:'*meet.google.com/*',source:true,controlling:true};
-  const status={ok:true,status:'online',version:'1.4.0',port:52469,recordingActive:true,canControl:true,canAnswer:false,openCount:1,rows:[row],origin:{id:1,url:malicious,glob:row.glob},controller:{id:1,url:malicious},lastHeartbeat:Date.now()};
+  const status={ok:true,status:'online',version:'0.1.0',port:52469,recordingActive:true,canControl:true,canAnswer:false,openCount:1,rows:[row],origin:{id:1,url:malicious,glob:row.glob},controller:{id:1,url:malicious},lastHeartbeat:Date.now()};
   const calls=[];let interval;
   const sandbox={document:{getElementById:id=>{assert(nodes[id],'Missing '+id);return nodes[id];},createElement:()=>node()},
     LMA:{browserApi:{openOptions(){}},ui:{showStatus(){},async request(message){calls.push(message);return message.kind==='status'?structuredClone(status):message.kind==='active-tab'?{ok:true,tab:{id:88,url:malicious}}:{ok:true};}}},

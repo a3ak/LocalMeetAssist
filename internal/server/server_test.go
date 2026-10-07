@@ -22,7 +22,30 @@ import (
 	"localmeetassist/internal/nativeaudio"
 	"localmeetassist/internal/recording"
 	"localmeetassist/internal/store"
+	"localmeetassist/internal/version"
 )
+
+// TestPublicConfigReportsVersion keeps the version available to the Web UI,
+// which renders it next to the logo and at the bottom of the application
+// settings without a separate request.
+func TestPublicConfigReportsVersion(t *testing.T) {
+	_, handler := newIntegrationServer(t)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/config", nil)
+	rr := httptest.NewRecorder()
+	handler.ServeHTTP(rr, req)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("config: %d %s", rr.Code, rr.Body.String())
+	}
+	var payload struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Version != version.Version {
+		t.Fatalf("config version = %q, want %q", payload.Version, version.Version)
+	}
+}
 
 func TestMeetingAPIAndCSRF(t *testing.T) {
 	cfg := config.Defaults()

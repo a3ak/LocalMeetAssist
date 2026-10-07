@@ -9,9 +9,6 @@
 
   "app.title": "LocalMeetAssist — локальные протоколы встреч",
   "app.tagline": "Локальные протоколы встреч",
-  "app.themeToggle": "Переключить цветовую тему",
-  "app.themeLight": "☀ Светлая",
-  "app.themeDark": "☾ Тёмная",
   "app.audioChecking": "Проверка аудиоподсистемы…",
   "app.bootstrapError": "Ошибка запуска UI: {message}",
 
@@ -62,6 +59,9 @@
   "search.matchesInMonth": "Подходит встреч в текущем месяце: {visible} из {total}. Остальные встречи затенены.",
 
   "calendar.today": "Сегодня",
+  "calendar.month": "Месяц",
+  "calendar.week": "Неделя",
+  "calendar.filters": "Фильтры",
   "weekday.mon": "Пн",
   "weekday.tue": "Вт",
   "weekday.wed": "Ср",
@@ -202,6 +202,7 @@
 
   "settings.title": "Настройки",
   "settings.meta": "Рабочие параметры применяются сразу. Адрес сервера, каталоги данных/логов и БД — после перезапуска.",
+  "settings.version": "Версия",
   "settings.loading": "Загрузка настроек…",
   "settings.changedCount": "Изменено параметров: {n}",
   "settings.noChanges": "Нет несохранённых изменений",
