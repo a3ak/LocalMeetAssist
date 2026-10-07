@@ -1,0 +1,140 @@
+name: Release
+
+# Собирает пакеты под каждую ОС на её собственном runner'е и прикладывает их
+# к GitHub Release. CGO и платформенные SDK (WASAPI, CoreAudio, GTK) не
+# кросс-компилируются, поэтому сборка идёт нативно на каждой системе.
+#
+# Запуск: git tag -a v0.1.0 -m "LocalMeetAssist 0.1.0" && git push origin v0.1.0
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Тег для релиза, например v0.1.0'
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.goos }}/${{ matrix.goarch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { runner: macos-14, goos: darwin, goarch: arm64, ext: tar.gz }
+          # Без Apple Silicon runner'а: SDK macOS универсален, поэтому x86_64
+          # собирается на arm64-машине той же командой.
+          - { runner: macos-14, goos: darwin, goarch: amd64, ext: tar.gz }
+          - { runner: ubuntu-24.04, goos: linux, goarch: amd64, ext: tar.gz }
+          # Экспериментальная цель: если GitHub не выдаст arm64-runner, релиз
+          # всё равно соберётся из остальных. Можно удалить без последствий.
+          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64, ext: tar.gz, experimental: true }
+          - { runner: windows-latest, goos: windows, goarch: amd64, ext: zip }
+    continue-on-error: ${{ matrix.experimental == true }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Установить заголовки для Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libayatana-appindicator3-dev libx11-dev pkg-config
+
+      - name: Найти C-компилятор в Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          if ! command -v gcc >/dev/null 2>&1; then
+            for dir in /c/mingw64/bin /c/msys64/mingw64/bin /c/tools/mingw64/bin; do
+              if [ -x "$dir/gcc.exe" ]; then echo "$dir" >> "$GITHUB_PATH"; break; fi
+            done
+          fi
+          gcc --version | head -1
+
+      - name: Собрать и упаковать
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          version="${tag#v}"
+          binary="localmeetassist"
+          [ "${GOOS}" = "windows" ] && binary="localmeetassist.exe"
+          # Версия попадает в бинарник из тега: -version и /api/v1/health.
+          go build -trimpath \
+            -ldflags "-s -w -X localmeetassist/internal/version.Version=${version}" \
+            -o "dist/${binary}" ./cmd/localmeetassist
+          "./dist/${binary}" -version
+
+          stage="stage/localmeetassist_${version}_${GOOS}_${GOARCH}"
+          mkdir -p "$stage"
+          cp "dist/${binary}" "$stage/"
+          cp config.example.toml README.md LICENSE "$stage/"
+          cp prompts/meeting_summary.md "$stage/"
+          if [ "${GOOS}" = "windows" ]; then
+            (cd stage && 7z a -tzip "../dist/localmeetassist_${version}_${GOOS}_${GOARCH}.zip" "localmeetassist_${version}_${GOOS}_${GOARCH}" >/dev/null)
+          else
+            tar -czf "dist/localmeetassist_${version}_${GOOS}_${GOARCH}.tar.gz" -C stage "localmeetassist_${version}_${GOOS}_${GOARCH}"
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localmeetassist-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/*.tar.gz
+            dist/*.zip
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      # Готовые сборки расширения уже лежат в репозитории — прикладываем их
+      # к тому же релизу, чтобы всё скачивалось из одного места.
+      - uses: actions/checkout@v4
+      - run: cp browser-extension/packages/*.zip dist/
+
+      - name: Опубликовать релиз
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          version="${tag#v}"
+          ls -lh dist
+          # Повторный запуск не должен падать: сначала пробуем создать,
+          # затем догружаем файлы с перезаписью.
+          gh release create "$tag" \
+            --title "LocalMeetAssist ${version}" \
+            --generate-notes \
+            dist/*.tar.gz dist/*.zip \
+          || gh release upload "$tag" dist/*.tar.gz dist/*.zip --clobber

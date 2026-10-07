@@ -1,0 +1,39 @@
+name: Browser extensions
+
+# GitHub читает workflows только из .github/workflows в корне репозитория,
+# поэтому проверка расширения живёт здесь, а не внутри browser-extension.
+on:
+  push:
+    paths:
+      - 'browser-extension/**'
+      - '.github/workflows/extension.yml'
+  pull_request:
+    paths:
+      - 'browser-extension/**'
+      - '.github/workflows/extension.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: browser-extension
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: Собрать, проверить и упаковать
+        run: npm run package
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: localmeetassist-browser-extensions
+          path: browser-extension/artifacts/*.zip
+          if-no-files-found: error
