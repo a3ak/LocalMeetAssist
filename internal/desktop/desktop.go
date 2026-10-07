@@ -270,9 +270,8 @@ func (m *Manager) request(method, path string, body any, output any) error {
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	if method != http.MethodGet && method != http.MethodHead {
-		req.Header.Set("X-Meeting-Token", m.token)
-	}
+	// Every API path requires the session token, reads included.
+	req.Header.Set("X-Meeting-Token", m.token)
 	resp, err := m.client.Do(req)
 	if err != nil {
 		return err

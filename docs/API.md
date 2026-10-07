@@ -1,6 +1,6 @@
 # Local HTTP API
 
-Все изменяющие запросы требуют `X-Meeting-Token`, полученный из `GET /api/v1/session`.
+Все запросы к `/api/v1/*`, кроме публичных `GET /api/v1/health` и `GET /api/v1/config`, требуют авторизации. Session-токен по HTTP не выдаётся: трей обращается к серверу с заголовком `X-Meeting-Token`, а Web UI получает `HttpOnly`-cookie по одноразовой ссылке `/?ui=<nonce>`, которую приложение открывает само (трей → «Открыть Web UI»). Внешние программы используют интеграционные токены (`X-Meeting-Token` или `Authorization: Bearer …`), которые создаются в разделе «Интеграции». Спецификация браузерного плагина — в [BROWSER_PLUGIN.md](BROWSER_PLUGIN.md).
 
 | Метод | Путь | Назначение |
 |---|---|---|
@@ -32,6 +32,12 @@
 | POST | `/api/v1/models/{id}/download` | Скачать/проверить выбранную модель |
 | POST | `/api/v1/models/{id}/apply` | Применить установленный комплект модели и обновить `config.toml` |
 | POST | `/api/v1/models/{id}/test` | Проверить файлы, SHA-256, ONNX Runtime и открытие ONNX-сессий |
+| GET/PUT | `/api/v1/integrations/browser` | Конфигурация браузерной интеграции (чтение доступно plugins-токену) |
+| WS | `/api/v1/ws` | WebSocket-канал браузерного плагина; протокол описан в [BROWSER_PLUGIN.md](BROWSER_PLUGIN.md) |
+| GET/POST | `/api/v1/integrations/tokens` | Список токенов / создание токена `read_only` или `read_write` |
+| POST | `/api/v1/integrations/tokens/{id}/regenerate` | Перегенерировать токен (секрет показывается один раз) |
+| DELETE | `/api/v1/integrations/tokens/{id}` | Отозвать токен |
+| GET/PUT | `/api/v1/integrations/audit` | Последние записи аудита / включение аудита |
 
 Тело запуска:
 

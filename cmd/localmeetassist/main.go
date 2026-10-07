@@ -91,7 +91,7 @@ func main() {
 	if cfg.App.OpenBrowser {
 		go func() {
 			time.Sleep(250 * time.Millisecond)
-			if err := openBrowser(url); err != nil {
+			if err := openBrowser(app.IssueUIURL()); err != nil {
 				logger.Printf("open browser: %v", err)
 			}
 		}()
@@ -114,7 +114,7 @@ func main() {
 			<-ch
 			desktop.Quit()
 		}()
-		tray := desktop.New(url, app.SessionToken(), func() error { return openBrowser(url) }, app.CurrentConfig, logger)
+		tray := desktop.New(url, app.SessionToken(), func() error { return openBrowser(app.IssueUIURL()) }, app.CurrentConfig, logger)
 		tray.Run()
 	} else {
 		<-ch

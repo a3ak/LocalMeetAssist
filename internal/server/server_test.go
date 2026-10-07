@@ -52,6 +52,7 @@ func TestMeetingAPIAndCSRF(t *testing.T) {
 		t.Fatalf("expected 201, got %d: %s", rr.Code, rr.Body.String())
 	}
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/meetings", nil)
+	req.Header.Set("X-Meeting-Token", s.token)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || !bytes.Contains(rr.Body.Bytes(), []byte("API test")) {
@@ -293,14 +294,16 @@ func TestCancelProcessingEndpointRejectsInactiveMeeting(t *testing.T) {
 	if err := st.SaveJob(job); err != nil {
 		t.Fatal(err)
 	}
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/meetings/meeting-cancel/jobs", nil)
+	req.Header.Set("X-Meeting-Token", s.token)
 	rr = httptest.NewRecorder()
-	s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/meetings/meeting-cancel/jobs", nil))
+	s.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || !bytes.Contains(rr.Body.Bytes(), []byte(`"progress":42`)) || !bytes.Contains(rr.Body.Bytes(), []byte(`"processing_active":false`)) {
 		t.Fatalf("unexpected lightweight job status: %d %s", rr.Code, rr.Body.String())
 	}
 }
 
-func TestEmptyCalendarAndSessionEndpoint(t *testing.T) {
+func TestEmptyCalendarAndRemovedSessionEndpoint(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.App.DataDir = t.TempDir()
 	cfg.Storage.DatabasePath = filepath.Join(cfg.App.DataDir, "database", "meetings.db")
@@ -313,17 +316,20 @@ func TestEmptyCalendarAndSessionEndpoint(t *testing.T) {
 	h := s.Handler()
 
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/meetings", nil))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/meetings", nil)
+	req.Header.Set("X-Meeting-Token", s.token)
+	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || strings.TrimSpace(rr.Body.String()) != "[]" {
 		t.Fatalf("empty calendar must be [], got %d %q", rr.Code, rr.Body.String())
 	}
+	// The session token is no longer handed out over HTTP: even with a valid
+	// session token the route is gone.
 	rr = httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/session", nil))
-	if rr.Code != http.StatusOK || !bytes.Contains(rr.Body.Bytes(), []byte(s.token)) {
-		t.Fatalf("session token endpoint failed: %d %s", rr.Code, rr.Body.String())
-	}
-	if got := rr.Header().Get("Cache-Control"); got != "no-store" {
-		t.Fatalf("unexpected Cache-Control: %q", got)
+	sessReq := httptest.NewRequest(http.MethodGet, "/api/v1/session", nil)
+	sessReq.Header.Set("X-Meeting-Token", s.token)
+	h.ServeHTTP(rr, sessReq)
+	if rr.Code != http.StatusNotFound {
+		t.Fatalf("session endpoint must be gone, got %d", rr.Code)
 	}
 }
 
@@ -379,7 +385,9 @@ func TestSettingsAPIUpdatesConfigAndHidesToken(t *testing.T) {
 	h := s.Handler()
 
 	rr := httptest.NewRecorder()
-	h.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil))
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/settings", nil)
+	getReq.Header.Set("X-Meeting-Token", s.token)
+	h.ServeHTTP(rr, getReq)
 	if rr.Code != http.StatusOK || bytes.Contains(rr.Body.Bytes(), []byte("secret-value")) || !bytes.Contains(rr.Body.Bytes(), []byte("secret_set")) {
 		t.Fatalf("unexpected settings response: %d %s", rr.Code, rr.Body.String())
 	}
@@ -534,6 +542,7 @@ func TestRecordingCalendarEndToEnd(t *testing.T) {
 		t.Fatalf("invalid start response: %v %s", err, rr.Body.String())
 	}
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/recordings", nil)
+	req.Header.Set("X-Meeting-Token", s.token)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || !bytes.Contains(rr.Body.Bytes(), []byte(`"active":true`)) || !bytes.Contains(rr.Body.Bytes(), []byte(started.UID)) {
@@ -549,6 +558,7 @@ func TestRecordingCalendarEndToEnd(t *testing.T) {
 		t.Fatalf("stop failed: %d %s", rr.Code, rr.Body.String())
 	}
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/recordings", nil)
+	req.Header.Set("X-Meeting-Token", s.token)
 	rr = httptest.NewRecorder()
 	h.ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK || !bytes.Contains(rr.Body.Bytes(), []byte(`"active":false`)) {
@@ -704,8 +714,10 @@ func TestArtifactDownloadDeclaresUTF8(t *testing.T) {
 	}
 
 	s := New(cfg, st, log.New(io.Discard, "", 0))
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/meetings/"+meeting.UID+"/artifacts/"+artifact.UID, nil)
+	req.Header.Set("X-Meeting-Token", s.token)
 	rr := httptest.NewRecorder()
-	s.Handler().ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/v1/meetings/"+meeting.UID+"/artifacts/"+artifact.UID, nil))
+	s.Handler().ServeHTTP(rr, req)
 	if rr.Code != http.StatusOK {
 		t.Fatalf("download failed: %d %s", rr.Code, rr.Body.String())
 	}

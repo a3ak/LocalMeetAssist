@@ -1,4 +1,3 @@
-let TOKEN = "";
 const state = {
   month: new Date(),
   meetings: [],
@@ -14,6 +13,7 @@ const state = {
   modelTimer: null,
   settings: null,
   settingsDirty: new Map(),
+  tokenSecrets: new Map(),
   speakerEditor: null,
   speakerPlayer: null,
   searchQuery: "",
@@ -68,18 +68,21 @@ async function loadLanguage(code) {
   applyStaticTranslations();
 }
 
-async function loadSession() {
-  const response = await fetch("/api/v1/session", { cache: "no-store" });
-  if (!response.ok) throw new Error(t("api.sessionFailed", { status: response.status }));
-  TOKEN = (await response.json()).token;
+function showAuthHint() {
+  const node = $("#authHint");
+  if (node) node.classList.remove("hidden");
 }
 
-async function api(path, options = {}, retry = true) {
+function isForbidden(error) {
+  const message = String((error && error.message) || "").toLowerCase();
+  return message.includes("403") || message.includes("forbidden");
+}
+
+async function api(path, options = {}) {
   const opts = { ...options, headers: { ...(options.headers || {}) } };
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs || 15000);
   opts.signal = options.signal || controller.signal;
-  if (TOKEN) opts.headers["X-Meeting-Token"] = TOKEN;
   if (opts.json !== undefined) {
     opts.body = JSON.stringify(opts.json);
     opts.headers["Content-Type"] = "application/json";
@@ -94,10 +97,7 @@ async function api(path, options = {}, retry = true) {
   } finally {
     clearTimeout(timeout);
   }
-  if (response.status === 403 && retry) {
-    await loadSession();
-    return api(path, options, false);
-  }
+  if (response.status === 403) showAuthHint();
   if (!response.ok) {
     let error = {};
     try { error = await response.json(); } catch {}
@@ -1163,6 +1163,16 @@ function renderSettingsGroup(groupID) {
     }
     root.appendChild(row);
   });
+  // Prefill the port field with the currently bound port when the user focuses
+  // it, so a random port can be pinned to a stable value for the browser plugin.
+  const portField = root.querySelector("[data-key='app.listen_port']");
+  if (portField) {
+    portField.addEventListener("focus", () => {
+      if (!portField.value || portField.value === "0") {
+        if (state.listenPort) portField.value = String(state.listenPort);
+      }
+    });
+  }
   const testSummary = $("#testSummaryConnection");
   if (testSummary) testSummary.onclick = async () => {
     testSummary.disabled = true;
@@ -1392,6 +1402,344 @@ $("#closeSettings").onclick = $("#closeSettings2").onclick = () => {
   closeDialog("#settingsDialog");
 };
 
+// --- Integrations ---------------------------------------------------------
+
+function switchIntegrationsTab(name) {
+  $$("#integrationsDialog [data-igtab]").forEach((button) => button.classList.toggle("active", button.dataset.igtab === name));
+  ["tokens", "browser", "audit"].forEach((tab) => $("#ig-" + tab).classList.toggle("hidden", tab !== name));
+}
+
+// resetTokenSecrets drops one-time secrets left over from an earlier visit.
+// Secrets live only in memory; the server stores hashes.
+function resetTokenSecrets() {
+  state.tokenSecrets = new Map();
+  const box = $("#browserTokenSecret");
+  if (box) { box.classList.add("hidden"); box.innerHTML = ""; }
+}
+
+async function openIntegrations() {
+  $("#integrationsDialog").showModal();
+  resetTokenSecrets();
+  await Promise.all([loadTokens(), loadBrowserConfig(), loadAudit()]);
+}
+
+function fmtExpiry(value) {
+  if (!value) return "∞";
+  return new Intl.DateTimeFormat(LOCALE, { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
+}
+
+async function loadTokens() {
+  const tokens = await api("/api/v1/integrations/tokens");
+  const root = $("#tokenList");
+  root.innerHTML = "";
+  if (!tokens.length) {
+    root.innerHTML = `<div class="hint">${esc(t("integrations.noTokens"))}</div>`;
+    return;
+  }
+  tokens.forEach((token) => {
+    const item = document.createElement("div");
+    item.className = "token-item";
+    const info = document.createElement("div");
+    info.className = "token-info";
+    const secret = state.tokenSecrets.get(token.id);
+    info.innerHTML =
+      `<div class="token-name">${esc(token.name)}</div>` +
+      `<div class="token-meta">${esc(token.kind)} · …${esc(token.fingerprint || "")} · ${esc(t("integrations.expires"))} ${esc(fmtExpiry(token.expires_at))}</div>` +
+      (secret ? `<div class="token-reveal"><span class="token-note">${esc(t("integrations.secretOnce"))}</span>${tokenFieldHTML(secret)}</div>` : "");
+    const copy = info.querySelector(".token-field");
+    if (copy) copy.onclick = () => copySecretText(secret);
+    const actions = document.createElement("div");
+    actions.className = "token-actions";
+    if (token.kind !== "plugins") {
+      const revoke = document.createElement("button");
+      revoke.type = "button";
+      revoke.className = "ghost small";
+      revoke.textContent = t("integrations.revoke");
+      revoke.onclick = () => revokeToken(token.id);
+      actions.appendChild(revoke);
+    }
+    const regen = document.createElement("button");
+    regen.type = "button";
+    regen.className = "ghost small";
+    regen.textContent = t("integrations.regenerate");
+    regen.onclick = () => regenerateToken(token.id);
+    actions.appendChild(regen);
+    item.append(info, actions);
+    root.appendChild(item);
+  });
+}
+
+const COPY_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
+
+function maskSecret(secret) {
+  return secret.length > 18 ? `${secret.slice(0, 8)}…${secret.slice(-8)}` : secret;
+}
+
+async function copySecretText(secret) {
+  try {
+    await navigator.clipboard.writeText(secret);
+    toast(t("integrations.tokenCopied"));
+  } catch (error) {
+    toast(t("integrations.tokenCopyFailed"));
+  }
+}
+
+// tokenFieldHTML renders a one-time secret as a single clickable control: the
+// masked value and the copy icon belong to the same field, so it is obvious
+// what is being copied.
+function tokenFieldHTML(secret) {
+  return `<button type="button" class="token-field" title="${esc(t("integrations.copyToken"))}">` +
+    `<code>${esc(maskSecret(secret))}</code>${COPY_ICON}</button>`;
+}
+
+function showTokenSecret(target, secret, note) {
+  const box = $(target);
+  if (!box) return;
+  if (!secret) { box.classList.add("hidden"); box.innerHTML = ""; return; }
+  box.classList.remove("hidden");
+  box.innerHTML = `<div class="token-note">${esc(note)}</div>${tokenFieldHTML(secret)}`;
+  box.querySelector(".token-field").onclick = () => copySecretText(secret);
+}
+
+async function revokeToken(id) {
+  try {
+    await api(`/api/v1/integrations/tokens/${id}`, { method: "DELETE" });
+    await loadTokens();
+    toast(t("integrations.revoked"));
+  } catch (error) { toast(error.message); }
+}
+
+async function regenerateToken(id) {
+  try {
+    const result = await api(`/api/v1/integrations/tokens/${id}/regenerate`, { method: "POST" });
+    if (result.token?.id) state.tokenSecrets.set(result.token.id, result.secret);
+    await loadTokens();
+  } catch (error) { toast(error.message); }
+}
+
+async function submitTokenForm(event) {
+  event.preventDefault();
+  const name = $("#tokenName").value.trim();
+  if (!name) { toast(t("integrations.nameRequired")); return; }
+  try {
+    const result = await api("/api/v1/integrations/tokens", {
+      method: "POST",
+      json: { name, kind: $("#tokenKind").value, expires_at: $("#tokenExpires").value },
+    });
+    if (result.token?.id) state.tokenSecrets.set(result.token.id, result.secret);
+    $("#tokenName").value = "";
+    $("#tokenExpires").value = "";
+    await loadTokens();
+  } catch (error) { toast(error.message); }
+}
+
+// --- Page masks editor ----------------------------------------------------
+// The server stores masks as "Name = pattern" lines (a leading "#" disables a
+// row); the UI edits them as structured rows.
+
+function parseMaskRows(raw) {
+  const rows = [];
+  for (const line of String(raw || "").split("\n")) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+    const disabled = trimmed.startsWith("#");
+    const body = disabled ? trimmed.replace(/^#[ \t]*/, "") : trimmed;
+    const eq = body.indexOf("=");
+    if (eq < 0) continue;
+    const name = body.slice(0, eq).trim();
+    const pattern = body.slice(eq + 1).trim();
+    if (!name || !pattern) continue;
+    rows.push({ enabled: !disabled, name, pattern });
+  }
+  return rows;
+}
+
+function serializeMaskRows(rows) {
+  return rows
+    .map((row) => ({ name: String(row.name || "").trim(), pattern: String(row.pattern || "").trim(), enabled: row.enabled !== false }))
+    .filter((row) => row.name && row.pattern)
+    .map((row) => `${row.enabled ? "" : "# "}${row.name} = ${row.pattern}`)
+    .join("\n");
+}
+
+function collectMaskRows() {
+  return [...$("#maskList").querySelectorAll(".mask-row")].map((el) => ({
+    enabled: el.querySelector("input[type=checkbox]").checked,
+    name: el.querySelector(".mask-name").value,
+    pattern: el.querySelector(".mask-pattern").value,
+  }));
+}
+
+function renderMaskRows(rows) {
+  const root = $("#maskList");
+  root.innerHTML = "";
+  if (!rows.length) {
+    root.innerHTML = `<div class="mask-empty">${esc(t("integrations.masksEmpty"))}</div>`;
+    return;
+  }
+  rows.forEach((row, index) => {
+    const el = document.createElement("div");
+    el.className = "mask-row";
+    el.innerHTML =
+      `<input type="checkbox"${row.enabled ? " checked" : ""} title="${esc(t("integrations.maskEnabled"))}">` +
+      `<input type="text" class="mask-name" autocomplete="off" value="${esc(row.name || "")}" placeholder="${esc(t("integrations.maskName"))}">` +
+      `<input type="text" class="mask-pattern" autocomplete="off" spellcheck="false" value="${esc(row.pattern || "")}" placeholder="*example.com/*">` +
+      `<button type="button" class="mask-remove" title="${esc(t("integrations.maskRemove"))}">✕</button>`;
+    el.querySelector(".mask-remove").onclick = () => {
+      const current = collectMaskRows();
+      current.splice(index, 1);
+      renderMaskRows(current);
+    };
+    root.appendChild(el);
+  });
+}
+
+function addEmptyMaskRow() {
+  const rows = collectMaskRows();
+  rows.push({ enabled: true, name: "", pattern: "" });
+  renderMaskRows(rows);
+  const names = $("#maskList").querySelectorAll(".mask-name");
+  if (names.length) names[names.length - 1].focus();
+}
+
+function exportMasks() {
+  const rows = collectMaskRows().filter((row) => String(row.name).trim() && String(row.pattern).trim());
+  const blob = new Blob([JSON.stringify(rows, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "localmeetassist-masks.json";
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+async function importMasksFile(file) {
+  const data = JSON.parse(await file.text());
+  const rows = Array.isArray(data) ? data : [];
+  renderMaskRows(rows.map((row) => ({
+    enabled: row.enabled !== false,
+    name: String(row.name ?? ""),
+    pattern: String(row.pattern ?? ""),
+  })));
+  toast(t("integrations.masksImported", { count: rows.length }));
+}
+
+// updatePortWarning distinguishes three states: the port is not pinned, it is
+// pinned but the running listener still uses another port (restart pending), or
+// everything matches.
+function updatePortWarning(configured, effective) {
+  const box = $("#browserPortWarning");
+  const text = $("#browserPortWarningText");
+  const button = $("#goToPortSetting");
+  if (!box || !text || !button) return;
+  if (configured === 0) {
+    text.textContent = t("integrations.portWarning");
+    button.classList.remove("hidden");
+    box.classList.remove("hidden");
+  } else if (effective !== 0 && effective !== configured) {
+    text.textContent = t("integrations.portRestart", { port: configured, current: effective });
+    button.classList.add("hidden");
+    box.classList.remove("hidden");
+  } else {
+    box.classList.add("hidden");
+  }
+}
+
+async function loadBrowserConfig() {
+  const cfg = await api("/api/v1/integrations/browser");
+  $("#browserEnabled").checked = !!cfg.enabled;
+  renderMaskRows(parseMaskRows(cfg.masks || ""));
+  $("#browserMode").value = cfg.mode || "auto";
+  $("#browserTitleTemplate").value = cfg.title_template || "";
+  $("#browserMissedPolls").value = String(cfg.stop_after_missed_polls ?? 4);
+  $("#browserPoll").value = String(cfg.poll_interval_seconds ?? 20);
+  updatePortWarning(Number(cfg.configured_port || 0), Number(cfg.effective_port || 0));
+  const tokenBox = $("#browserTokenBox");
+  if (cfg.plugins_token) {
+    tokenBox.innerHTML = `${esc(t("integrations.pluginsToken"))}: …${esc(cfg.plugins_token.fingerprint || "")}`;
+  } else {
+    tokenBox.textContent = t("integrations.noPluginsToken");
+  }
+}
+
+async function saveBrowserConfig() {
+  const body = {
+    enabled: $("#browserEnabled").checked,
+    masks: serializeMaskRows(collectMaskRows()),
+    mode: $("#browserMode").value,
+    title_template: $("#browserTitleTemplate").value,
+    stop_after_missed_polls: Number($("#browserMissedPolls").value || 4),
+    poll_interval_seconds: Number($("#browserPoll").value || 20),
+  };
+  try {
+    const result = await api("/api/v1/integrations/browser", { method: "PUT", json: body });
+    await loadBrowserConfig();
+    if (result.plugins_token_secret) {
+      if (result.plugins_token_id) state.tokenSecrets.set(result.plugins_token_id, result.plugins_token_secret);
+      showTokenSecret("#browserTokenSecret", result.plugins_token_secret, t("integrations.pluginsSecretOnce"));
+      await loadTokens();
+    }
+    toast(t("integrations.saved"));
+  } catch (error) { toast(error.message); }
+}
+
+async function loadAudit() {
+  const data = await api("/api/v1/integrations/audit?limit=200");
+  $("#auditEnabled").checked = !!data.enabled;
+  renderAudit(data.entries || []);
+}
+
+function renderAudit(entries) {
+  const root = $("#auditTable");
+  if (!entries.length) {
+    root.innerHTML = `<div class="hint">${esc(t("integrations.auditEmpty"))}</div>`;
+    return;
+  }
+  const head = `<thead><tr><th>${esc(t("integrations.auditTime"))}</th><th>${esc(t("integrations.auditToken"))}</th><th>IP</th><th>User-Agent</th><th>${esc(t("integrations.auditMethod"))}</th><th>${esc(t("integrations.auditPath"))}</th><th>${esc(t("integrations.auditStatus"))}</th></tr></thead>`;
+  const rows = entries.map((e) => `<tr><td>${esc(e.time || "")}</td><td>${esc(e.token || "")}</td><td>${esc(e.ip || "")}</td><td>${esc(e.user_agent || "")}</td><td>${esc(e.method || "")}</td><td>${esc(e.path || "")}</td><td>${esc(String(e.status ?? ""))}</td></tr>`).join("");
+  root.innerHTML = `<table>${head}<tbody>${rows}</tbody></table>`;
+}
+
+$("#integrationsBtn").onclick = openIntegrations;
+$("#closeIntegrations").onclick = $("#closeIntegrations2").onclick = () => closeDialog("#integrationsDialog");
+$$("#integrationsDialog [data-igtab]").forEach((button) => { button.onclick = () => switchIntegrationsTab(button.dataset.igtab); });
+$("#tokenForm").onsubmit = submitTokenForm;
+$("#saveBrowser").onclick = saveBrowserConfig;
+$("#goToPortSetting").onclick = async () => {
+  closeDialog("#integrationsDialog");
+  try {
+    await showSettings();
+    renderSettingsGroup("app");
+    const port = $("#settingsFields").querySelector("[data-key='app.listen_port']");
+    if (port) {
+      port.focus();
+      port.scrollIntoView({ block: "center" });
+    }
+  } catch (error) {
+    toast(error.message);
+  }
+};
+$("#addMask").onclick = addEmptyMaskRow;
+$("#exportMasks").onclick = exportMasks;
+$("#importMasks").onclick = () => $("#importMasksFile").click();
+$("#importMasksFile").onchange = async (event) => {
+  const file = event.target.files[0];
+  if (!file) return;
+  try {
+    await importMasksFile(file);
+  } catch (error) {
+    toast(t("integrations.masksImportError"));
+  } finally {
+    event.target.value = "";
+  }
+};
+$("#auditEnabled").onchange = async () => {
+  try {
+    await api("/api/v1/integrations/audit", { method: "PUT", json: { enabled: $("#auditEnabled").checked } });
+    toast(t("integrations.saved"));
+  } catch (error) { toast(error.message); }
+};
+
 async function bootstrap() {
   try {
     applyTheme(localStorage.getItem("localmeetassist-theme") || "dark");
@@ -1399,11 +1747,15 @@ async function bootstrap() {
     try {
       const config = await api("/api/v1/config");
       language = config.language || "ru";
+      state.listenPort = config.listen_port || 0;
     } catch {}
     await loadLanguage(language);
-    await loadSession();
-    await Promise.all([loadMeetings(), refreshDevices(), refreshRecordingState(), executeMeetingSearch()]);
-    connectEvents();
+    try {
+      await Promise.all([loadMeetings(), refreshDevices(), refreshRecordingState(), executeMeetingSearch()]);
+      connectEvents();
+    } catch (error) {
+      if (!isForbidden(error)) throw error;
+    }
   } catch (error) {
     toast(error.message);
     $("#diagBar").className = "diag-bar error";

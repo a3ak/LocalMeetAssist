@@ -44,7 +44,8 @@ LocalMeetAssist записывает микрофон и системный зв
 - менеджер скачивания, проверки и переключения моделей;
 - системный трей, горячие клавиши и индикация активной записи;
 - уровни логирования, ротация файлов и диагностика из интерфейса;
-- восстановление встреч после копирования каталога `data/meetings` из старой установки.
+- восстановление встреч после копирования каталога `data/meetings` из старой установки;
+- раздел «Интеграции»: токены доступа с областями прав и сроком действия, аудит обращений и браузерная интеграция по WebSocket.
 
 ### Интерфейс
 
@@ -179,7 +180,7 @@ data/
 ### Приватность и сеть
 
 - Запись, транскрибация, VAD и диаризация выполняются локально.
-- Web UI слушает `127.0.0.1` и использует локальный session token для изменяющих запросов.
+- Web UI слушает `127.0.0.1`. Сессия выдаётся браузеру по одноразовой ссылке запуска через `HttpOnly`-cookie; session-токен по HTTP не отдаётся. Внешние клиенты используют интеграционные токены со своей областью прав.
 - Сеть нужна для загрузки моделей и для саммаризации, если выбран удалённый API.
 - При локальном OpenAI-совместимом сервере весь основной пайплайн может оставаться на компьютере пользователя.
 
@@ -190,7 +191,9 @@ CGO_ENABLED=1 go test ./...
 CGO_ENABLED=1 go vet ./...
 ```
 
-Дополнительная документация: [архитектура](docs/ARCHITECTURE.md), [API](docs/API.md), [тестирование](docs/TESTING.md).
+> На macOS линковщик может напечатать `ld: warning: ignoring duplicate libraries: '-lc++', '-lobjc'`. Предупреждение безвредно: `ld` отбрасывает повторяющиеся флаги, бинарник собирается корректно. Погасить его можно переменной окружения — `CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go build ./...`.
+
+Дополнительная документация: [архитектура](docs/ARCHITECTURE.md), [API](docs/API.md), [браузерное расширение](docs/BROWSER_PLUGIN.md), [тестирование](docs/TESTING.md).
 
 ### Лицензия
 
@@ -230,7 +233,8 @@ Capture and local inference do not require FFmpeg, Python, GigaAMGUI, `whisper-c
 - model download, validation, and selection manager;
 - system tray, global hotkeys, and recording-state indication;
 - configurable logging levels, file rotation, and built-in diagnostics;
-- startup recovery after copying an older `data/meetings` tree.
+- startup recovery after copying an older `data/meetings` tree;
+- "Integrations": scoped access tokens with expiry, request audit, and a WebSocket browser integration.
 
 ### UI
 
@@ -365,7 +369,7 @@ To move meetings from an older installation, stop LocalMeetAssist, copy meeting 
 ### Privacy and networking
 
 - Recording, ASR, VAD, and diarization run locally.
-- The Web UI binds to `127.0.0.1` and uses a local session token for mutating requests.
+- The Web UI binds to `127.0.0.1`. The session is handed to the browser via a one-time launch link as an `HttpOnly` cookie; the session token is never served over HTTP. External clients use scoped integration tokens.
 - Network access is needed to download models and when a remote summarization API is configured.
 - With a local OpenAI-compatible LLM server, the complete workflow can remain on the user's machine.
 
@@ -376,7 +380,9 @@ CGO_ENABLED=1 go test ./...
 CGO_ENABLED=1 go vet ./...
 ```
 
-Additional documentation: [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), and [testing](docs/TESTING.md).
+> On macOS the linker may print `ld: warning: ignoring duplicate libraries: '-lc++', '-lobjc'`. It is harmless: `ld` drops the repeated flags and the binary is correct. To silence it, set `CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go build ./...`.
+
+Additional documentation: [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [browser extension](docs/BROWSER_PLUGIN.md), and [testing](docs/TESTING.md).
 
 ### License
 

@@ -17,12 +17,14 @@ import (
 )
 
 var (
-	bMeta      = []byte("meta")
-	bMeetings  = []byte("meetings")
-	bArtifacts = []byte("artifacts")
-	bJobs      = []byte("jobs")
-	bSpeakers  = []byte("speakers")
-	bSegments  = []byte("transcript_segments")
+	bMeta        = []byte("meta")
+	bMeetings    = []byte("meetings")
+	bArtifacts   = []byte("artifacts")
+	bJobs        = []byte("jobs")
+	bSpeakers    = []byte("speakers")
+	bSegments    = []byte("transcript_segments")
+	bTokens      = []byte("tokens")
+	bIntegration = []byte("integration_state")
 )
 
 // Store is a bbolt-backed repository. All access goes through short
@@ -40,7 +42,7 @@ func Open(path string) (*Store, error) {
 	}
 	s := &Store{db: db}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bMeta, bMeetings, bArtifacts, bJobs, bSpeakers, bSegments} {
+		for _, name := range [][]byte{bMeta, bMeetings, bArtifacts, bJobs, bSpeakers, bSegments, bTokens, bIntegration} {
 			if _, e := tx.CreateBucketIfNotExists(name); e != nil {
 				return e
 			}
@@ -56,6 +58,82 @@ func Open(path string) (*Store, error) {
 
 // Close releases the underlying database handle.
 func (s *Store) Close() error { return s.db.Close() }
+
+// SaveToken inserts or replaces an API token by ID.
+func (s *Store) SaveToken(token model.Token) error {
+	if token.ID == "" {
+		return errors.New("token id is empty")
+	}
+	return s.db.Update(func(tx *bolt.Tx) error { return putJSON(tx.Bucket(bTokens), token.ID, token) })
+}
+
+// Tokens returns every stored token, oldest first.
+func (s *Store) Tokens() ([]model.Token, error) {
+	out := make([]model.Token, 0)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bTokens).ForEach(func(_, v []byte) error {
+			var token model.Token
+			if err := json.Unmarshal(v, &token); err != nil {
+				return err
+			}
+			out = append(out, token)
+			return nil
+		})
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, err
+}
+
+// FindTokenByHash returns the token whose stored hash matches hash.
+func (s *Store) FindTokenByHash(hash string) (model.Token, error) {
+	var found model.Token
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bTokens).ForEach(func(_, v []byte) error {
+			var token model.Token
+			if err := json.Unmarshal(v, &token); err != nil {
+				return err
+			}
+			if token.Hash == hash {
+				found = token
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return model.Token{}, err
+	}
+	if found.ID == "" {
+		return model.Token{}, os.ErrNotExist
+	}
+	return found, nil
+}
+
+// DeleteToken removes a token by ID.
+func (s *Store) DeleteToken(id string) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if tx.Bucket(bTokens).Get([]byte(id)) == nil {
+			return os.ErrNotExist
+		}
+		return tx.Bucket(bTokens).Delete([]byte(id))
+	})
+}
+
+// TouchTokenLastUsed records the last time a token was used.
+func (s *Store) TouchTokenLastUsed(id string, at time.Time) error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		b := tx.Bucket(bTokens)
+		data := b.Get([]byte(id))
+		if data == nil {
+			return os.ErrNotExist
+		}
+		var token model.Token
+		if err := json.Unmarshal(data, &token); err != nil {
+			return err
+		}
+		token.LastUsedAt = &at
+		return putJSON(b, id, token)
+	})
+}
 
 func putJSON(b *bolt.Bucket, key string, v any) error {
 	data, err := json.Marshal(v)

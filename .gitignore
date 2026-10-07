@@ -5,6 +5,8 @@
 /runtime/
 /config.toml
 /localmeetassist
+/localmeetassist.exe
+.DS_Store
 *.download.part
 *.part
 *.log

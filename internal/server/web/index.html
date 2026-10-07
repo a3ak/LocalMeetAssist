@@ -15,6 +15,7 @@
       <button id="settingsBtn" class="ghost" data-i18n="nav.settings">Настройки</button>
       <button id="modelsBtn" class="ghost" data-i18n="nav.models">Модели</button>
       <button id="diagBtn" class="ghost" data-i18n="nav.diagnostics">Диагностика</button>
+      <button id="integrationsBtn" class="ghost" data-i18n="nav.integrations">Интеграции</button>
       <span id="timer" class="timer hidden">00:00</span>
       <button id="startBtn" class="primary" data-i18n="record.startBtn">● Начать запись</button>
       <button id="stopBtn" class="danger hidden" data-i18n="record.stopBtn">■ Завершить</button>
@@ -22,6 +23,7 @@
     </div>
   </header>
   <div id="diagBar" class="diag-bar" data-i18n="app.audioChecking">Проверка аудиоподсистемы…</div>
+  <div id="authHint" class="auth-hint hidden" data-i18n="auth.hint">Страница открыта вручную без авторизации. Откройте LocalMeetAssist из меню трея «Открыть Web UI» или перезапустите приложение.</div>
 
   <section class="search-panel" aria-label="Поиск встреч">
     <div class="search-line">
@@ -111,6 +113,60 @@
         </form>
       </div>
       <div class="dialog-actions"><span id="settingsDirty" class="meta"></span><button id="closeSettings2" type="button" class="ghost" data-i18n="common.close">Закрыть</button><button id="saveSettings" type="button" class="primary" data-i18n="common.save">Сохранить</button></div>
+    </div>
+  </dialog>
+
+  <dialog id="integrationsDialog" class="settings-dialog">
+    <div class="dialog-card settings-card">
+      <div class="dialog-head"><div><h2 data-i18n="integrations.title">Интеграции</h2><div class="meta" data-i18n="integrations.meta">Токены доступа, браузерная интеграция и аудит запросов.</div></div><button id="closeIntegrations" type="button" class="icon-btn">×</button></div>
+      <div class="settings-layout">
+        <nav id="integrationsNav" class="settings-nav">
+          <button type="button" class="settings-nav-item active" data-igtab="tokens" data-i18n="integrations.tabTokens">Токены</button>
+          <button type="button" class="settings-nav-item" data-igtab="browser" data-i18n="integrations.tabBrowser">Браузер</button>
+          <button type="button" class="settings-nav-item" data-igtab="audit" data-i18n="integrations.tabAudit">Аудит</button>
+        </nav>
+        <div class="settings-form">
+          <section id="ig-tokens" class="ig-section">
+            <div id="tokenList" class="token-list"></div>
+            <form id="tokenForm" class="token-form">
+              <input id="tokenName" autocomplete="off" data-i18n-placeholder="integrations.tokenName" placeholder="Название">
+              <select id="tokenKind">
+                <option value="read_only">read_only</option>
+                <option value="read_write">read_write</option>
+              </select>
+              <input id="tokenExpires" type="date" data-i18n-title="integrations.expiry" title="Действует до (пусто — бессрочно)">
+              <button type="submit" class="primary small" data-i18n="integrations.createToken">Создать токен</button>
+            </form>
+          </section>
+          <section id="ig-browser" class="ig-section hidden">
+            <label class="setting-field setting-checkbox"><span class="checkbox-line"><input type="checkbox" id="browserEnabled"><span class="setting-label" data-i18n="integrations.browserEnable">Включать браузерную интеграцию</span></span><small data-i18n="integrations.browserEnableDesc">Расширение сообщает приложению, какие страницы встреч открыты. Приложение само решает, когда начать и остановить запись.</small></label>
+            <div id="browserPortWarning" class="ig-warning hidden"><span id="browserPortWarningText"></span><button type="button" id="goToPortSetting" class="ghost small" data-i18n="integrations.portWarningAction">Перейти к настройке</button></div>
+            <div class="mask-head">
+              <span class="setting-label" data-i18n="integrations.masks">Маски страниц</span>
+              <div class="mask-actions">
+                <button type="button" id="addMask" class="ghost small" data-i18n="integrations.addMask">＋ Добавить</button>
+                <button type="button" id="exportMasks" class="ghost small" data-i18n="integrations.exportMasks">Экспорт</button>
+                <button type="button" id="importMasks" class="ghost small" data-i18n="integrations.importMasks">Импорт</button>
+                <input type="file" id="importMasksFile" accept="application/json,.json" hidden>
+              </div>
+            </div>
+            <div class="mask-columns"><span></span><span data-i18n="integrations.maskColumnName">Название</span><span data-i18n="integrations.maskColumnPattern">Шаблон (glob)</span><span></span></div>
+            <div id="maskList" class="mask-list"></div>
+            <label><span data-i18n="integrations.mode">Режим</span><select id="browserMode"><option value="auto" data-i18n="integrations.modeAuto">auto — начинать сразу</option><option value="notify" data-i18n="integrations.modeNotify">notify — спрашивать</option></select></label>
+            <label><span data-i18n="integrations.titleTemplate">Шаблон заголовка</span><input id="browserTitleTemplate" autocomplete="off"></label>
+            <label><span data-i18n="integrations.missedPolls">Остановка после пропущенных опросов, шт. (2–10)</span><input id="browserMissedPolls" type="number" min="2" max="10"></label>
+            <label><span data-i18n="integrations.pollInterval">Период опроса, с (10–25)</span><input id="browserPoll" type="number" min="10" max="25"></label>
+            <div id="browserTokenBox" class="meta"></div>
+            <div id="browserTokenSecret" class="token-secret hidden"></div>
+            <button id="saveBrowser" type="button" class="primary small" data-i18n="common.save">Сохранить</button>
+          </section>
+          <section id="ig-audit" class="ig-section hidden">
+            <label class="setting-field setting-checkbox"><span class="checkbox-line"><input type="checkbox" id="auditEnabled"><span class="setting-label" data-i18n="integrations.auditEnable">Вести аудит запросов</span></span><small data-i18n="integrations.auditEnableDesc">Записывает обращения по интеграционным токенам: время, токен, IP, метод и результат. Хранится отдельным файлом журнала.</small></label>
+            <div id="auditTable" class="audit-table"></div>
+          </section>
+        </div>
+      </div>
+      <div class="dialog-actions"><button id="closeIntegrations2" type="button" class="primary" data-i18n="common.close">Закрыть</button></div>
     </div>
   </dialog>
 

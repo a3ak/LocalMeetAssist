@@ -28,6 +28,7 @@ type Config struct {
 	Storage       Storage
 	Logging       Logging
 	Desktop       Desktop
+	Integrations  Integrations
 }
 
 // UpdateFile replaces selected section.key values while preserving unrelated
@@ -322,6 +323,24 @@ type Logging struct {
 	MaxFiles  int
 }
 
+// Integrations configures external API access: tokens, browser recording and
+// the usage audit.
+type Integrations struct {
+	AuditEnabled bool
+	Browser      BrowserIntegration
+}
+
+// BrowserIntegration configures recording triggered by matching browser pages.
+// Masks is a newline-separated list of "Name = glob-pattern" entries.
+type BrowserIntegration struct {
+	Enabled              bool
+	Masks                string
+	Mode                 string
+	TitleTemplate        string
+	StopAfterMissedPolls int
+	PollIntervalSeconds  int
+}
+
 // Localized returns the Russian or English variant based on the interface
 // language. It is used for generated default data such as meeting titles and
 // the default microphone owner name, not for error messages.
@@ -374,9 +393,10 @@ func Defaults() Config {
 			SegmentationSHA256:  "057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25",
 			EmbeddingURL:        "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx",
 			EmbeddingSHA256:     "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068"},
-		Summary: Summary{AutoRun: false, TimeoutSeconds: 300, MaxRetries: 2, TokenEnv: "MEETING_LLM_TOKEN", TLSVerify: true},
-		Storage: Storage{FileNameTemplate: "{{date}}_{{time}}_{{title_slug}}_{{uid_short}}_{{artifact_type}}", DateFormat: "2006-01-02", TimeFormat: "15-04-05", AudioAfterProcessing: "wav", MP3BitrateKbps: 96, OpusBitrateKbps: 32, KeepSourceOnFailure: true, DatabasePath: "./data/database/meetings.db", BackupCount: 3},
-		Logging: Logging{Level: "info", Directory: "./data/logs", MaxFileMB: 20, MaxFiles: 5},
+		Summary:      Summary{AutoRun: false, TimeoutSeconds: 300, MaxRetries: 2, TokenEnv: "MEETING_LLM_TOKEN", TLSVerify: true},
+		Storage:      Storage{FileNameTemplate: "{{date}}_{{time}}_{{title_slug}}_{{uid_short}}_{{artifact_type}}", DateFormat: "2006-01-02", TimeFormat: "15-04-05", AudioAfterProcessing: "wav", MP3BitrateKbps: 96, OpusBitrateKbps: 32, KeepSourceOnFailure: true, DatabasePath: "./data/database/meetings.db", BackupCount: 3},
+		Logging:      Logging{Level: "info", Directory: "./data/logs", MaxFileMB: 20, MaxFiles: 5},
+		Integrations: Integrations{AuditEnabled: false, Browser: BrowserIntegration{Mode: "auto", TitleTemplate: "{{title}} — {{date}} {{time}}", StopAfterMissedPolls: 4, PollIntervalSeconds: 20}},
 	}
 }
 
@@ -608,8 +628,8 @@ func apply(c *Config, sec, key, raw string) error {
 	if err != nil {
 		return err
 	}
-	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "diarization.chunk_seconds": true, "diarization.chunk_overlap_seconds": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true}
-	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true}
+	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "diarization.chunk_seconds": true, "diarization.chunk_overlap_seconds": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
+	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
 	floatKeys := map[string]bool{"audio.microphone_gain": true, "audio.system_gain": true, "transcription.echo_text_similarity": true, "transcription.vad_threshold": true, "transcription.min_segment_rms": true, "diarization.cluster_threshold": true}
 	if intKeys[full] {
 		if _, err := integer(raw); err != nil {
@@ -883,6 +903,20 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Logging.MaxFileMB, _ = integer(raw)
 	case "logging.max_files":
 		c.Logging.MaxFiles, _ = integer(raw)
+	case "integrations.audit_enabled":
+		c.Integrations.AuditEnabled, _ = boolean(raw)
+	case "integrations.browser.enabled":
+		c.Integrations.Browser.Enabled, _ = boolean(raw)
+	case "integrations.browser.masks":
+		c.Integrations.Browser.Masks = s
+	case "integrations.browser.mode":
+		c.Integrations.Browser.Mode = s
+	case "integrations.browser.title_template":
+		c.Integrations.Browser.TitleTemplate = s
+	case "integrations.browser.stop_after_missed_polls":
+		c.Integrations.Browser.StopAfterMissedPolls, _ = integer(raw)
+	case "integrations.browser.poll_interval_seconds":
+		c.Integrations.Browser.PollIntervalSeconds, _ = integer(raw)
 	default:
 		return fmt.Errorf("unknown key %s.%s", sec, key)
 	}

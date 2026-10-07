@@ -214,3 +214,43 @@ main{padding:10px}
 .processing-audio-hint{margin-bottom:12px}
 @media(max-width:700px){.model-head{flex-direction:column}.model-actions{width:100%;justify-content:flex-end}}
 @media(max-width:760px){.settings-layout{grid-template-columns:1fr}.settings-nav{flex-direction:row;border-right:0;border-bottom:1px solid var(--line);padding:0 0 10px}.settings-nav-item{white-space:nowrap}.setting-field{grid-template-columns:1fr}.setting-field small{grid-column:1}.settings-card{height:95vh}}
+.auth-hint{background:var(--warn-soft,#3a2f1e);color:var(--warn,#e0a84c);border:1px solid color-mix(in srgb,var(--warn,#e0a84c) 45%,var(--line,#3c4450));padding:10px 14px;border-radius:9px;margin:10px 14px 0;font-size:13px}
+.check-row{display:flex;align-items:center;gap:9px}
+.check-row input{width:auto}
+.token-list{display:flex;flex-direction:column;gap:8px;margin-bottom:14px}
+.token-item{display:flex;align-items:center;gap:10px;border:1px solid var(--line,#3c4450);border-radius:9px;padding:10px 12px}
+.token-item .token-info{min-width:0;flex:1}
+.token-item .token-name{font-weight:700}
+.token-item .token-meta{color:var(--muted,#8a96a5);font-size:12px}
+.token-item .token-actions{display:flex;gap:6px}
+.token-form{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px}
+.token-form input{flex:1;min-width:130px}
+.token-secret{margin-top:10px;padding:10px 12px;border:1px dashed var(--accent2,#4a6fa5);border-radius:9px;background:var(--panel,#1e2430)}
+.token-note{font-size:12px;color:var(--muted,#8a96a5);margin-bottom:8px}
+.token-reveal{display:flex;flex-direction:column;align-items:flex-start;gap:6px;margin-top:8px}
+.token-reveal .token-note{margin-bottom:0}
+.token-field{display:inline-flex;align-items:center;gap:10px;max-width:100%;border:1px solid var(--line,#3c4450);border-radius:9px;background:var(--input,#151a22);color:var(--ink,#e4e9f0);padding:7px 10px;font-weight:500;cursor:pointer}
+.token-field:hover{border-color:var(--accent,#7da5d2)}
+.token-field code{font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.token-field svg{flex:none;opacity:.85}
+.audit-table{overflow-x:auto;margin-top:12px}
+.audit-table table{width:100%;border-collapse:collapse;font-size:12px}
+.audit-table th,.audit-table td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line,#3c4450);white-space:nowrap}
+.ig-section{padding-bottom:20px}
+#ig-browser label{display:grid;grid-template-columns:200px 1fr;gap:8px;align-items:center;margin-bottom:10px}
+#ig-browser label.check-row{display:flex;grid-template-columns:none}
+.mask-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:20px 0 8px;flex-wrap:wrap}
+.mask-head .setting-label{font-size:14px;font-weight:700}
+.mask-actions{display:flex;gap:6px;align-items:center}
+.mask-list{display:flex;flex-direction:column;gap:8px;margin-bottom:16px}
+.mask-columns{display:grid;grid-template-columns:28px minmax(110px,1fr) minmax(160px,1.6fr) 30px;gap:8px;padding:0 12px;margin-bottom:-2px;font-size:11px;color:var(--muted,#8a96a5);text-transform:uppercase;letter-spacing:.04em}
+.mask-row{display:grid;grid-template-columns:28px minmax(110px,1fr) minmax(160px,1.6fr) 30px;gap:8px;align-items:center;border:1px solid var(--line,#3c4450);border-radius:9px;padding:8px 12px;background:var(--bg,rgba(0,0,0,.15))}
+.mask-row input[type=checkbox]{width:18px;height:18px;margin:0;justify-self:center}
+.mask-row input[type=text]{width:100%;min-width:0;padding:7px 10px;background:transparent;border-color:transparent}
+.mask-row input[type=text]:hover{border-color:var(--line,#3c4450)}
+.mask-remove{background:transparent;border:0;color:var(--muted,#8a96a5);cursor:pointer;font-size:14px;line-height:1;padding:4px;border-radius:6px}
+.mask-remove:hover{color:var(--danger,#e06c75);background:rgba(224,108,117,.12)}
+.mask-empty{color:var(--muted,#8a96a5);font-size:12px;padding:10px 12px;border:1px dashed var(--line,#3c4450);border-radius:9px}
+.ig-warning{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--warn-soft,#3a2f1e);color:var(--warn,#e0a84c);border:1px solid color-mix(in srgb,var(--warn,#e0a84c) 45%,var(--line,#3c4450));padding:10px 12px;border-radius:9px;margin:12px 0;font-size:13px}
+.ig-warning span{flex:1;min-width:180px}
+.ig-warning button{color:inherit;border-color:currentColor;flex:none}

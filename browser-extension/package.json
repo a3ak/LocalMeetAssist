@@ -1,0 +1,16 @@
+{
+  "name": "localmeetassist-browser-extension",
+  "version": "1.4.0",
+  "private": true,
+  "description": "LocalMeetAssist WebSocket companion for Chrome, Edge and Firefox",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "check": "node scripts/check.mjs",
+    "package": "npm run build && npm run check && npm test && node scripts/package.mjs",
+    "mock": "node scripts/mock-server.mjs"
+  },
+  "license": "MIT"
+}

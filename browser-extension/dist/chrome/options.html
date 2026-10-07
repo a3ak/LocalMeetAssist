@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="ru">
+<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Настройки — LocalMeetAssist</title><link rel="stylesheet" href="styles.css"></head>
+<body class="options-page"><main>
+  <header><img id="brand-icon" src="icons/128.png" width="48" height="48" alt=""><div><p class="eyebrow">LOCALMEETASSIST</p><h1>Связь с приложением</h1></div></header>
+  <p class="lead">Расширение замечает страницы встреч и передаёт их локальному приложению. Записью управляет LocalMeetAssist.</p>
+  <section class="card status-card" aria-live="polite"><span class="status" id="connection-status">Загрузка…</span><p id="connection-detail">Проверяем настройки.</p><p id="recording-mode" class="hint" hidden></p><button class="secondary" id="reconnect" type="button">Проверить соединение</button></section>
+  <section class="card"><h2>Настройки подключения</h2>
+    <form id="settings-form">
+      <label for="port">Порт приложения</label><input id="port" name="port" type="number" min="1" max="65535" step="1" placeholder="52469" required autocomplete="off">
+      <p class="hint">LocalMeetAssist → Настройки → приложение → порт. Порт должен быть закреплён.</p>
+      <label for="token">Plugin-токен</label><div class="token-field"><input id="token" name="token" type="password" placeholder="lma_pl_…" required autocomplete="off" spellcheck="false"><button id="reveal" class="secondary" type="button" aria-pressed="false">Показать</button></div>
+      <p class="hint">LocalMeetAssist → Интеграции → Браузер. Токен отображается один раз после создания.</p>
+      <h2>Обнаружение новых встреч</h2>
+      <label for="max-age">Максимальный возраст страницы, секунд</label><input id="max-age" name="max-age" type="number" min="30" max="300" step="1" value="180" required>
+      <p class="hint">Проверяется при первом обнаружении. Страницы с неизвестным возрастом и уже открытые при запуске браузера игнорируются. Уже принятая страница учитывается до выхода из неё.</p>
+      <label for="detection-delay">Задержка перед реакцией, секунд</label><input id="detection-delay" name="detection-delay" type="number" min="0" max="30" step="1" value="3" required>
+      <p class="hint">Через указанное время расширение повторно проверит страницу встречи. 0 — сразу. F5 той же страницы не создаёт новую встречу.</p>
+      <h2>Уход со страницы встречи</h2>
+      <label for="stop-delay">Задержка остановки, секунд</label><input id="stop-delay" name="stop-delay" type="number" min="0" max="300" step="1" value="5" required>
+      <p class="hint">После закрытия управляющей вкладки или смены её адреса подождать новую страницу той же встречи. 0 — остановить сразу. Настройка действует только для записи, которой управляет этот плагин. Изменение применяется к следующему отсчёту.</p>
+      <div class="actions"><button type="submit">Сохранить и подключиться</button><button id="clear" class="secondary" type="button">Удалить настройки</button></div>
+      <p id="feedback" role="status" class="feedback"></p>
+    </form>
+  </section>
+  <section class="card"><h2>Уведомления</h2><p>Жёлтый знак ? на значке LM означает, что нужен ваш ответ. Нажмите значок, чтобы открыть вопрос. Показ системного баннера зависит от настроек браузера и ОС.</p><button id="test-notification" class="secondary" type="button">Проверить уведомление</button><p id="notification-test-result" class="feedback" role="status"></p><p id="port-warning" class="hint" hidden role="status"></p>
+  <p id="notification-status" class="hint" hidden></p></section>
+  <section class="card privacy"><h2>Что передаётся</h2><p>Только URL подходящих вкладок, идентификатор установки и ответы на вопрос о запуске. Токен отправляется при авторизации. Соединение направлено только на <code>127.0.0.1</code>.</p><p>Расширение не получает доступ к микрофону или аудио. Токен хранится в этом профиле браузера и не синхронизируется с облаком.</p></section>
+  <footer>Спецификация 1.0 · <span id="version"></span></footer>
+</main><script src="browser-api.js"></script><script src="ui.js"></script><script src="options.js"></script></body></html>

@@ -36,17 +36,21 @@ var webFS embed.FS
 
 // Server holds the application state shared by all HTTP handlers.
 type Server struct {
-	cfgMu    sync.RWMutex
-	cfg      config.Config
-	store    *store.Store
-	recorder *recording.Manager
-	pipeline *pipeline.Runner
-	models   *modelmanager.Manager
-	token    string
-	logger   *log.Logger
-	logLevel *appLogging.Controller
-	eventsMu sync.Mutex
-	events   map[chan []byte]struct{}
+	cfgMu         sync.RWMutex
+	cfg           config.Config
+	store         *store.Store
+	recorder      *recording.Manager
+	pipeline      *pipeline.Runner
+	models        *modelmanager.Manager
+	token         string
+	nonces        *uiNonceState
+	effectivePort int
+	browser       *browserSession
+	recording     *recordingTracker
+	logger        *log.Logger
+	logLevel      *appLogging.Controller
+	eventsMu      sync.Mutex
+	events        map[chan []byte]struct{}
 }
 
 func (s *Server) config() config.Config {
@@ -93,7 +97,11 @@ func NewWithLogging(cfg config.Config, st *store.Store, logger *log.Logger, leve
 
 // NewWithRecorder creates a Server with an injected recorder (used by tests).
 func NewWithRecorder(cfg config.Config, st *store.Store, logger *log.Logger, recorder *recording.Manager) *Server {
-	return &Server{cfg: cfg, store: st, recorder: recorder, pipeline: pipeline.NewWithLogger(cfg, st, logger), models: modelmanager.New(cfg, logger), token: randomToken(), logger: logger, events: make(map[chan []byte]struct{})}
+	s := &Server{cfg: cfg, store: st, recorder: recorder, pipeline: pipeline.NewWithLogger(cfg, st, logger), models: modelmanager.New(cfg, logger), token: randomToken(), nonces: &uiNonceState{}, browser: newBrowserSession(), recording: &recordingTracker{}, logger: logger, events: make(map[chan []byte]struct{})}
+	// A recording cannot survive a restart, so the persisted revision has to be
+	// reconciled before the first plugin connects.
+	s.normaliseRecordingState()
+	return s
 }
 
 // PrepareInference starts optional background downloads of the native runtimes
@@ -123,7 +131,29 @@ func (s *Server) Listen() (net.Listener, error) {
 	if cfg.App.ListenHost != "127.0.0.1" && cfg.App.ListenHost != "localhost" && cfg.App.ListenHost != "::1" {
 		return nil, errors.New("listen_host must be a loopback address")
 	}
-	return net.Listen("tcp", net.JoinHostPort(cfg.App.ListenHost, strconv.Itoa(cfg.App.ListenPort)))
+	ln, err := net.Listen("tcp", net.JoinHostPort(cfg.App.ListenHost, strconv.Itoa(cfg.App.ListenPort)))
+	if err != nil {
+		return nil, err
+	}
+	if addr, ok := ln.Addr().(*net.TCPAddr); ok {
+		s.effectivePort = addr.Port
+	}
+	return ln, nil
+}
+
+// baseURL returns the loopback URL of the running server.
+func (s *Server) baseURL() string {
+	cfg := s.config()
+	host := cfg.App.ListenHost
+	if host == "::1" {
+		host = "[::1]"
+	}
+	return "http://" + net.JoinHostPort(host, strconv.Itoa(s.effectivePort)) + "/"
+}
+
+// IssueUIURL returns a one-time URL that grants the browser its session cookie.
+func (s *Server) IssueUIURL() string {
+	return s.baseURL() + "?ui=" + s.nonces.issue(2*time.Minute)
 }
 
 // Handler builds the HTTP router with the security middleware applied.
@@ -131,7 +161,6 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", s.index)
 	mux.HandleFunc("/api/v1/health", s.health)
-	mux.HandleFunc("/api/v1/session", s.session)
 	mux.HandleFunc("/api/v1/config", s.publicConfig)
 	mux.HandleFunc("/api/v1/settings", s.settings)
 	mux.HandleFunc("/api/v1/audio/devices", s.audioDevices)
@@ -145,6 +174,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/recordings", s.recordings)
 	mux.HandleFunc("/api/v1/recordings/", s.recordingPath)
 	mux.HandleFunc("/api/v1/events", s.eventStream)
+	mux.HandleFunc("/api/v1/integrations/tokens", s.integrationTokens)
+	mux.HandleFunc("/api/v1/integrations/tokens/", s.integrationToken)
+	mux.HandleFunc("/api/v1/integrations/audit", s.integrationAudit)
+	mux.HandleFunc("/api/v1/integrations/browser", s.integrationBrowser)
+	mux.HandleFunc("/api/v1/ws", s.websocketHandler)
 	return s.withSecurity(mux)
 }
 
@@ -197,7 +231,7 @@ func (s *Server) withSecurity(next http.Handler) http.Handler {
 		slowTimer := time.AfterFunc(10*time.Second, func() {
 			// The SSE stream stays open for the whole session; it is not a
 			// slow request and must not pollute the log.
-			if r.URL.Path == "/api/v1/events" {
+			if r.URL.Path == "/api/v1/events" || r.URL.Path == "/api/v1/ws" {
 				return
 			}
 			appLogging.Warnf(s.logger, "http request still running method=%s path=%s elapsed=%s", r.Method, r.URL.Path, time.Since(started).Round(time.Second))
@@ -208,25 +242,29 @@ func (s *Server) withSecurity(next http.Handler) http.Handler {
 		w.Header().Set("X-Frame-Options", "DENY")
 		w.Header().Set("Referrer-Policy", "no-referrer")
 		w.Header().Set("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; media-src 'self' blob:; connect-src 'self'")
-		if r.Method != http.MethodGet && r.Method != http.MethodHead && r.Header.Get("X-Meeting-Token") != s.token {
-			writeError(sw, http.StatusForbidden, "invalid local session token")
-			appLogging.Warnf(s.logger, "http method=%s path=%s status=%d duration=%s", r.Method, r.URL.Path, sw.status, time.Since(started).Round(time.Millisecond))
-			return
-		}
-		next.ServeHTTP(sw, r)
-		duration := time.Since(started).Round(time.Millisecond)
-		if sw.status >= 500 {
-			appLogging.Errorf(s.logger, "http method=%s path=%s status=%d duration=%s", r.Method, r.URL.Path, sw.status, duration)
-		} else if sw.status >= 400 {
-			appLogging.Warnf(s.logger, "http method=%s path=%s status=%d duration=%s", r.Method, r.URL.Path, sw.status, duration)
+		auth := s.resolveAuth(r)
+		if s.authorized(r, auth) {
+			ctx := context.WithValue(r.Context(), authKey{}, auth)
+			next.ServeHTTP(sw, r.WithContext(ctx))
 		} else {
-			appLogging.Debugf(s.logger, "http method=%s path=%s status=%d duration=%s", r.Method, r.URL.Path, sw.status, duration)
+			writeError(sw, http.StatusForbidden, "forbidden")
 		}
+		s.logRequest(sw, r, started)
+		s.maybeAudit(sw, r, auth, started)
 	})
 }
 
 func (s *Server) index(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/" {
+		// Exchange a one-time UI nonce for the session cookie, then drop the
+		// secret from the URL so it never reaches history or the Referer.
+		if nonce := r.URL.Query().Get("ui"); nonce != "" {
+			if s.nonces.consume(nonce) {
+				http.SetCookie(w, &http.Cookie{Name: "lma_ui", Value: s.token, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+			}
+			http.Redirect(w, r, "/", http.StatusFound)
+			return
+		}
 		data, _ := webFS.ReadFile("web/index.html")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -256,13 +294,9 @@ func (s *Server) health(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.config()
 	writeJSON(w, http.StatusOK, map[string]any{"status": "ok", "version": version.Version, "go": runtime.Version(), "recording_backend": cfg.Audio.Backend})
 }
-func (s *Server) session(w http.ResponseWriter, _ *http.Request) {
-	w.Header().Set("Cache-Control", "no-store")
-	writeJSON(w, http.StatusOK, map[string]string{"token": s.token})
-}
 func (s *Server) publicConfig(w http.ResponseWriter, _ *http.Request) {
 	cfg := s.config()
-	writeJSON(w, http.StatusOK, map[string]any{"language": cfg.App.Language, "sample_rate": cfg.Audio.SampleRate, "channels": cfg.Audio.Channels, "backend": cfg.Audio.Backend, "input_device_id": cfg.Audio.InputDeviceID, "input_device_name": cfg.Audio.InputDeviceName, "output_device_id": cfg.Audio.OutputDeviceID, "output_device_name": cfg.Audio.OutputDeviceName, "transcription_auto_run": cfg.Transcription.AutoRun, "transcription_engine": cfg.Transcription.Engine, "transcription_source_mode": cfg.Transcription.SourceMode, "diarization_auto_run": cfg.Diarization.AutoRun, "diarization_engine": cfg.Diarization.Engine, "echo_dedup_enabled": cfg.Transcription.EchoDedupEnabled, "mixed_fallback_enabled": cfg.Transcription.MixedFallbackEnabled, "summary_auto_run": cfg.Summary.AutoRun, "audio_after_processing": cfg.Storage.AudioAfterProcessing})
+	writeJSON(w, http.StatusOK, map[string]any{"language": cfg.App.Language, "listen_port": s.effectivePort, "sample_rate": cfg.Audio.SampleRate, "channels": cfg.Audio.Channels, "backend": cfg.Audio.Backend, "input_device_id": cfg.Audio.InputDeviceID, "input_device_name": cfg.Audio.InputDeviceName, "output_device_id": cfg.Audio.OutputDeviceID, "output_device_name": cfg.Audio.OutputDeviceName, "transcription_auto_run": cfg.Transcription.AutoRun, "transcription_engine": cfg.Transcription.Engine, "transcription_source_mode": cfg.Transcription.SourceMode, "diarization_auto_run": cfg.Diarization.AutoRun, "diarization_engine": cfg.Diarization.Engine, "echo_dedup_enabled": cfg.Transcription.EchoDedupEnabled, "mixed_fallback_enabled": cfg.Transcription.MixedFallbackEnabled, "summary_auto_run": cfg.Summary.AutoRun, "audio_after_processing": cfg.Storage.AudioAfterProcessing})
 }
 
 func (s *Server) audioDevices(w http.ResponseWriter, _ *http.Request) {

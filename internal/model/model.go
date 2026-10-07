@@ -106,3 +106,16 @@ type MeetingPatch struct {
 	Summary          *string `json:"summary,omitempty"`
 	ParticipantCount *int    `json:"participant_count,omitempty"`
 }
+
+// Token is a stored API access token. The secret itself is never persisted:
+// only its SHA-256 hash and a short fingerprint for display are kept.
+type Token struct {
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Kind        string     `json:"kind"`
+	Hash        string     `json:"hash"`
+	Fingerprint string     `json:"fingerprint"`
+	CreatedAt   time.Time  `json:"created_at"`
+	ExpiresAt   *time.Time `json:"expires_at,omitempty"`
+	LastUsedAt  *time.Time `json:"last_used_at,omitempty"`
+}

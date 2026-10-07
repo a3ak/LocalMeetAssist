@@ -2,8 +2,10 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -34,52 +36,61 @@ func (s *Server) recordings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, err.Error())
 		return
 	}
+	if req.ParticipantCount < 0 || req.ParticipantCount > 65 {
+		writeError(w, 400, "participant_count must be between 0 and 65")
+		return
+	}
+	m, err := s.startMeetingRecording(r.Context(), req, "recorded", nil)
+	if err != nil {
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 201, m)
+}
+
+// startMeetingRecording creates a meeting and starts native capture. source is
+// the meeting origin ("recorded" or "browser"); extra entries are merged into
+// the meeting metadata.
+func (s *Server) startMeetingRecording(ctx context.Context, req model.RecordingStart, source string, extra map[string]string) (model.Meeting, error) {
 	now := time.Now()
 	if strings.TrimSpace(req.Title) == "" {
 		req.Title = config.Localized(s.config().App.Language, "Встреча ", "Meeting ") + now.Format("02.01.2006 15:04")
 	}
-	report := s.recorder.Devices(r.Context())
+	report := s.recorder.Devices(ctx)
 	req.InputDevice = chooseDevice(req.InputDevice, report.Microphones)
 	req.OutputDevice = chooseDevice(req.OutputDevice, report.SystemSources)
 	cfg := s.config()
-	ownerName := s.ownerName()
-	metadata := map[string]string{"microphone_owner_name": ownerName}
-	participantCount := req.ParticipantCount
-	if participantCount < 0 {
-		writeError(w, 400, "participant_count must be between 0 and 65")
-		return
+	metadata := map[string]string{"microphone_owner_name": s.ownerName()}
+	if req.ParticipantCount > 0 {
+		metadata["participant_count"] = strconv.Itoa(req.ParticipantCount)
 	}
-	if participantCount > 0 {
-		if participantCount > 65 {
-			writeError(w, 400, "participant_count must be between 1 and 65")
-			return
-		}
-		metadata["participant_count"] = strconv.Itoa(participantCount)
+	for k, v := range extra {
+		metadata[k] = v
 	}
-	m := model.Meeting{UID: uuidv7.New(), Title: strings.TrimSpace(req.Title), StartedAt: now, Status: "starting", Source: "recorded", InputDevice: req.InputDevice, OutputDevice: req.OutputDevice, SummaryStatus: "disabled", Metadata: metadata, CreatedAt: now, UpdatedAt: now}
-	dir := s.meetingDir(m)
-	// Сначала сохраняем встречу: даже ошибка открытия устройства должна быть видна
-	// в календаре и диагностике, а не теряться до записи в БД.
+	if source == "" {
+		source = "recorded"
+	}
+	m := model.Meeting{UID: uuidv7.New(), Title: strings.TrimSpace(req.Title), StartedAt: now, Status: "starting", Source: source, InputDevice: req.InputDevice, OutputDevice: req.OutputDevice, SummaryStatus: "disabled", Metadata: metadata, CreatedAt: now, UpdatedAt: now}
+	// The meeting is saved before opening devices so a failure is still visible
+	// in the calendar instead of being lost before the first database write.
 	if err := s.store.SaveMeeting(m); err != nil {
-		writeError(w, 500, err.Error())
-		return
+		return model.Meeting{}, err
 	}
-	session, err := s.recorder.Start(m.UID, dir, cfg.Audio.SampleRate, cfg.Audio.Channels, req.InputDevice, req.OutputDevice)
+	session, err := s.recorder.Start(m.UID, s.meetingDir(m), cfg.Audio.SampleRate, cfg.Audio.Channels, req.InputDevice, req.OutputDevice)
 	if err != nil {
 		m.Status, m.LastError, m.UpdatedAt = "failed", err.Error(), time.Now()
 		_ = s.store.SaveMeeting(m)
 		appLogging.Errorf(s.logger, "recording failed uid=%s error=%v", m.UID, err)
-		writeError(w, 500, fmt.Sprintf("could not start recording: %v; the meeting was kept in the calendar", err))
-		return
+		return model.Meeting{}, fmt.Errorf("could not start recording: %v; the meeting was kept in the calendar", err)
 	}
 	m.Status, m.InputDevice, m.OutputDevice, m.UpdatedAt = "recording", session.InputDevice, session.OutputDevice, time.Now()
 	if err := s.store.SaveMeeting(m); err != nil {
 		_, _ = s.recorder.Stop(m.UID)
-		writeError(w, 500, err.Error())
-		return
+		return model.Meeting{}, err
 	}
 	s.publishEvent("recording", recordingState(&m))
-	writeJSON(w, 201, m)
+	s.syncRecording()
+	return m, nil
 }
 
 // recordingPath routes recording stop and status requests.
@@ -108,10 +119,24 @@ func (s *Server) recordingStop(w http.ResponseWriter, r *http.Request, uid strin
 		methodNotAllowed(w)
 		return
 	}
+	m, err := s.stopMeetingRecording(uid)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			writeError(w, 404, "meeting not found")
+			return
+		}
+		writeError(w, 500, err.Error())
+		return
+	}
+	writeJSON(w, 202, m)
+}
+
+// stopMeetingRecording finalizes the recording and starts the pipeline. It is
+// shared by the recording endpoint and the browser integration.
+func (s *Server) stopMeetingRecording(uid string) (model.Meeting, error) {
 	m, err := s.store.Meeting(uid)
 	if err != nil {
-		writeError(w, 404, "meeting not found")
-		return
+		return model.Meeting{}, err
 	}
 	session, err := s.recorder.Stop(uid)
 	now := time.Now()
@@ -123,9 +148,9 @@ func (s *Server) recordingStop(w http.ResponseWriter, r *http.Request, uid strin
 		m.Status, m.LastError, m.UpdatedAt = "failed", err.Error(), now
 		_ = s.store.SaveMeeting(m)
 		s.publishEvent("recording", recordingState(nil))
+		s.syncRecording()
 		appLogging.Errorf(s.logger, "recording stop failed uid=%s error=%v", uid, err)
-		writeError(w, 500, err.Error())
-		return
+		return m, err
 	}
 	m.FinishedAt = &now
 	m.DurationMS = now.Sub(session.StartedAt).Milliseconds()
@@ -133,15 +158,11 @@ func (s *Server) recordingStop(w http.ResponseWriter, r *http.Request, uid strin
 	m.ProcessingStage = "queued"
 	m.UpdatedAt = now
 	if err := s.store.SaveMeeting(m); err != nil {
-		writeError(w, 500, err.Error())
-		return
+		return m, err
 	}
 	s.publishEvent("recording", recordingState(nil))
-	if err := s.pipeline.Start(uid); err != nil {
-		writeError(w, 409, err.Error())
-		return
-	}
-	writeJSON(w, 202, m)
+	s.syncRecording()
+	return m, s.pipeline.Start(uid)
 }
 
 // StopActiveRecording finalizes WAV headers during a controlled application
@@ -152,6 +173,9 @@ func (s *Server) StopActiveRecording(ctx context.Context) error {
 	if session == nil {
 		return err
 	}
+	// The recording is over as far as this process is concerned, so the
+	// transition is persisted before anything else can fail.
+	s.syncRecording()
 	meeting, loadErr := s.store.Meeting(session.MeetingUID)
 	if loadErr != nil {
 		return loadErr
