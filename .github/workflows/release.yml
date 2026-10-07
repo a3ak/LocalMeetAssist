@@ -108,15 +108,31 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Checkout обязан идти первым: он очищает рабочую папку (git clean -ffdx)
+      # и иначе удалил бы уже скачанные артефакты.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      # Свежие архивы расширения собираем здесь же, а не берём закоммиченные,
+      # чтобы они всегда совпадали с исходниками.
+      - name: Собрать расширение
+        working-directory: browser-extension
+        run: npm run package
+
       - uses: actions/download-artifact@v4
         with:
           path: dist
           merge-multiple: true
 
-      # Готовые сборки расширения уже лежат в репозитории — прикладываем их
-      # к тому же релизу, чтобы всё скачивалось из одного места.
-      - uses: actions/checkout@v4
-      - run: cp browser-extension/packages/*.zip dist/
+      - name: Добавить архивы расширения
+        run: |
+          set -euo pipefail
+          # Только сборки для браузеров: исходный ZIP проекта в релизе не нужен.
+          cp browser-extension/artifacts/localmeetassist-*.zip dist/
+          ls -lh dist
 
       - name: Опубликовать релиз
         shell: bash
