@@ -649,7 +649,6 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 	if err := r.store.SaveMeeting(m); err != nil {
 		return err
 	}
-	r.job(uid, "completed", "completed", "")
 	r.logger.Printf("pipeline completed uid=%s status=%s speakers=%d warnings=%d", uid, m.Status, m.SpeakerCount, len(warnings))
 	return nil
 }

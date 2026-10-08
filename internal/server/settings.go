@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -113,14 +112,6 @@ func summaryPromptValue(cfg config.Config) string {
 	if value := strings.TrimSpace(cfg.Summary.SystemPrompt); value != "" {
 		return value
 	}
-	if path := strings.TrimSpace(cfg.Summary.PromptFile); path != "" {
-		if !filepath.IsAbs(path) && cfg.ConfigFile != "" {
-			path = filepath.Join(filepath.Dir(cfg.ConfigFile), path)
-		}
-		if data, err := os.ReadFile(path); err == nil && len(strings.TrimSpace(string(data))) > 0 {
-			return strings.TrimSpace(string(data))
-		}
-	}
 	return config.DefaultSummaryPrompt
 }
 
@@ -197,23 +188,20 @@ func settingsSchema(cfg config.Config) []settingGroup {
 			textSetting("diarization.embedding_model", "Модель голосовых признаков", "Путь к WeSpeaker ResNet34-LM ONNX.", cfg.Diarization.EmbeddingModel),
 			floatSetting("diarization.cluster_threshold", "Порог косинусного расстояния", "Без заданного количества участников голоса объединяются, пока расстояние не превышает порог.", cfg.Diarization.ClusterThreshold),
 			intSetting("diarization.max_auto_speakers", "Максимум при auto", "Защита от появления десятков ложных спикеров.", cfg.Diarization.MaxAutoSpeakers),
-			intSetting("diarization.chunk_seconds", "Размер блока (совместимость)", "Новая модель сама работает окнами 10 секунд с перекрытием; значение не используется.", cfg.Diarization.ChunkSeconds),
-			intSetting("diarization.chunk_overlap_seconds", "Перекрытие (совместимость)", "Новая модель использует встроенное перекрытие 5 секунд.", cfg.Diarization.ChunkOverlapSeconds),
 			boolSetting("diarization.microphone_enabled", "Диаризовать микрофон", "Обычно выключено: владелец определяется по отдельному потоку.", cfg.Diarization.MicrophoneEnabled),
 			intSetting("diarization.timeout_seconds", "Таймаут, сек", "Максимальное время диаризации.", cfg.Diarization.TimeoutSeconds),
 			intSetting("diarization.num_threads", "Потоки CPU", "Потоки ONNX Runtime для сегментации и извлечения голосовых признаков; 0 — значение движка.", cfg.Diarization.NumThreads),
 		}},
 		{ID: "summary", Title: "Саммаризация", Description: "OpenAI-совместимая модель протоколирования.", Fields: []settingField{
 			boolSetting("summary.auto_run", "Выполнять автоматически", "Автоматически создавать протокол после готового транскрипта. Ручной запуск доступен всегда.", cfg.Summary.AutoRun),
-			selectSetting("summary.language", "Язык протокола", "Язык ответа саммари. По умолчанию — как язык интерфейса.", cfg.Summary.Language, option("", "Как язык интерфейса"), option("ru", "Русский"), option("en", "English")),
+			selectSetting("summary.language", "Язык протокола", "Язык всего ответа: заголовков, подписей и текста. По умолчанию — как язык интерфейса. Промт задаёт структуру, а язык берётся отсюда.", cfg.Summary.Language, option("", "Как язык интерфейса"), option("ru", "Русский"), option("en", "English")),
 			textSetting("summary.base_url", "URL API", "Например http://127.0.0.1:8080/v1.", cfg.Summary.BaseURL),
 			textSetting("summary.model", "Модель", "Имя модели в OpenAI-совместимом API.", cfg.Summary.Model),
 			secretSetting("summary.token", "Токен", "Оставьте пустым, чтобы не изменять сохранённый токен.", cfg.Summary.Token != ""),
 			textSetting("summary.token_env", "Переменная токена", "Переменная окружения с токеном.", cfg.Summary.TokenEnv),
 			intSetting("summary.timeout_seconds", "Таймаут, сек", "Таймаут запроса к модели.", cfg.Summary.TimeoutSeconds),
 			intSetting("summary.max_retries", "Повторы", "Количество повторных запросов при временной ошибке.", cfg.Summary.MaxRetries),
-			textareaSetting("summary.system_prompt", "Системный промт", "Инструкция модели для формирования протокола. Кнопка сброса возвращает встроенный безопасный шаблон.", summaryPromptValue(cfg), config.DefaultSummaryPrompt, true),
-			textSetting("summary.prompt_file", "Файл промта (совместимость)", "Используется только когда системный промт пуст. Новые настройки удобнее задавать полем выше.", cfg.Summary.PromptFile),
+			textareaSetting("summary.system_prompt", "Системный промт", "Инструкция модели для формирования протокола. Результат — простой текст без разметки, готовый для вставки в письмо. Кнопка сброса возвращает встроенный безопасный шаблон.", summaryPromptValue(cfg), config.DefaultSummaryPrompt, true),
 			boolSetting("summary.tls_verify", "Проверять TLS", "Проверять сертификат сервера.", cfg.Summary.TLSVerify),
 			textSetting("summary.tls_ca_file", "CA-файл", "Дополнительный доверенный CA PEM.", cfg.Summary.TLSCAFile),
 			textSetting("summary.tls_server_name", "TLS server name", "Переопределение имени сертификата.", cfg.Summary.TLSServerName),

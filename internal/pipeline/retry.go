@@ -221,7 +221,19 @@ func (r *Runner) retryEncoding(ctx context.Context, uid string) error {
 		}
 	}
 	r.jobProgress(uid, "encoding", 45)
+	// Формат можно задать на один запуск через API: так вручную конвертируют
+	// запись в Ogg/Opus или возвращают WAV, не меняя общую настройку хранения.
+	// Значение живёт в метаданных встречи, поэтому асинхронному этапу не нужно
+	// принимать параметры.
 	policy := strings.ToLower(strings.TrimSpace(r.cfg.Storage.AudioAfterProcessing))
+	if override := strings.ToLower(strings.TrimSpace(m.Metadata["encoding_format"])); override != "" {
+		switch override {
+		case "wav", "opus", "mp3":
+			policy = override
+		}
+		delete(m.Metadata, "encoding_format")
+		_ = r.store.SaveMeeting(m)
+	}
 	switch policy {
 	case "delete":
 		r.removeArtifactFiles(uid, micPath, sysPath, mixedPath)

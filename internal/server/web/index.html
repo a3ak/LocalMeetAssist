@@ -13,7 +13,7 @@
     <div class="record-actions">
       <button id="settingsBtn" class="ghost" data-i18n="nav.settings">Настройки</button>
       <button id="modelsBtn" class="ghost" data-i18n="nav.models">Модели</button>
-      <button id="diagBtn" class="ghost" data-i18n="nav.diagnostics">Диагностика<span id="diagBadge" class="nav-badge hidden" aria-hidden="true">!</span></button>
+      <button id="diagBtn" class="ghost"><span data-i18n="nav.diagnostics">Диагностика</span><span id="diagBadge" class="nav-badge hidden" aria-hidden="true">!</span></button>
       <button id="integrationsBtn" class="ghost" data-i18n="nav.integrations">Интеграции</button>
       <span id="timer" class="timer hidden">00:00</span>
       <button id="startBtn" class="primary" data-i18n="record.startBtn">● Начать запись</button>
@@ -22,7 +22,7 @@
   </header>
   <div id="authHint" class="auth-hint hidden" data-i18n="auth.hint">Страница открыта вручную без авторизации. Откройте LocalMeetAssist из меню трея «Открыть Web UI» или перезапустите приложение.</div>
 
-  <section id="searchPanel" class="search-panel hidden" aria-label="Поиск встреч">
+<section id="searchPanel" class="search-panel hidden" aria-label="Поиск встреч">
     <div class="search-line">
       <input id="meetingSearch" autocomplete="off" data-i18n-placeholder="search.placeholder" placeholder="Найти фразу или использовать ключи: Speakers:, Meeting:, Discussion:, Date:">
       <button id="clearSearch" type="button" class="ghost small hidden" data-i18n="search.clear">Очистить</button>
@@ -57,20 +57,20 @@
           <button id="createBtn" type="button" class="icon-action" data-i18n-title="create.btn" title="Создать встречу"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
         </div>
       </div>
-      <div id="weekdaysRow" class="weekdays"><span data-i18n="weekday.mon">Пн</span><span data-i18n="weekday.tue">Вт</span><span data-i18n="weekday.wed">Ср</span><span data-i18n="weekday.thu">Чт</span><span data-i18n="weekday.fri">Пт</span><span data-i18n="weekday.sat">Сб</span><span data-i18n="weekday.sun">Вс</span></div>
+        <div id="weekdaysRow" class="weekdays"><span data-i18n="weekday.mon">Пн</span><span data-i18n="weekday.tue">Вт</span><span data-i18n="weekday.wed">Ср</span><span data-i18n="weekday.thu">Чт</span><span data-i18n="weekday.fri">Пт</span><span data-i18n="weekday.sat">Сб</span><span data-i18n="weekday.sun">Вс</span></div>
       <div id="calendar" class="calendar"></div>
       <div id="weekCalendar" class="week-calendar hidden"></div>
     </section>
 
     <aside class="sidebar">
-      <div class="sidebar-head"><h2 data-i18n="meetings.title">Встречи</h2><span id="meetingCount" class="count">0</span></div>
+      <div class="sidebar-head"><h2 id="meetingListTitle" data-i18n="meetings.title">Встречи</h2><span id="meetingCount" class="count">0</span></div>
       <div id="meetingList" class="meeting-list"></div>
     </aside>
   </main>
 
   <dialog id="recordDialog">
     <form class="dialog-card" id="recordForm">
-      <div class="dialog-head"><h2 data-i18n="record.title">Новая запись</h2><button id="closeRecord" type="button" class="icon-btn">×</button></div>
+      <div class="dialog-head"><div><h2 data-i18n="record.title">Новая запись</h2><div class="meta" data-i18n="record.subtitle">Микрофон и системный звук записываются приложением</div></div><button id="closeRecord" type="button" class="icon-btn">×</button></div>
       <label><span data-i18n="record.name">Название</span><input id="recordTitle" autocomplete="off" data-i18n-placeholder="record.namePlaceholder" placeholder="Например, Планирование спринта"></label>
       <label><span data-i18n="record.mic">Микрофон</span><select id="micSelect"></select></label>
       <label><span data-i18n="record.systemAudio">Системный звук</span><select id="outputSelect"></select><small data-i18n="record.captureHint">Захват выполняет приложение напрямую. Браузер не запрашивает экран или вкладку.</small></label>
@@ -92,25 +92,28 @@
   <dialog id="diagDialog">
     <div class="dialog-card diagnostics-card">
       <div class="dialog-head"><h2 data-i18n="diag.title">Диагностика</h2><button id="closeDiag" type="button" class="icon-btn">×</button></div>
-      <div id="diagAudio" class="diag-status hidden"></div>
-      <pre id="diagDetails" class="diagnostics"></pre>
-      <div class="dialog-head"><h3 data-i18n="diag.recentLogs">Последние строки лога</h3><button id="refreshLogs" type="button" class="ghost small" data-i18n="common.refresh">Обновить</button></div>
-      <pre id="logDetails" class="diagnostics logs"></pre>
-      <div class="dialog-actions"><button id="closeDiag2" type="button" class="primary" data-i18n="common.close">Закрыть</button></div>
+      <div class="diag-body">
+        <div id="diagAudio" class="diag-status hidden"></div>
+        <div id="diagDevices" class="diag-devices"></div>
+        <details class="diag-json"><summary data-i18n="diag.jsonTitle">Полные данные диагностики · JSON</summary><pre id="diagDetails" class="diagnostics"></pre></details>
+        <div class="diag-logs-head"><h3 data-i18n="diag.recentLogs">Последние строки лога</h3><button id="refreshLogs" type="button" class="ghost small" data-i18n="common.refresh">Обновить</button></div>
+        <pre id="logDetails" class="diagnostics logs"></pre>
+      </div>
     </div>
   </dialog>
 
   <dialog id="modelsDialog">
     <div class="dialog-card models-card">
       <div class="dialog-head"><div><h2 data-i18n="models.title">Модели</h2><div class="meta" data-i18n="models.meta">ONNX Runtime и модели загружаются отдельно. LocalMeetAssist обращается к ним напрямую — без CLI, Python и GigaAMGUI.</div></div><button id="closeModels" type="button" class="icon-btn">×</button></div>
+      <div class="models-toolbar"><button id="downloadRecommended" type="button" class="icon-action" aria-label="Установить все рекомендованные модели" data-tip="Установить все рекомендованные модели" data-i18n-tip="models.downloadRecommended"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/></svg></button><button id="refreshModels" type="button" class="icon-action" aria-label="Обновить статусы" data-tip="Обновить статусы" data-i18n-tip="models.refreshStatuses"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4h-4"/></svg></button><button id="deleteAllModels" type="button" class="icon-action danger" aria-label="Удалить все сохранённые модели" data-tip="Удалить все сохранённые модели" data-i18n-tip="models.deleteAll"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg></button></div>
+      <div class="pills model-tabs" id="modelTabs"><button type="button" data-mgroup="runtime" class="active" data-i18n="models.tabRuntime">Runtime</button><button type="button" data-mgroup="transcription" data-i18n="models.tabTranscription">Транскрибация</button><button type="button" data-mgroup="speakers" data-i18n="models.tabSpeakers">Спикеры</button></div>
       <div id="modelsList" class="models-list"></div>
-      <div class="dialog-actions"><button id="refreshModels" type="button" class="ghost" data-i18n="common.refresh">Обновить</button><button id="closeModels2" type="button" class="primary" data-i18n="common.close">Закрыть</button></div>
     </div>
   </dialog>
 
   <dialog id="settingsDialog" class="settings-dialog">
     <div class="dialog-card settings-card">
-      <div class="dialog-head"><div><h2 data-i18n="settings.title">Настройки</h2><div class="meta" data-i18n="settings.meta">Рабочие параметры применяются сразу. Адрес сервера, каталоги данных/логов и БД — после перезапуска.</div></div><button id="closeSettings" type="button" class="icon-btn">×</button></div>
+      <div class="dialog-head"><div><h2 data-i18n="settings.title">Настройки</h2><div class="meta" data-i18n="settings.meta">Рабочие параметры применяются сразу. Адрес сервера, каталоги данных/логов и БД — после перезапуска.</div></div><div class="dialog-head-actions"><span id="settingsDirty" class="meta"></span><button id="saveSettings" type="button" class="primary small" data-i18n="common.save">Сохранить</button><button id="closeSettings" type="button" class="icon-btn">×</button></div></div>
       <div id="settingsRestart" class="settings-restart hidden"></div>
       <div class="settings-layout">
         <nav id="settingsNav" class="settings-nav"></nav>
@@ -119,73 +122,100 @@
           <div id="settingsFields" class="settings-fields"></div>
         </form>
       </div>
-      <div class="dialog-actions"><span id="settingsDirty" class="meta"></span><button id="closeSettings2" type="button" class="ghost" data-i18n="common.close">Закрыть</button><button id="saveSettings" type="button" class="primary" data-i18n="common.save">Сохранить</button></div>
     </div>
   </dialog>
 
   <dialog id="integrationsDialog" class="settings-dialog">
     <div class="dialog-card settings-card">
-      <div class="dialog-head"><div><h2 data-i18n="integrations.title">Интеграции</h2><div class="meta" data-i18n="integrations.meta">Токены доступа, браузерная интеграция и аудит запросов.</div></div><button id="closeIntegrations" type="button" class="icon-btn">×</button></div>
+      <div class="dialog-head"><div><h2 data-i18n="integrations.title">Интеграции</h2><div class="meta" data-i18n="integrations.meta">Токены доступа, браузерная интеграция и аудит запросов.</div></div><div class="dialog-head-actions"><button id="saveBrowser" type="button" class="primary small hidden" data-i18n="common.save">Сохранить</button><button id="closeIntegrations" type="button" class="icon-btn">×</button></div></div>
       <div class="settings-layout">
-        <nav id="integrationsNav" class="settings-nav">
-          <button type="button" class="settings-nav-item active" data-igtab="tokens" data-i18n="integrations.tabTokens">Токены</button>
-          <button type="button" class="settings-nav-item" data-igtab="browser" data-i18n="integrations.tabBrowser">Браузер</button>
-          <button type="button" class="settings-nav-item" data-igtab="audit" data-i18n="integrations.tabAudit">Аудит</button>
+        <nav id="integrationsNav" class="segmented ig-tabs">
+          <button type="button" class="active" data-igtab="browser" data-i18n="integrations.tabBrowser">Браузер</button>
+          <button type="button"  data-igtab="audit" data-i18n="integrations.tabAudit">Аудит</button>
         </nav>
         <div class="settings-form">
-          <section id="ig-tokens" class="ig-section">
-            <div id="tokenList" class="token-list"></div>
-            <form id="tokenForm" class="token-form">
-              <input id="tokenName" autocomplete="off" data-i18n-placeholder="integrations.tokenName" placeholder="Название">
-              <select id="tokenKind">
-                <option value="read_only">read_only</option>
-                <option value="read_write">read_write</option>
-              </select>
-              <input id="tokenExpires" type="date" data-i18n-title="integrations.expiry" title="Действует до (пусто — бессрочно)">
-              <button type="submit" class="primary small" data-i18n="integrations.createToken">Создать токен</button>
-            </form>
+          <section id="ig-tokens" class="ig-section hidden">
+            <div id="pluginTokenCard" class="card hidden"></div>
+            <div class="card">
+              <div class="card-head"><div><h3 data-i18n="integrations.otherTokens">Другие токены</h3><p data-i18n="integrations.otherTokensDesc">Доступ для внешних инструментов.</p></div><div class="card-actions"><button type="button" id="openTokenForm" class="primary small" data-i18n="integrations.createTokenBtn">＋ Создать токен</button></div></div>
+              <form id="tokenForm" class="token-form hidden">
+                <label class="field"><span data-i18n="integrations.tokenName">Название</span><input id="tokenName" autocomplete="off" data-i18n-placeholder="integrations.tokenNamePlaceholder" placeholder="Например, экспорт встреч"></label>
+                <label class="field"><span data-i18n="integrations.tokenKindLabel">Права доступа</span><select id="tokenKind"><option value="read_only" data-i18n="integrations.readOnly">Только чтение</option><option value="read_write" data-i18n="integrations.readWrite">Чтение и запись</option></select></label>
+                <label class="field"><span data-i18n="integrations.expiry">Действует до</span><input id="tokenExpires" type="date"><small class="field-hint" data-i18n="integrations.expiryHint">Оставьте пустым для бессрочного доступа.</small></label>
+                <div class="token-form-actions"><button type="button" id="cancelTokenForm" class="ghost small" data-i18n="common.cancel">Отмена</button><button type="submit" class="primary small" data-i18n="integrations.addToken">Добавить</button></div>
+              </form>
+              <div class="token-columns"><span data-i18n="integrations.tokenName">Название</span><span data-i18n="integrations.tokenRights">Права</span><span data-i18n="integrations.expiry">Срок действия</span><span></span></div>
+              <div id="tokenList" class="token-list"></div>
+            </div>
           </section>
           <section id="ig-browser" class="ig-section hidden">
-            <label class="setting-field setting-checkbox"><span class="checkbox-line"><input type="checkbox" id="browserEnabled"><span class="setting-label" data-i18n="integrations.browserEnable">Включать браузерную интеграцию</span></span><small data-i18n="integrations.browserEnableDesc">Расширение сообщает приложению, какие страницы встреч открыты. Приложение само решает, когда начать и остановить запись.</small></label>
-            <div id="browserPortWarning" class="ig-warning hidden"><span id="browserPortWarningText"></span><button type="button" id="goToPortSetting" class="ghost small" data-i18n="integrations.portWarningAction">Перейти к настройке</button></div>
-            <div class="mask-head">
-              <span class="setting-label" data-i18n="integrations.masks">Маски страниц</span>
-              <div class="mask-actions">
-                <button type="button" id="addMask" class="ghost small" data-i18n="integrations.addMask">＋ Добавить</button>
-                <button type="button" id="exportMasks" class="ghost small" data-i18n="integrations.exportMasks">Экспорт</button>
-                <button type="button" id="importMasks" class="ghost small" data-i18n="integrations.importMasks">Импорт</button>
-                <input type="file" id="importMasksFile" accept="application/json,.json" hidden>
-              </div>
-            </div>
-            <div class="mask-columns"><span></span><span data-i18n="integrations.maskColumnName">Название</span><span data-i18n="integrations.maskColumnPattern">Шаблон (glob)</span><span></span></div>
-            <div id="maskList" class="mask-list"></div>
-            <label><span data-i18n="integrations.mode">Режим</span><select id="browserMode"><option value="auto" data-i18n="integrations.modeAuto">auto — начинать сразу</option><option value="notify" data-i18n="integrations.modeNotify">notify — спрашивать</option></select></label>
-            <label><span data-i18n="integrations.titleTemplate">Шаблон заголовка</span><input id="browserTitleTemplate" autocomplete="off"></label>
-            <label><span data-i18n="integrations.missedPolls">Остановка после пропущенных опросов, шт. (2–10)</span><input id="browserMissedPolls" type="number" min="2" max="10"></label>
-            <label><span data-i18n="integrations.pollInterval">Период опроса, с (10–25)</span><input id="browserPoll" type="number" min="10" max="25"></label>
-            <div id="browserTokenBox" class="meta"></div>
+            <div class="card">
+              <label class="switch-line">
+                <span class="switch"><input type="checkbox" id="browserEnabled"><span></span></span>
+                <span class="switch-text">
+                  <strong data-i18n="integrations.browserEnable">Включать браузерную интеграцию</strong>
+                  <small data-i18n="integrations.browserEnableDesc">Расширение сообщает приложению, какие страницы встреч открыты. Приложение само решает, когда начать и остановить запись.</small>
+                </span>
+              </label>
+              <div class="browser-token">
+                <div id="browserTokenBox" class="browser-token-text"></div>
+                <div class="browser-token-actions">
+                  <button id="copyPluginToken" type="button" class="icon-action" aria-label="Скопировать в буфер (доступно после создания)" data-tip="Скопировать в буфер (доступно после создания)" data-i18n-tip="integrations.copyPluginToken"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+                  <button id="regeneratePluginToken" type="button" class="icon-action" aria-label="Перегенерировать токен" data-tip="Перегенерировать токен" data-i18n-tip="integrations.regenerateToken"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4h-4"/></svg></button>
             <div id="browserTokenSecret" class="token-secret hidden"></div>
-            <button id="saveBrowser" type="button" class="primary small" data-i18n="common.save">Сохранить</button>
+                </div>
+              </div>
+              </div>
+            <div id="browserPortWarning" class="ig-warning hidden"><span id="browserPortWarningText"></span><button type="button" id="goToPortSetting" class="ghost small" data-i18n="integrations.portWarningAction">Перейти к настройке</button></div>
+            <div class="card">
+              <div class="card-head">
+                <div><h3 data-i18n="integrations.masks">Маски страниц</h3></div>
+                <div class="card-actions">
+                  <button type="button" id="addMask" class="ghost small" data-i18n="integrations.addMask">＋ Добавить</button>
+                  <button type="button" id="exportMasks" class="ghost small" data-i18n="integrations.exportMasks">Экспорт</button>
+                  <button type="button" id="importMasks" class="ghost small" data-i18n="integrations.importMasks">Импорт</button>
+                  <input type="file" id="importMasksFile" accept="application/json,.json" hidden>
+                </div>
+              </div>
+              <div id="maskList" class="mask-list"></div>
+            </div>
+            <div class="card">
+              <div class="card-head"><div><h3 data-i18n="integrations.recordTitle">Настройки записи</h3></div></div>
+              <label class="field"><span data-i18n="integrations.mode">Режим</span><select id="browserMode"><option value="auto" data-i18n="integrations.modeAuto">Начинать сразу</option><option value="notify" data-i18n="integrations.modeNotify">Спрашивать перед записью</option></select></label>
+              <label class="field"><span data-i18n="integrations.titleTemplate">Шаблон заголовка</span><input id="browserTitleTemplate" autocomplete="off"><small class="field-hint" data-i18n="integrations.titleExample">Пример: Планирование — 08.10.2026 10:00</small></label>
+            </div>
+            <details class="card collapsible">
+              <summary><span data-i18n="integrations.linkParams">Параметры связи</span><span id="browserLinkSummary" class="collapsible-summary"></span></summary>
+              <label class="field"><span data-i18n="integrations.missedPolls">Остановка после пропущенных опросов</span><input id="browserMissedPolls" type="number" min="2" max="10"><small class="field-hint" data-i18n="integrations.missedPollsHint">Допустимо от 2 до 10.</small></label>
+              <label class="field"><span data-i18n="integrations.pollInterval">Период опроса, с</span><input id="browserPoll" type="number" min="10" max="25"><small class="field-hint" data-i18n="integrations.pollIntervalHint">Допустимо от 10 до 25 секунд.</small></label>
+            </details>
           </section>
           <section id="ig-audit" class="ig-section hidden">
-            <label class="setting-field setting-checkbox"><span class="checkbox-line"><input type="checkbox" id="auditEnabled"><span class="setting-label" data-i18n="integrations.auditEnable">Вести аудит запросов</span></span><small data-i18n="integrations.auditEnableDesc">Записывает обращения по интеграционным токенам: время, токен, IP, метод и результат. Хранится отдельным файлом журнала.</small></label>
+            <div class="card">
+              <label class="switch-line">
+                <span class="switch"><input type="checkbox" id="auditEnabled"><span></span></span>
+                <span class="switch-text">
+                  <strong data-i18n="integrations.auditEnable">Вести аудит запросов</strong>
+                  <small data-i18n="integrations.auditEnableDesc">Записывает обращения по интеграционным токенам: время, токен, IP, метод и результат. Хранится отдельным файлом журнала.</small>
+                </span>
+              </label>
+            </div>
             <div id="auditTable" class="audit-table"></div>
           </section>
         </div>
       </div>
-      <div class="dialog-actions"><button id="closeIntegrations2" type="button" class="primary" data-i18n="common.close">Закрыть</button></div>
     </div>
   </dialog>
 
   <dialog id="detailDialog" class="detail-dialog">
     <div class="detail-card">
-      <div class="dialog-head"><div><input id="detailTitle" class="title-input"><div id="detailMeta" class="meta"></div></div><button id="closeDetail" class="icon-btn">×</button></div>
+      <div class="dialog-head"><div><input id="detailTitle" class="title-input"><div id="detailMeta" class="meta"></div></div><div class="dialog-head-actions"><button id="deleteMeeting" type="button" class="icon-action danger" aria-label="Удалить встречу" data-tip="Удалить встречу" data-i18n-tip="detail.delete"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg></button><button id="closeDetail" type="button" class="icon-btn">×</button></div></div>
       <div id="statusStrip" class="status-strip"></div>
-      <div class="tabs"><button data-tab="summary" class="active" data-i18n="tab.summary">Протокол</button><button data-tab="transcript" data-i18n="tab.transcript">Транскрипт</button><button data-tab="speakers" data-i18n="tab.speakers">Спикеры</button><button data-tab="artifacts" data-i18n="tab.artifacts">Файлы</button><button data-tab="jobs" data-i18n="tab.jobs">Обработка</button></div>
+      <div class="tabs"><button data-tab="summary" class="active" data-i18n="tab.summary">Протокол</button><button data-tab="transcript" data-i18n="tab.transcript">Транскрипт</button><button data-tab="speakers"><span data-i18n="tab.speakers">Спикеры</span><span id="speakersTabCount" class="tab-count hidden"></span></button><button data-tab="artifacts" data-i18n="tab.artifacts">Файлы</button><button data-tab="jobs" data-i18n="tab.jobs">Обработка</button></div>
       <section id="tab-summary" class="tab-content"><div id="summaryStale" class="stale-warning hidden" data-i18n="summary.stale">Протокол создан по предыдущей версии транскрипта или списка спикеров. Последний успешный результат сохранён; рекомендуется повторить саммаризацию.</div><textarea id="summaryText" data-i18n-placeholder="summary.placeholder" placeholder="Саммари ещё не создано"></textarea><button id="saveSummary" class="primary small" data-i18n="common.save">Сохранить</button></section>
       <section id="tab-transcript" class="tab-content hidden"><textarea id="transcriptText" data-i18n-placeholder="transcript.placeholder" placeholder="Транскрипт ещё не создан"></textarea><button id="saveTranscript" class="primary small" data-i18n="common.save">Сохранить</button></section>
       <section id="tab-speakers" class="tab-content hidden"><div class="speaker-editor-help" data-i18n="speakers.help">Измените все имена, перенесите фрагменты между карточками или перетащите карточку одного Speaker на другого для объединения. Изменения применятся только после общего сохранения.</div><div id="speakerBulkActions" class="speaker-bulk-actions hidden"><span id="speakerDirtyText"></span><select id="speakerMoveTarget"></select><button id="moveSelectedSpeakerFragments" type="button" class="ghost small" data-i18n="speakers.moveSelected">Переместить выбранные</button><button id="discardSpeakerChanges" type="button" class="ghost small" data-i18n="speakers.discard">Отменить</button><button id="saveSpeakerChanges" type="button" class="primary small" data-i18n="speakers.saveAll">Сохранить все изменения</button></div><div id="speakersList"></div></section>
-      <section id="tab-artifacts" class="tab-content hidden"><div id="audioPlayer"></div><div id="artifactsList"></div><form id="importForm" class="import-form"><input type="file" id="importFile" accept="audio/wav,audio/x-wav,audio/ogg,audio/opus,audio/mpeg,.wav,.opus,.ogg,.mp3" required><select id="importType"><optgroup data-i18n-label="import.audioGroup" label="Источник аудио (WAV, Opus или MP3)"><option value="audio_microphone" data-i18n="import.microphone">Микрофон</option><option value="audio_system" data-i18n="import.systemAudio">Системный звук</option><option value="audio_mixed" data-i18n="import.mixed">Общий поток mixed</option></optgroup><optgroup data-i18n-label="import.materialGroup" label="Готовые материалы"><option value="transcript" data-i18n="import.transcript">Транскрипт</option><option value="summary" data-i18n="import.summary">Саммари</option><option value="attachment" data-i18n="import.attachment">Другой файл</option></optgroup></select><button class="ghost small" data-i18n="import.importBtn">Импортировать</button></form><div class="hint import-hint" data-i18n="import.hint">Аудио автоматически преобразуется в рабочий PCM16 mono 16 кГц. Исходный файл после успешной проверки не сохраняется. Микрофон и системный звук можно загрузить последовательно; импорт mixed заменяет раздельную пару.</div></section>
+      <section id="tab-artifacts" class="tab-content hidden"><div id="audioPlayer"></div><div id="audioActions" class="audio-actions hidden"></div><div id="artifactsList"></div><form id="importForm" class="import-form"><input type="file" id="importFile" accept="audio/wav,audio/x-wav,audio/ogg,audio/opus,audio/mpeg,.wav,.opus,.ogg,.mp3" required><select id="importType"><optgroup data-i18n-label="import.audioGroup" label="Источник аудио (WAV, Opus или MP3)"><option value="audio_microphone" data-i18n="import.microphone">Микрофон</option><option value="audio_system" data-i18n="import.systemAudio">Системный звук</option><option value="audio_mixed" data-i18n="import.mixed">Общий поток mixed</option></optgroup><optgroup data-i18n-label="import.materialGroup" label="Готовые материалы"><option value="transcript" data-i18n="import.transcript">Транскрипт</option><option value="summary" data-i18n="import.summary">Саммари</option><option value="attachment" data-i18n="import.attachment">Другой файл</option></optgroup></select><button class="ghost small" data-i18n="import.importBtn">Импортировать</button></form><div class="hint import-hint" data-i18n="import.hint">Аудио автоматически преобразуется в рабочий PCM16 mono 16 кГц. Исходный файл после успешной проверки не сохраняется. Микрофон и системный звук можно загрузить последовательно; импорт mixed заменяет раздельную пару.</div></section>
       <section id="tab-jobs" class="tab-content hidden">
         <div class="meeting-processing-settings">
           <label><span data-i18n="jobs.participants">Количество участников</span><input id="detailSpeakerCount" type="number" min="0" max="65" value="0"><small data-i18n="jobs.participantsHint">Включая владельца микрофона. 0 — определить автоматически; для system.wav будет использовано N−1.</small></label>
@@ -194,7 +224,6 @@
         <div class="hint processing-audio-hint" data-i18n="jobs.audioHint">Если у старой встречи остался только Opus или MP3, при повторной обработке LocalMeetAssist автоматически восстановит рабочие PCM16 WAV. Сжатый исходник сохраняется.</div>
         <div id="jobsList"></div><div class="processing-actions"><button id="retryBtn" class="ghost small" data-i18n="jobs.retry">Повторить обработку</button><button id="cancelProcessingBtn" class="danger ghost small hidden" data-i18n="jobs.cancel">Остановить обработку</button></div>
       </section>
-      <footer class="detail-footer"><button id="deleteMeeting" class="danger ghost" data-i18n="detail.delete">Удалить встречу</button><button id="closeDetail2" class="primary" data-i18n="common.close">Закрыть</button></footer>
     </div>
   </dialog>
 

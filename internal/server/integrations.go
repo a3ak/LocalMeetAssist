@@ -163,7 +163,13 @@ func (s *Server) ensurePluginsToken() (*model.Token, string, error) {
 		return existing, "", nil
 	}
 	secret := newTokenSecret("lma_pl_")
-	record := buildTokenRecord(uuidv7.New(), "Browser plugin", tokenKindPlugins, secret, time.Now(), nil)
+	// Имя создаётся на языке интерфейса: оно видно в списке токенов, и
+	// английская подпись в русском интерфейсе выглядит как непереведённый текст.
+	name := "Browser plugin"
+	if strings.EqualFold(strings.TrimSpace(s.config().App.Language), "ru") {
+		name = "Плагин браузера"
+	}
+	record := buildTokenRecord(uuidv7.New(), name, tokenKindPlugins, secret, time.Now(), nil)
 	if err := s.store.SaveToken(record); err != nil {
 		return nil, "", err
 	}

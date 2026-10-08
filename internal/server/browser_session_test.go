@@ -10,6 +10,8 @@ import (
 	"log"
 	"net"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -215,6 +217,71 @@ func TestBrowserManualCommandRecordAndStop(t *testing.T) {
 	s.handleBrowserTabs("c1", []string{serviceStopURL}, 4, "cmd-stop-again")
 	if active, _ := s.recordingValues(); active {
 		t.Fatal("a repeated stop must not start anything")
+	}
+}
+
+// TestBrowserAuditWritesPluginEvents checks that plugin activity reaches the
+// audit file. The plugin sends its token inside the hello frame, so the HTTP
+// audit middleware sees an anonymous request and logs nothing: without the
+// WebSocket-level entries the audit stays empty in the usual setup.
+func TestBrowserAuditWritesPluginEvents(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.App.DataDir = dir
+	cfg.Storage.DatabasePath = filepath.Join(dir, "database", "meetings.db")
+	cfg.Logging.Directory = filepath.Join(dir, "logs")
+	cfg.Audio.InputDeviceID = "mic"
+	cfg.Audio.InputDeviceName = "Test microphone"
+	cfg.Audio.OutputDeviceID = "system"
+	cfg.Audio.OutputDeviceName = "Test system"
+	cfg.Integrations.AuditEnabled = true
+	cfg.Integrations.Browser.Enabled = true
+	cfg.Integrations.Browser.Mode = "auto"
+	cfg.Integrations.Browser.Masks = "Dion = *dion.vc/*"
+	cfg.Transcription.AutoRun = false
+	cfg.Summary.AutoRun = false
+	st, err := store.Open(cfg.Storage.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	// Синтетический бэкенд: настоящий захват звука в тестах недоступен.
+	recorder := recording.NewManagerWithBackend(cfg.Audio, log.New(io.Discard, "", 0), serverSyntheticBackend{})
+	s := NewWithRecorder(cfg, st, log.New(io.Discard, "", 0), recorder)
+
+	info := browserAuditInfo{TokenName: "Плагин браузера", TokenKind: tokenKindPlugins, IP: "127.0.0.1", UserAgent: "test-agent"}
+	s.browserAttach("c-audit", "token-1", info, nil)
+	if _, err := s.startBrowserRecordingFor("c-audit", "https://dion.vc/event/1"); err != nil {
+		t.Fatalf("browser recording was not started: %v", err)
+	}
+	s.handleBrowserTabs("c-audit", []string{serviceRecordURL}, 1, "cmd-audit")
+
+	data, err := os.ReadFile(filepath.Join(cfg.Logging.Directory, "integrations-audit.log"))
+	if err != nil {
+		t.Fatalf("audit log was not written: %v", err)
+	}
+	text := string(data)
+	for _, want := range []string{`"event":"meeting_started"`, `"meeting_uid"`, `"event":"command"`, `"command_id":"cmd-audit"`, `"kind":"plugins"`, `"method":"WS"`} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("audit log is missing %s:\n%s", want, text)
+		}
+	}
+	// Подключения и отключения в журнал не пишутся: расширение переподключается
+	// часто, и записи выглядели мусором.
+	for _, unwanted := range []string{`"event":"connect"`, `"event":"disconnect"`} {
+		if strings.Contains(text, unwanted) {
+			t.Fatalf("audit log must not contain %s:\n%s", unwanted, text)
+		}
+	}
+}
+
+// TestBrowserAuditRespectsDisabledSetting keeps the audit silent when the user
+// has it switched off.
+func TestBrowserAuditRespectsDisabledSetting(t *testing.T) {
+	s := newBrowserServer(t, "auto")
+	s.auditBrowser("connect", browserAuditInfo{TokenKind: tokenKindPlugins}, "c-off", nil)
+	if entries := s.readAudit(10); len(entries) != 0 {
+		t.Fatalf("audit captured %d entries while disabled", len(entries))
 	}
 }
 

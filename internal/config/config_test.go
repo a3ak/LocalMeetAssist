@@ -4,8 +4,21 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 )
+
+// TestDefaultSummaryPromptMatchesFile keeps the built-in minutes template and
+// the copy users read in prompts/ in sync; otherwise they quietly drift apart.
+func TestDefaultSummaryPromptMatchesFile(t *testing.T) {
+	file, err := os.ReadFile(filepath.Join("..", "..", "prompts", "meeting_summary.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(file)) != strings.TrimSpace(DefaultSummaryPrompt) {
+		t.Fatal("prompts/meeting_summary.md and config.DefaultSummaryPrompt differ")
+	}
+}
 
 // TestExampleConfigLoads keeps the shipped template usable: a typo or a removed
 // key in config.example.toml would break the documented `cp` and first run.
@@ -72,7 +85,7 @@ func TestLegacyFFmpegConfigMigratesToNative(t *testing.T) {
 
 func TestLoadSpeechPipelineSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "speech.toml")
-	data := []byte("[transcription]\nauto_run = true\ntimeout_seconds = 120\nchunk_seconds = 300\nsource_mode = \"mixed\"\necho_dedup_enabled = true\necho_time_tolerance_ms = 900\necho_text_similarity = 0.81\n[diarization]\nauto_run = true\nengine = \"mock\"\ntimeout_seconds = 90\ncluster_threshold = 0.85\nnum_threads = 6\nchunk_seconds = 1200\nchunk_overlap_seconds = 120\n")
+	data := []byte("[transcription]\nauto_run = true\ntimeout_seconds = 120\nchunk_seconds = 300\nsource_mode = \"mixed\"\necho_dedup_enabled = true\necho_time_tolerance_ms = 900\necho_text_similarity = 0.81\n[diarization]\nauto_run = true\nengine = \"mock\"\ntimeout_seconds = 90\ncluster_threshold = 0.85\nnum_threads = 6\n")
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +96,7 @@ func TestLoadSpeechPipelineSettings(t *testing.T) {
 	if !cfg.Transcription.AutoRun || cfg.Transcription.TimeoutSeconds != 120 || cfg.Transcription.ChunkSeconds != 300 || cfg.Transcription.SourceMode != "mixed" || cfg.Transcription.EchoTimeToleranceMS != 900 || cfg.Transcription.EchoTextSimilarity != 0.81 {
 		t.Fatalf("unexpected transcription config: %+v", cfg.Transcription)
 	}
-	if !cfg.Diarization.AutoRun || cfg.Diarization.TimeoutSeconds != 90 || cfg.Diarization.ClusterThreshold != 0.85 || cfg.Diarization.NumThreads != 6 || cfg.Diarization.ChunkSeconds != 1200 || cfg.Diarization.ChunkOverlapSeconds != 120 {
+	if !cfg.Diarization.AutoRun || cfg.Diarization.TimeoutSeconds != 90 || cfg.Diarization.ClusterThreshold != 0.85 || cfg.Diarization.NumThreads != 6 {
 		t.Fatalf("unexpected diarization config: %+v", cfg.Diarization)
 	}
 }

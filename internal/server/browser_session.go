@@ -76,9 +76,21 @@ type browserClient struct {
 	conn     *wsConn
 	nonEmpty *bool
 	lastSeen time.Time
+	// audit carries who authorized the connection. The plugin authenticates
+	// inside the hello frame, so the HTTP middleware never sees its token and
+	// cannot write audit lines: they are written here instead.
+	audit browserAuditInfo
 	// lastState is the last `state` payload written to this connection, so a
 	// scenario change and the recording change behind it are published once.
 	lastState string
+}
+
+// browserAuditInfo describes the client behind a plugin connection.
+type browserAuditInfo struct {
+	TokenName string
+	TokenKind string
+	IP        string
+	UserAgent string
 }
 
 func newBrowserSession() *browserSession {
@@ -99,7 +111,7 @@ type browserWSMessage struct {
 }
 
 // serveBrowserWS runs the handshake and read loop for one connection.
-func (s *Server) serveBrowserWS(conn *wsConn) {
+func (s *Server) serveBrowserWS(conn *wsConn, ip, userAgent string) {
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	raw, err := conn.ReadText()
@@ -126,7 +138,8 @@ func (s *Server) serveBrowserWS(conn *wsConn) {
 	_ = s.store.TouchTokenLastUsed(token.ID, time.Now())
 
 	clientID := hello.ClientID
-	s.browserAttach(clientID, token.ID, conn)
+	info := browserAuditInfo{TokenName: token.Name, TokenKind: token.Kind, IP: ip, UserAgent: userAgent}
+	s.browserAttach(clientID, token.ID, info, conn)
 	_ = conn.SetReadDeadline(time.Time{})
 
 	for {
@@ -143,9 +156,45 @@ func (s *Server) serveBrowserWS(conn *wsConn) {
 	s.browserDetach(clientID, conn)
 }
 
+// auditBrowser writes one plugin event to the same JSONL file as the HTTP audit
+// entries. Without it the audit stays empty for the usual setup, because the
+// plugin never makes an HTTP request that carries its token.
+func (s *Server) auditBrowser(event string, info browserAuditInfo, clientID string, extra map[string]any) {
+	if !s.config().Integrations.AuditEnabled {
+		return
+	}
+	entry := map[string]any{
+		"time":       time.Now().UTC().Format(time.RFC3339Nano),
+		"token":      info.TokenName,
+		"kind":       info.TokenKind,
+		"ip":         info.IP,
+		"user_agent": info.UserAgent,
+		"method":     "WS",
+		"path":       "/api/v1/ws",
+		"status":     101,
+		"event":      event,
+		"client_id":  clientID,
+	}
+	for key, value := range extra {
+		entry[key] = value
+	}
+	s.appendAudit(entry)
+}
+
+// browserAuditInfoFor returns the audit identity of a connected client.
+func (s *Server) browserAuditInfoFor(clientID string) browserAuditInfo {
+	bs := s.browser
+	bs.mu.Lock()
+	defer bs.mu.Unlock()
+	if client := bs.clients[clientID]; client != nil {
+		return client.audit
+	}
+	return browserAuditInfo{}
+}
+
 // browserAttach registers the connection, atomically replacing any older one for
 // the same client_id. Reconnecting the owner resumes the session.
-func (s *Server) browserAttach(clientID, tokenID string, conn *wsConn) {
+func (s *Server) browserAttach(clientID, tokenID string, info browserAuditInfo, conn *wsConn) {
 	bs := s.browser
 	bs.once.Do(func() { go s.browserLoop() })
 	bs.mu.Lock()
@@ -155,6 +204,7 @@ func (s *Server) browserAttach(clientID, tokenID string, conn *wsConn) {
 	}
 	client.conn = conn
 	client.tokenID = tokenID
+	client.audit = info
 	client.lastSeen = time.Now()
 	if bs.owner == clientID && bs.detached {
 		// The owner came back inside the reconnect grace: the session survives
@@ -165,8 +215,12 @@ func (s *Server) browserAttach(clientID, tokenID string, conn *wsConn) {
 	owner := bs.owner == clientID
 	bs.mu.Unlock()
 
-	s.sendBrowserConfig(conn)
-	s.sendBrowserState(clientID, conn, owner)
+	// conn может быть nil в тестах: подключение к WebSocket там не поднимается,
+	// а состояние клиента проверить нужно.
+	if conn != nil {
+		s.sendBrowserConfig(conn)
+		s.sendBrowserState(clientID, conn, owner)
+	}
 }
 
 // browserDetach drops a connection that has gone away. Losing the owner starts
@@ -260,6 +314,12 @@ func (s *Server) handleBrowserCommand(clientID string, seq int64, commandID, mar
 		}
 	}
 	s.sendBrowserAckWithResult(clientID, seq, commandID, result)
+	s.auditBrowser("command", s.browserAuditInfoFor(clientID), clientID, map[string]any{
+		"command_id": commandID,
+		"action":     marker,
+		"result":     result,
+		"cached":     cached,
+	})
 }
 
 // executeBrowserCommand performs the operation and reports what happened. The
@@ -351,7 +411,7 @@ func (s *Server) handleBrowserSnapshot(clientID string, urls []string, seq int64
 	bs.mu.Unlock()
 
 	if startURL != "" {
-		uid, err := s.startBrowserRecordingFor(startURL)
+		uid, err := s.startBrowserRecordingFor(clientID, startURL)
 		bs.mu.Lock()
 		if err == nil && bs.scenario == scenarioRecording && bs.owner == clientID {
 			bs.meetingUID = uid
@@ -392,7 +452,7 @@ func (s *Server) handleBrowserConfirm(clientID, promptID string) {
 	bs.mu.Unlock()
 
 	if startURL != "" {
-		uid, err := s.startBrowserRecordingFor(startURL)
+		uid, err := s.startBrowserRecordingFor(clientID, startURL)
 		bs.mu.Lock()
 		if err == nil && bs.scenario == scenarioRecording && bs.owner == clientID {
 			bs.meetingUID = uid
@@ -603,7 +663,7 @@ func (s *Server) matchBrowserURLs(urls []string) []string {
 
 // startBrowserRecordingFor starts a browser-owned meeting for the given URL and
 // returns its UID.
-func (s *Server) startBrowserRecordingFor(url string) (string, error) {
+func (s *Server) startBrowserRecordingFor(clientID, url string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	title := url
@@ -614,6 +674,13 @@ func (s *Server) startBrowserRecordingFor(url string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	// Ради этого события аудит и ведётся: встреча создана по странице, которую
+	// нашло расширение. Подключения и отключения не пишем — расширение
+	// переподключается часто, и журнал превращался в мусор.
+	s.auditBrowser("meeting_started", s.browserAuditInfoFor(clientID), clientID, map[string]any{
+		"url":         url,
+		"meeting_uid": m.UID,
+	})
 	return m.UID, nil
 }
 

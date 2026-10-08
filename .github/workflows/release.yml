@@ -26,20 +26,19 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-14, goos: darwin, goarch: arm64, ext: tar.gz }
+          - { runner: macos-15, goos: darwin, goarch: arm64, ext: tar.gz }
           # Без Apple Silicon runner'а: SDK macOS универсален, поэтому x86_64
           # собирается на arm64-машине той же командой.
-          - { runner: macos-14, goos: darwin, goarch: amd64, ext: tar.gz }
+          - { runner: macos-15, goos: darwin, goarch: amd64, ext: tar.gz }
           - { runner: ubuntu-24.04, goos: linux, goarch: amd64, ext: tar.gz }
-          # Экспериментальная цель: если GitHub не выдаст arm64-runner, релиз
-          # всё равно соберётся из остальных. Можно удалить без последствий.
-          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64, ext: tar.gz, experimental: true }
+          # Ubuntu 24.04, а не 26.04: чем старше glibc при сборке, тем на
+          # большем числе дистрибутивов запустится бинарник.
+          - { runner: ubuntu-24.04-arm, goos: linux, goarch: arm64, ext: tar.gz }
           - { runner: windows-latest, goos: windows, goarch: amd64, ext: zip }
-    continue-on-error: ${{ matrix.experimental == true }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -94,7 +93,7 @@ jobs:
             tar -czf "dist/localmeetassist_${version}_${GOOS}_${GOARCH}.tar.gz" -C stage "localmeetassist_${version}_${GOOS}_${GOARCH}"
           fi
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: localmeetassist-${{ matrix.goos }}-${{ matrix.goarch }}
           path: |
@@ -110,9 +109,9 @@ jobs:
     steps:
       # Checkout обязан идти первым: он очищает рабочую папку (git clean -ffdx)
       # и иначе удалил бы уже скачанные артефакты.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
@@ -122,7 +121,7 @@ jobs:
         working-directory: browser-extension
         run: npm run package
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           merge-multiple: true

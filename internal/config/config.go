@@ -213,20 +213,18 @@ type Transcription struct {
 
 // Diarization configures speaker segmentation, embeddings and clustering.
 type Diarization struct {
-	AutoRun             bool
-	Engine              string
-	Command             string
-	SegmentationModel   string
-	EmbeddingModel      string
-	NumSpeakers         int
-	ClusterThreshold    float64
-	MicrophoneEnabled   bool
-	TimeoutSeconds      int
-	MaxAutoSpeakers     int
-	NumThreads          int
-	ChunkSeconds        int
-	ChunkOverlapSeconds int
-	GigaAMBackend       string
+	AutoRun           bool
+	Engine            string
+	Command           string
+	SegmentationModel string
+	EmbeddingModel    string
+	NumSpeakers       int
+	ClusterThreshold  float64
+	MicrophoneEnabled bool
+	TimeoutSeconds    int
+	MaxAutoSpeakers   int
+	NumThreads        int
+	GigaAMBackend     string
 }
 
 // Models contains download locations for model files only. Executables are
@@ -267,7 +265,6 @@ type Summary struct {
 	TimeoutSeconds int
 	MaxRetries     int
 	SystemPrompt   string
-	PromptFile     string
 	Language       string
 	TLSVerify      bool
 	TLSCAFile      string
@@ -276,31 +273,37 @@ type Summary struct {
 
 // DefaultSummaryPrompt is the built-in minutes template. The response
 // language directive is prepended at runtime by the summarizer.
-const DefaultSummaryPrompt = `You write accurate meeting minutes.
+const DefaultSummaryPrompt = `You write accurate meeting minutes and format them as plain text that can be pasted straight into an email message.
 
 Use only facts from the transcript. Do not invent decisions, action items, deadlines, names, or titles. If a fragment is recognized uncertainly or is contradictory, mark it explicitly. Keep the user-assigned speaker names; do not replace technical SPEAKER_XX labels with invented names.
 
-Return Markdown with strictly the following structure:
+Formatting rules:
+- Plain text only. No Markdown: no "#" headings, no "**" bold, no "|" tables, no backticks, no horizontal rules.
+- Write each section title as a short line in capitals, then a blank line.
+- Start every list item with "- ". One thought per line.
+- Separate sections with exactly one blank line.
 
-# Brief summary
-Briefly describe the meeting purpose and main outcomes in 3-7 bullet points.
+The section titles below are written in English only to identify them. Translate every title (BRIEF SUMMARY, PARTICIPANTS etc.) into the response language and never print the English wording.
 
-## Participants
+BRIEF SUMMARY
+Describe the purpose of the meeting and its main outcomes in 3-7 bullet points.
+
+PARTICIPANTS
 List only the participants that can be identified from the transcript.
 
-## Discussed topics
+DISCUSSED TOPICS
 Group the main themes and key arguments without repetition.
 
-## Decisions
-List only decisions that were explicitly made. If there are none, write "No explicit decisions were recorded".
+DECISIONS
+List only decisions that were explicitly made. If there are none, write one line saying so in the response language.
 
-## Action items
-Format as a table: Task | Assignee | Deadline. Use "not specified" for unknown values.
+ACTION ITEMS
+One line per task: the task first, then the assignee and the due date. Write the field labels and any wording for unknown values in the response language.
 
-## Open questions and risks
+OPEN QUESTIONS AND RISKS
 List unresolved questions, dependencies, risks and clarifications needed.
 
-Do not add introductory comments before the first heading and do not repeat the whole transcript.`
+Start directly with the first section title. Do not add an introduction and do not repeat the whole transcript.`
 
 // Storage controls artifact naming, audio retention and the database path.
 type Storage struct {
@@ -370,7 +373,7 @@ func Defaults() Config {
 		Diarization: Diarization{
 			AutoRun: false, Engine: "pyannote-wespeaker-onnx",
 			SegmentationModel: "./models/diarization/pyannote-segmentation-3/model.onnx", EmbeddingModel: "./models/diarization/wespeaker-resnet34-lm/voxceleb_resnet34_LM.onnx",
-			NumSpeakers: 0, ClusterThreshold: 0.60, TimeoutSeconds: 3600, MaxAutoSpeakers: 16, NumThreads: 4, ChunkSeconds: 0, ChunkOverlapSeconds: 0, GigaAMBackend: "onnx",
+			NumSpeakers: 0, ClusterThreshold: 0.60, TimeoutSeconds: 3600, MaxAutoSpeakers: 16, NumThreads: 4, GigaAMBackend: "onnx",
 		},
 		Models: Models{DownloadTimeoutSeconds: 7200,
 			GigaAMEncoderURL:    "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_rnnt_encoder.int8.onnx",
@@ -548,15 +551,6 @@ func Load(path string) (Config, error) {
 	if cfg.Diarization.NumThreads < 0 || cfg.Diarization.NumThreads > 128 {
 		return cfg, errors.New("diarization.num_threads must be between 0 and 128")
 	}
-	if cfg.Diarization.ChunkSeconds < 0 || cfg.Diarization.ChunkSeconds > 7200 {
-		return cfg, errors.New("diarization.chunk_seconds must be between 0 and 7200")
-	}
-	if cfg.Diarization.ChunkOverlapSeconds < 0 || cfg.Diarization.ChunkOverlapSeconds > 1800 {
-		return cfg, errors.New("diarization.chunk_overlap_seconds must be between 0 and 1800")
-	}
-	if cfg.Diarization.ChunkSeconds > 0 && cfg.Diarization.ChunkOverlapSeconds*2 >= cfg.Diarization.ChunkSeconds {
-		return cfg, errors.New("diarization.chunk_overlap_seconds must be less than half of chunk_seconds")
-	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Storage.AudioAfterProcessing)) {
 	case "wav", "delete", "mp3", "opus":
 	default:
@@ -594,7 +588,6 @@ func ResolvePaths(cfg *Config, configPath string) {
 	cfg.Transcription.VADModelPath = resolve(cfg.Transcription.VADModelPath)
 	cfg.Diarization.SegmentationModel = resolve(cfg.Diarization.SegmentationModel)
 	cfg.Diarization.EmbeddingModel = resolve(cfg.Diarization.EmbeddingModel)
-	cfg.Summary.PromptFile = resolve(cfg.Summary.PromptFile)
 	cfg.Summary.TLSCAFile = resolve(cfg.Summary.TLSCAFile)
 	cfg.Storage.EncoderCommand = resolve(cfg.Storage.EncoderCommand)
 }
@@ -629,7 +622,7 @@ func apply(c *Config, sec, key, raw string) error {
 	if err != nil {
 		return err
 	}
-	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "diarization.chunk_seconds": true, "diarization.chunk_overlap_seconds": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
+	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
 	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
 	floatKeys := map[string]bool{"audio.microphone_gain": true, "audio.system_gain": true, "transcription.echo_text_similarity": true, "transcription.vad_threshold": true, "transcription.min_segment_rms": true, "diarization.cluster_threshold": true}
 	if intKeys[full] {
@@ -803,10 +796,6 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Diarization.MaxAutoSpeakers, _ = integer(raw)
 	case "diarization.num_threads":
 		c.Diarization.NumThreads, _ = integer(raw)
-	case "diarization.chunk_seconds":
-		c.Diarization.ChunkSeconds, _ = integer(raw)
-	case "diarization.chunk_overlap_seconds":
-		c.Diarization.ChunkOverlapSeconds, _ = integer(raw)
 	case "diarization.gigaam_backend":
 		c.Diarization.GigaAMBackend = s
 	case "models.download_timeout_seconds":
@@ -871,8 +860,6 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Summary.MaxRetries, _ = integer(raw)
 	case "summary.system_prompt":
 		c.Summary.SystemPrompt = s
-	case "summary.prompt_file":
-		c.Summary.PromptFile = s
 	case "summary.language":
 		c.Summary.Language = s
 	case "summary.tls_verify":

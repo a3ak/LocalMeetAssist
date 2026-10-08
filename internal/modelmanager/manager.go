@@ -46,18 +46,21 @@ type Spec struct {
 	SHA256 string `json:"sha256,omitempty"`
 	// DownloadSHA256 verifies an archive before extraction. SHA256 verifies the
 	// installed file and remains compatible with older model specifications.
-	DownloadSHA256 string      `json:"-"`
-	Archive        string      `json:"-"`
-	RequiredFiles  []string    `json:"-"`
-	Group          string      `json:"group"`
-	Description    string      `json:"description"`
-	ApproxBytes    int64       `json:"approx_bytes,omitempty"`
-	SettingKey     string      `json:"-"`
-	Engine         string      `json:"-"`
-	Selectable     bool        `json:"selectable,omitempty"`
-	Selected       bool        `json:"selected,omitempty"`
-	License        string      `json:"license,omitempty"`
-	Components     []Component `json:"components,omitempty"`
+	DownloadSHA256 string   `json:"-"`
+	Archive        string   `json:"-"`
+	RequiredFiles  []string `json:"-"`
+	Group          string   `json:"group"`
+	// Recommended marks the models the default pipeline needs: the button in the
+	// UI installs exactly this set.
+	Recommended bool        `json:"recommended,omitempty"`
+	Description string      `json:"description"`
+	ApproxBytes int64       `json:"approx_bytes,omitempty"`
+	SettingKey  string      `json:"-"`
+	Engine      string      `json:"-"`
+	Selectable  bool        `json:"selectable,omitempty"`
+	Selected    bool        `json:"selected,omitempty"`
+	License     string      `json:"license,omitempty"`
+	Components  []Component `json:"components,omitempty"`
 }
 
 // Status is a Spec plus its current installation and download state.
@@ -175,7 +178,7 @@ func onnxRuntimeSpec(cfg config.Config) Spec {
 		"windows/arm64": {"onnxruntime-win-arm64-" + version + ".zip", "onnxruntime.dll", "1cfe88b6435df3b5fb0e9f6bd7d6f5df1e887b6174de7f6e2a47bab956f3f168", 78_932_411},
 	}
 	asset, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
-	spec := Spec{ID: "onnx-runtime", Name: "ONNX Runtime " + version, Path: path, Group: "runtime", Description: "Нативная среда выполнения ONNX для этой ОС и архитектуры. Загружается один раз; CLI-приложения не используются.", Selected: true, License: "MIT"}
+	spec := Spec{ID: "onnx-runtime", Name: "ONNX Runtime " + version, Path: path, Group: "runtime", Recommended: true, Description: "Нативная среда выполнения ONNX для этой ОС и архитектуры. Загружается один раз; CLI-приложения не используются.", Selected: true, License: "MIT"}
 	if !ok || version != "1.23.2" {
 		return spec
 	}
@@ -248,7 +251,7 @@ func New(cfg config.Config, logger *log.Logger) *Manager {
 	specs := []Spec{
 		runtimeSpec,
 		whisperSpec,
-		{ID: "gigaam-v3-e2e-rnnt-int8", Name: "GigaAM v3 E2E RNNT INT8", Path: gigaDir, Group: "transcription", Description: "Рекомендуемая русскоязычная модель: пунктуация и нормализация текста, RNNT-декодирование, около 227 МБ. Обрабатывает найденные VAD речевые фрагменты непосредственно в LocalMeetAssist.", ApproxBytes: 226_500_000, SettingKey: "transcription.model_path", Engine: "gigaam-onnx", Selectable: true, Selected: samePath(cfg.Transcription.ModelPath, gigaDir) && strings.EqualFold(cfg.Transcription.Engine, "gigaam-onnx"), License: "MIT", Components: []Component{
+		{ID: "gigaam-v3-e2e-rnnt-int8", Name: "GigaAM v3 E2E RNNT INT8", Path: gigaDir, Group: "transcription", Recommended: true, Description: "Рекомендуемая русскоязычная модель: пунктуация и нормализация текста, RNNT-декодирование, около 227 МБ. Обрабатывает найденные VAD речевые фрагменты непосредственно в LocalMeetAssist.", ApproxBytes: 226_500_000, SettingKey: "transcription.model_path", Engine: "gigaam-onnx", Selectable: true, Selected: samePath(cfg.Transcription.ModelPath, gigaDir) && strings.EqualFold(cfg.Transcription.Engine, "gigaam-onnx"), License: "MIT", Components: []Component{
 			{Name: "encoder", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_encoder.int8.onnx"), URL: cfg.Models.GigaAMEncoderURL, SHA256: cfg.Models.GigaAMEncoderSHA256, ApproxBytes: 224_570_477},
 			{Name: "decoder", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_decoder.int8.onnx"), URL: cfg.Models.GigaAMDecoderURL, SHA256: cfg.Models.GigaAMDecoderSHA256, ApproxBytes: 1_159_170},
 			{Name: "joint", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_joint.int8.onnx"), URL: cfg.Models.GigaAMJointURL, SHA256: cfg.Models.GigaAMJointSHA256, ApproxBytes: 687_791},
@@ -257,9 +260,9 @@ func New(cfg config.Config, logger *log.Logger) *Manager {
 		{ID: "whisper-small-q5", Name: "Whisper small Q5_1", Path: filepath.Join(modelsBase, "ggml-small-q5_1.bin"), URL: cfg.Models.WhisperSmallURL, SHA256: cfg.Models.WhisperSmallSHA256, Group: "transcription", Description: "Компактный мультиязычный Whisper: быстрее medium, около 181 МБ. Подходит для быстрых черновиков и слабых CPU.", ApproxBytes: 190_085_487, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-small-q5_1.bin")), License: "MIT"},
 		{ID: "whisper-medium-q5", Name: "Whisper medium Q5_0", Path: filepath.Join(modelsBase, "ggml-medium-q5_0.bin"), URL: cfg.Models.WhisperMediumURL, SHA256: cfg.Models.WhisperMediumSHA256, Group: "transcription", Description: "Более точный мультиязычный Whisper, около 514 МБ. Хороший баланс для сложной речи и терминов.", ApproxBytes: 539_212_467, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-medium-q5_0.bin")), License: "MIT"},
 		{ID: "whisper-large-v3-turbo-q5", Name: "Whisper large-v3-turbo Q5_0", Path: filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin"), URL: cfg.Models.WhisperTurboURL, SHA256: cfg.Models.WhisperTurboSHA256, Group: "transcription", Description: "Наиболее качественный из предлагаемых Whisper при заметно меньшей цене, чем full large-v3; около 574 МБ.", ApproxBytes: 574_041_195, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin")), License: "MIT"},
-		{ID: "silero-vad", Name: "Silero VAD 6.2 ONNX", Path: cfg.Transcription.VADModelPath, URL: cfg.Models.VADURL, SHA256: cfg.Models.VADSHA256, Group: "speech_filter", Description: "Находит речь и делит длинную встречу на фрагменты до 20 секунд. Снижает повторы и выдуманный текст на тишине.", ApproxBytes: 2_330_000, Selected: true, License: "MIT"},
-		{ID: "diarization-segmentation", Name: "PyAnnote Segmentation 3.0 ONNX", Path: cfg.Diarization.SegmentationModel, URL: cfg.Models.SegmentationURL, SHA256: cfg.Models.SegmentationSHA256, Group: "diarization", Description: "Определяет локальные дорожки речи и перекрытия голосов в окнах по 10 секунд. Работает без Python и Hugging Face token.", ApproxBytes: 5_986_908, Selected: true, License: "MIT"},
-		{ID: "diarization-embedding-wespeaker", Name: "WeSpeaker ResNet34-LM VoxCeleb", Path: cfg.Diarization.EmbeddingModel, URL: cfg.Models.EmbeddingURL, SHA256: cfg.Models.EmbeddingSHA256, Group: "diarization", Description: "Строит 256-мерные признаки голосов для глобальной кластеризации по всей встрече. Количество участников встречи используется как точное ограничение.", ApproxBytes: 26_530_309, SettingKey: "diarization.embedding_model", Selectable: true, Selected: true, License: "CC BY 4.0"},
+		{ID: "silero-vad", Name: "Silero VAD 6.2 ONNX", Path: cfg.Transcription.VADModelPath, URL: cfg.Models.VADURL, SHA256: cfg.Models.VADSHA256, Group: "speech_filter", Recommended: true, Description: "Находит речь и делит длинную встречу на фрагменты до 20 секунд. Снижает повторы и выдуманный текст на тишине.", ApproxBytes: 2_330_000, Selected: true, License: "MIT"},
+		{ID: "diarization-segmentation", Name: "PyAnnote Segmentation 3.0 ONNX", Path: cfg.Diarization.SegmentationModel, URL: cfg.Models.SegmentationURL, SHA256: cfg.Models.SegmentationSHA256, Group: "diarization", Recommended: true, Description: "Определяет локальные дорожки речи и перекрытия голосов в окнах по 10 секунд. Работает без Python и Hugging Face token.", ApproxBytes: 5_986_908, Selected: true, License: "MIT"},
+		{ID: "diarization-embedding-wespeaker", Name: "WeSpeaker ResNet34-LM VoxCeleb", Path: cfg.Diarization.EmbeddingModel, URL: cfg.Models.EmbeddingURL, SHA256: cfg.Models.EmbeddingSHA256, Group: "diarization", Recommended: true, Description: "Строит 256-мерные признаки голосов для глобальной кластеризации по всей встрече. Количество участников встречи используется как точное ограничение.", ApproxBytes: 26_530_309, SettingKey: "diarization.embedding_model", Selectable: true, Selected: true, License: "CC BY 4.0"},
 	}
 	m := &Manager{client: &http.Client{Timeout: timeout}, logger: logger, language: cfg.App.Language, specs: make(map[string]Spec), state: make(map[string]*Status)}
 	for _, spec := range specs {
@@ -341,6 +344,70 @@ func (m *Manager) Statuses() []Status {
 		items = append(items, status)
 	}
 	return items
+}
+
+// Delete removes the installed files of one model. A model that is currently
+// applied is kept: the pipeline is configured to use it, and deleting the file
+// under it would break processing.
+func (m *Manager) Delete(id string) error {
+	m.mu.Lock()
+	status, ok := m.state[id]
+	if !ok {
+		m.mu.Unlock()
+		return errors.New("unknown model")
+	}
+	if status.Downloading {
+		m.mu.Unlock()
+		return errors.New("wait for the model download to finish")
+	}
+	if status.Selected {
+		m.mu.Unlock()
+		return errors.New("the model is applied; choose another one first")
+	}
+	spec := status.Spec
+	m.mu.Unlock()
+	return removeModelPath(spec.Path)
+}
+
+// DeleteAll removes every installed model that is not currently applied and
+// returns how many were removed.
+func (m *Manager) DeleteAll() (int, error) {
+	ids := make([]string, 0)
+	m.mu.Lock()
+	for _, id := range m.order {
+		status := m.state[id]
+		if status.Downloading || status.Selected {
+			continue
+		}
+		if ok, _ := installed(status.Spec); ok {
+			ids = append(ids, id)
+		}
+	}
+	m.mu.Unlock()
+	removed := 0
+	for _, id := range ids {
+		if err := m.Delete(id); err != nil {
+			return removed, err
+		}
+		removed++
+	}
+	return removed, nil
+}
+
+// removeModelPath deletes a model file or its dedicated directory. A missing
+// path is not an error: the goal is that the model is gone.
+func removeModelPath(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	if info.IsDir() {
+		return os.RemoveAll(path)
+	}
+	return os.Remove(path)
 }
 
 // Test verifies files, checksums and that the runtime can load the model.

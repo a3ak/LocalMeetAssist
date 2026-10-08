@@ -235,6 +235,23 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request, uid string, pa
 		writeError(w, http.StatusBadRequest, "unknown processing stage")
 		return
 	}
+	if stage == "encoding" {
+		// Разовая конвертация: ?format=opus|wav|mp3 переопределяет настройку
+		// хранения только для этого запуска этапа. Проверяем до обращения к
+		// аудио, чтобы некорректный формат отклонялся всегда одинаково.
+		if format := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("format"))); format != "" {
+			switch format {
+			case "wav", "opus", "mp3":
+				if m.Metadata == nil {
+					m.Metadata = make(map[string]string)
+				}
+				m.Metadata["encoding_format"] = format
+			default:
+				writeError(w, http.StatusBadRequest, "unknown audio format")
+				return
+			}
+		}
+	}
 	if stage == "all" || stage == "transcribing" || stage == "encoding" {
 		audioDir := filepath.Join(s.meetingDir(m), "audio")
 		if !validWAVFile(filepath.Join(audioDir, "microphone.wav")) || !validWAVFile(filepath.Join(audioDir, "system.wav")) {

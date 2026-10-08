@@ -20,6 +20,8 @@ const state = {
   speakerPlayer: null,
   searchQuery: "",
   calendarView: "month",
+  listDay: null,
+  modelTab: "runtime",
   searchMatches: null,
   searchSpeakers: [],
   searchTimer: null,
@@ -54,6 +56,12 @@ function applyStaticTranslations() {
   $$("[data-i18n-placeholder]").forEach((node) => { node.placeholder = t(node.dataset.i18nPlaceholder); });
   $$("[data-i18n-title]").forEach((node) => { node.title = t(node.dataset.i18nTitle); });
   $$("[data-i18n-label]").forEach((node) => { node.label = t(node.dataset.i18nLabel); });
+  // Быстрая подсказка живёт в data-tip, поэтому переводим её отдельно.
+  $$("[data-i18n-tip]").forEach((node) => {
+    const text = t(node.dataset.i18nTip);
+    node.dataset.tip = text;
+    node.setAttribute("aria-label", text);
+  });
 }
 
 async function loadLanguage(code) {
@@ -126,6 +134,23 @@ function fmtDate(value) {
   }).format(new Date(value));
 }
 
+// fmtFullDay даёт дату с годом без времени — для шапки карточки встречи.
+function fmtFullDay(value) {
+  return new Intl.DateTimeFormat(LOCALE, { day: "numeric", month: "long", year: "numeric" }).format(new Date(value));
+}
+
+// participantsLabel склоняет число участников по языку интерфейса.
+function participantsLabel(n) {
+  const lang = (LOCALE || "ru").split("-")[0];
+  if (lang === "ru") {
+    const m10 = n % 10, m100 = n % 100;
+    if (m10 === 1 && m100 !== 11) return `${n} участник`;
+    if (m10 >= 2 && m10 <= 4 && (m100 < 12 || m100 > 14)) return `${n} участника`;
+    return `${n} участников`;
+  }
+  return `${n} participant${n === 1 ? "" : "s"}`;
+}
+
 function monthBounds(date) {
   return {
     from: new Date(date.getFullYear(), date.getMonth(), 1),
@@ -137,6 +162,8 @@ async function loadMeetings() {
   const { from, to } = calendarBounds(state.month);
   const result = await api(`/api/v1/meetings?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
   state.meetings = Array.isArray(result) ? result : [];
+  // Период сменился — выбранный день из него больше не актуален.
+  state.listDay = null;
   renderCalendar();
   renderList();
   if (state.searchQuery) scheduleMeetingSearch();
@@ -145,6 +172,19 @@ async function loadMeetings() {
 function meetingMatchesSearch(meeting) {
   return !state.searchMatches || state.searchMatches.has(meeting.uid);
 }
+
+// День, выбранный в панели справа кнопкой «Ещё N». Режим временный: он
+// сбрасывается при любом другом клике и при смене периода.
+function clearListDay() {
+  if (!state.listDay) return;
+  state.listDay = null;
+  renderList();
+}
+
+document.addEventListener("click", (event) => {
+  if (event.target.closest("#meetingList") || event.target.closest(".event-more")) return;
+  clearListDay();
+});
 
 function appendSearchCondition(value) {
   const input = $("#meetingSearch");
@@ -327,22 +367,40 @@ function renderCalendar() {
     const cell = document.createElement("div");
     cell.className = "day" + (day.getMonth() !== date.getMonth() ? " outside" : "") + (sameDay(day, today) ? " today" : "");
     cell.innerHTML = `<span class="day-number">${day.getDate()}</span>`;
-    const dayMeetings = state.meetings.filter((meeting) => sameDay(new Date(meeting.started_at), day));
-    if (state.searchMatches && dayMeetings.some(meetingMatchesSearch)) cell.classList.add("search-match-day");
-    dayMeetings.forEach((meeting) => {
+    const dayMeetings = state.meetings
+      .filter((meeting) => sameDay(new Date(meeting.started_at), day))
+      // Активный фильтр не затеняет лишние встречи, а убирает их: в дне
+      // остаются только подходящие, остальные не показываются вовсе.
+      .filter(meetingMatchesSearch);
+    // В дне помещается ограниченное число плашек, остальные считаем строкой
+    // «Ещё N»: иначе короткие встречи вытесняют друг друга.
+    const visible = dayMeetings.slice(0, CALENDAR_EVENTS_PER_DAY);
+    visible.forEach((meeting) => {
       const event = document.createElement("button");
-      const matches = meetingMatchesSearch(meeting);
-      event.className = `event ${meeting.status}${state.searchMatches ? (matches ? " search-match" : " search-dimmed") : ""}`;
+      event.className = `event ${meeting.status}`;
       event.textContent = `${new Date(meeting.started_at).toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" })} ${meeting.title}`;
       event.onclick = () => openDetail(meeting.uid);
       bindMeetingHover(event, meeting.uid);
       cell.appendChild(event);
     });
+    if (dayMeetings.length > visible.length) {
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "event-more";
+      more.textContent = t("calendar.moreEvents", { count: dayMeetings.length - visible.length });
+      // «Ещё N» временно показывает в панели справа только этот день.
+      more.onclick = () => { state.listDay = new Date(day); renderList(); };
+      cell.appendChild(more);
+    }
     root.appendChild(cell);
   }
 }
 
 const WEEKDAY_KEYS = ["weekday.mon", "weekday.tue", "weekday.wed", "weekday.thu", "weekday.fri", "weekday.sat", "weekday.sun"];
+
+// Сколько плашек встреч показывать в дне до строки «Ещё N». Больше двух не
+// помещается: ячейка около 100 px, плюс номер дня и сама строка «Ещё N».
+const CALENDAR_EVENTS_PER_DAY = 2;
 
 // meetingInterval returns the wall-clock start and end of a meeting.
 function meetingInterval(meeting) {
@@ -353,6 +411,12 @@ function meetingInterval(meeting) {
 
 function fmtClock(date) {
   return date.toLocaleTimeString(LOCALE, { hour: "2-digit", minute: "2-digit" });
+}
+
+// fmtDayShort даёт дату без времени: в строке списка время показано интервалом,
+// и «8 октября 2026 г. в 09:00 · 09:00–09:45» читать невозможно.
+function fmtDayShort(value) {
+  return new Intl.DateTimeFormat(LOCALE, { day: "numeric", month: "long" }).format(new Date(value));
 }
 
 // weekTitle renders a range such as "9 — 15 февраля 2026 г." for the week header.
@@ -407,6 +471,8 @@ function renderWeek() {
   const perDay = days.map((day) => state.meetings
     .map((meeting) => ({ meeting, ...meetingInterval(meeting) }))
     .filter((item) => sameDay(item.start, day))
+    // Активный фильтр убирает неподходящие встречи и из недельной сетки.
+    .filter((item) => meetingMatchesSearch(item.meeting))
     .sort((a, b) => a.start - b.start));
 
   // The visible window follows the meetings but never gets shorter than 09–19.
@@ -493,26 +559,52 @@ function bindMeetingHover(element, uid) {
   element.onfocus = () => revealMeetingCard(uid, true);
 }
 
+// listMeetings returns what the right panel shows: the whole loaded period by
+// default, or a single day while the user is looking at one.
+function listMeetings() {
+  const base = state.listDay
+    ? state.meetings.filter((meeting) => sameDay(new Date(meeting.started_at), state.listDay))
+    : state.meetings;
+  return base.filter(meetingMatchesSearch);
+}
+
 function renderList() {
   const root = $("#meetingList");
   root.innerHTML = "";
-  const matched = state.meetings.filter(meetingMatchesSearch).length;
-  $("#meetingCount").textContent = state.searchMatches ? `${matched}/${state.meetings.length}` : state.meetings.length;
-  state.meetings.forEach((meeting) => {
+  // Фильтр скрывает неподходящие встречи и в списке: показываем только то, что
+  // нашлось, а счётчик считает именно показанные.
+  const shown = listMeetings();
+  $("#meetingCount").textContent = shown.length;
+  $("#meetingListTitle").textContent = state.listDay
+    ? new Intl.DateTimeFormat(LOCALE, { day: "numeric", month: "long" }).format(state.listDay)
+    : t("meetings.title");
+  shown.forEach((meeting) => {
     const node = document.createElement("div");
-    const matches = meetingMatchesSearch(meeting);
-    node.className = `meeting-item${state.searchMatches ? (matches ? " search-match" : " search-dimmed") : ""}`;
+    node.className = "meeting-item";
     const topic = meetingTopic(meeting.summary);
     const participants = activeParticipants(meeting.transcript, 5);
     const participantText = participants.names.length
       ? `${participants.names.map(esc).join(", ")}${participants.more ? ` <span class="more-participants">+${participants.more}</span>` : ""}`
       : t("list.noParticipants");
-    node.innerHTML = `<strong>${esc(meeting.title)}</strong><div class="meta">${fmtDate(meeting.started_at)} · ${formatDuration(meeting.duration_ms)}</div>${topic ? `<div class="meeting-topic" title="${esc(topic)}">${esc(topic)}</div>` : ""}<div class="meeting-participants">${participantText}</div><span class="badge ${meeting.status}">${statusText(meeting.status)}</span>`;
+    const { start, end } = meetingInterval(meeting);
+    const range = `${fmtClock(start)}–${fmtClock(end)}`;
+    // В режиме одного дня дата уже стоит в заголовке панели, поэтому в строке
+    // остаётся только время.
+    const stamp = state.listDay ? esc(range) : `${esc(fmtDayShort(meeting.started_at))} · ${esc(range)}`;
+    node.innerHTML = `<div class="meta">${stamp}</div><strong>${esc(meeting.title)}</strong><div class="meeting-meta-line"><span>${formatDuration(meeting.duration_ms)}</span><span class="badge ${meeting.status}">${statusText(meeting.status)}</span></div>${topic ? `<div class="meeting-topic" title="${esc(topic)}">${esc(topic)}</div>` : ""}${participants.names.length ? `<div class="meeting-participants">${participantText}</div>` : ""}`;
     node.dataset.uid = meeting.uid;
     node.onclick = () => openDetail(meeting.uid);
     root.appendChild(node);
   });
-  if (!state.meetings.length) root.innerHTML = `<div class="hint">${t("list.noMeetings")}</div>`;
+  if (!shown.length) root.innerHTML = `<div class="hint">${t(state.searchMatches ? "list.noMatches" : "list.noMeetings")}</div>`;
+  if (state.listDay) {
+    const back = document.createElement("button");
+    back.type = "button";
+    back.className = "ghost small list-back";
+    back.textContent = t("list.allPeriod");
+    back.onclick = () => { state.listDay = null; renderList(); };
+    root.appendChild(back);
+  }
 }
 
 function formatDuration(durationMS) {
@@ -523,15 +615,33 @@ function formatDuration(durationMS) {
   return hours ? t("duration.hours", { hours, minutes }) : t("duration.minutes", { minutes: Math.max(1, minutes) });
 }
 
+// Section titles a minutes template can emit. They are printed in the response
+// language, so both the Russian and the English spelling of every title is
+// listed; the older Markdown template is covered as well.
+const SUMMARY_TITLES = ["brief summary", "краткий итог", "краткое содержание", "participants", "участники", "discussed topics", "обсуждённые темы", "обсужденные темы", "decisions", "решения", "action items", "задачи", "open questions and risks", "открытые вопросы и риски", "открытые вопросы", "риски"];
+
+function summaryTitleText(line) {
+  return line.replace(/^#{1,6}\s*/, "").replace(/[:\s]+$/, "").trim().toLowerCase();
+}
+
+function isBriefSummaryTitle(line) {
+  const text = summaryTitleText(line);
+  return text === "brief summary" || text === "краткий итог" || text === "краткое содержание";
+}
+
+function isSectionTitle(line) {
+  return line.startsWith("#") || SUMMARY_TITLES.includes(summaryTitleText(line));
+}
+
 function meetingTopic(summary = "") {
   const lines = String(summary).split(/\r?\n/).map((line) => line.trim());
-  const briefIndex = lines.findIndex((line) => /^#\s+(краткий итог|brief summary)/i.test(line));
+  const briefIndex = lines.findIndex(isBriefSummaryTitle);
   const candidates = briefIndex >= 0 ? lines.slice(briefIndex + 1) : lines;
   let frontMatter = false;
   for (const line of candidates) {
     if (line === "---") { frontMatter = !frontMatter; continue; }
     if (frontMatter || !line || /^[-*_]+$/.test(line)) continue;
-    if (/^#{1,3}\s+/.test(line)) {
+    if (isSectionTitle(line)) {
       if (briefIndex >= 0) break;
       continue;
     }
@@ -637,13 +747,15 @@ async function refreshDevices() {
   const ready = devices.available && devices.microphones?.length > 0 && devices.system_sources?.length > 0;
   $("#confirmRecord").disabled = !ready;
   // The audio line lives in the diagnostics dialog; the button only carries a
-  // small marker while something is wrong.
+  // small marker while something is wrong. The marker is cosmetic, so a missing
+  // element must never break the rest of the startup sequence.
   const bar = $("#diagAudio");
   bar.className = `diag-status ${ready ? "ok" : "error"}`;
   bar.textContent = ready
     ? t("record.audioReady", { mics: devices.microphones.length, systems: devices.system_sources.length })
     : t("record.audioNotReady", { reason: warnings.join(" ") || t("record.noMic") });
-  $("#diagBadge").classList.toggle("hidden", ready);
+  const badge = $("#diagBadge");
+  if (badge) badge.classList.toggle("hidden", ready);
   return devices;
 }
 
@@ -703,14 +815,20 @@ async function openDetail(uid, preserveTab = false) {
     state.detail = detail;
     const meeting = detail.meeting;
     $("#detailTitle").value = meeting.title;
-    const durationText = meeting.duration_ms ? t("duration.seconds", { n: Math.round(meeting.duration_ms / 1000) }) : t("duration.none");
-    $("#detailMeta").textContent = t("detail.meta", {
-      date: fmtDate(meeting.started_at),
-      duration: durationText,
-      mic: meeting.input_device?.name || "—",
-      sys: meeting.output_device?.name || "—",
-    });
+    // Длительность в шапке — «45 мин», а не «2700 сек».
+    const durationText = formatDuration(meeting.duration_ms);
+    const interval = meetingInterval(meeting);
+    const metaParts = [fmtFullDay(meeting.started_at), `${fmtClock(interval.start)}–${fmtClock(interval.end)}`, durationText];
+    if (meeting.speaker_count > 0) metaParts.push(participantsLabel(meeting.speaker_count));
+    $("#detailMeta").textContent = metaParts.join(" · ");
     renderStatusStrip(meeting.status, meeting.processing_stage, meeting.last_error);
+    // Счётчик спикеров на вкладке: он подсказывает, есть ли что смотреть.
+    const speakerCount = Number(meeting.speaker_count || 0);
+    const speakersBadge = $("#speakersTabCount");
+    if (speakersBadge) {
+      speakersBadge.textContent = speakerCount ? String(speakerCount) : "";
+      speakersBadge.classList.toggle("hidden", !speakerCount);
+    }
     $("#summaryText").value = meeting.summary || "";
     $("#summaryStale").classList.toggle("hidden", meeting.metadata?.summary_stale !== "true");
     $("#transcriptText").value = meeting.transcript || "";
@@ -730,7 +848,10 @@ async function openDetail(uid, preserveTab = false) {
 }
 
 function renderStatusStrip(status, stage, lastError) {
-  $("#statusStrip").innerHTML = `${t("detail.status", { status: statusText(status) })}${stage ? ` · ${t("detail.stage", { stage: stageText(stage) })}` : ""}${lastError ? `<br><span style="color:#b42318">${esc(lastError)}</span>` : ""}`;
+  const CHECK = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>`;
+  const pill = ["completed", "failed", "processing", "recording", "queued", "starting"].includes(status) ? status : "queued";
+  const stageHint = stage && !["completed", "idle", ""].includes(stage) ? ` · ${esc(stageText(stage))}` : "";
+  $("#statusStrip").innerHTML = `<span class="badge ${pill}">${status === "completed" ? CHECK : ""}${esc(statusText(status))}${stageHint}</span>${lastError ? `<span class="detail-error">${esc(lastError)}</span>` : ""}`;
 }
 
 function setProcessingControls(active) {
@@ -998,6 +1119,7 @@ function renderArtifacts(items, uid) {
   const root = $("#artifactsList");
   root.innerHTML = "";
   $("#audioPlayer").innerHTML = "";
+  renderAudioConversion(items);
   items.forEach((artifact) => {
     const node = document.createElement("div");
     node.className = `artifact${isAudioArtifact(artifact) ? " audio-artifact" : ""}`;
@@ -1017,11 +1139,36 @@ function renderArtifacts(items, uid) {
   });
 }
 
+// Преобразование форматов — действие над файлами встречи, поэтому живёт во
+// вкладке «Файлы», а не в списке этапов: оно доступно и после завершения
+// обработки, и не зависит от настройки хранения.
+function renderAudioConversion(items) {
+  const root = $("#audioActions");
+  const types = new Set(items.map((artifact) => artifact.type));
+  const hasWAV = types.has("mixed_wav") || (types.has("mic_wav") && types.has("system_wav"));
+  const hasPacked = types.has("mixed_opus") || types.has("mixed_mp3");
+  const buttons = [];
+  if (hasWAV) buttons.push(`<button type="button" class="ghost small" data-format="opus">${t("jobs.toOpus")}</button>`);
+  if (hasPacked) buttons.push(`<button type="button" class="ghost small" data-format="wav">${t("jobs.toWav")}</button>`);
+  root.classList.toggle("hidden", !buttons.length);
+  root.innerHTML = buttons.length ? `<span class="audio-actions-title">${t("artifacts.convertTitle")}</span>${buttons.join("")}` : "";
+  root.querySelectorAll("[data-format]").forEach((button) => {
+    button.onclick = () => retryProcessing("encoding", button, button.dataset.format);
+  });
+}
+
 function renderJobs(items) {
   const root = $("#jobsList");
   root.innerHTML = "";
   const retryable = new Set(["transcribing", "diarizing", "summarizing", "encoding"]);
-  const visibleItems = items.filter((job) => job.stage !== "merging");
+  // merging и completed — служебные отметки: первая дублирует транскрибацию,
+  // вторая просто повторяет статус встречи и своей информации не несёт.
+  const visibleItems = items.filter((job) => job.stage !== "merging" && job.stage !== "completed");
+  // Этап сохранения аудио мог не выполняться ни разу: встречи, обработанные до
+  // его появления, не имеют такой записи. Без строки его нельзя запустить вручную.
+  if (!visibleItems.some((job) => job.stage === "encoding")) {
+    visibleItems.push({ stage: "encoding", status: "not_started", progress: 0, last_error: "" });
+  }
   const merging = items.find((job) => job.stage === "merging");
   const transcription = visibleItems.find((job) => job.stage === "transcribing");
   if (transcription && merging) {
@@ -1041,7 +1188,7 @@ function renderJobs(items) {
       : Math.max(0, Math.min(99, Number(job.progress || 0)));
     const progress = `<progress class="job-progress ${esc(job.status)}" max="100" value="${progressValue}"></progress><small class="job-progress-text">${progressValue}%</small>`;
     const retry = retryable.has(job.stage)
-      ? `<button type="button" class="ghost small retry-stage" data-stage="${esc(job.stage)}" ${state.detail?.processing_active ? "disabled" : ""}>${t("jobs.retryStage")}</button>`
+      ? `<button type="button" class="ghost small retry-stage" data-stage="${esc(job.stage)}" ${state.detail?.processing_active ? "disabled" : ""}>${t(job.status === "not_started" ? "jobs.runStage" : "jobs.retryStage")}</button>`
       : "";
     node.innerHTML = `<div class="job-main"><strong>${esc(stageText(job.stage))}</strong><small>${esc(job.last_error || "")}</small>${progress}</div><div class="job-actions"><span class="badge ${job.status}">${esc(statusText(job.status))}</span>${retry}</div>`;
     const button = node.querySelector(".retry-stage");
@@ -1050,18 +1197,21 @@ function renderJobs(items) {
   });
 }
 
-async function retryProcessing(stage, button = null) {
+async function retryProcessing(stage, button = null, format = "") {
   if (!state.detail) return;
   const uid = state.detail.meeting.uid;
   if (button) button.disabled = true;
   $("#retryBtn").disabled = true;
   clearTimeout(state.detailTimer);
   try {
-    await api(`/api/v1/meetings/${uid}/jobs/${encodeURIComponent(stage)}/retry`, { method: "POST" });
+    const query = format ? `?format=${encodeURIComponent(format)}` : "";
+    await api(`/api/v1/meetings/${uid}/jobs/${encodeURIComponent(stage)}/retry${query}`, { method: "POST" });
     state.detail.meeting.status = "processing";
     state.detail.processing_active = true;
     await openDetail(uid, true);
-    toast(stage === "all" ? t("jobs.retryStarted") : t("jobs.retryStageStarted", { stage: stageText(stage) }));
+    toast(stage === "all"
+      ? t("jobs.retryStarted")
+      : (format ? t("jobs.convertStarted") : t("jobs.retryStageStarted", { stage: stageText(stage) })));
   } catch (error) {
     toast(error.message);
   } finally {
@@ -1093,10 +1243,33 @@ async function showDiagnostics() {
   try {
     state.diagnostics = await api("/api/v1/diagnostics");
     $("#diagDetails").textContent = JSON.stringify(state.diagnostics, null, 2);
+    renderDiagDevices(state.diagnostics);
     await refreshLogs();
   } catch (error) {
     $("#diagDetails").textContent = error.message;
   }
+}
+
+// Карточки устройств: что найдено, доступно ли и через какой драйвер.
+function renderDiagDevices(diagnostics) {
+  const root = $("#diagDevices");
+  if (!root) return;
+  const audio = diagnostics?.audio || {};
+  const available = audio.available !== false;
+  // Карточки растягиваются на одну высоту, а подпись драйвера прижата к низу:
+  // иначе микрофон и системный звук стояли на разной высоте.
+  const device = (icon, title, name) => `<div class="card diag-device">
+      <div class="card-head"><div><h3>${icon} ${esc(title)}</h3></div></div>
+      <div class="diag-device-name">${esc(name || t("diag.noDevice"))}</div>
+      <div class="diag-device-foot">
+        <span class="pill ${available ? "ok" : "error"}">${esc(available ? t("diag.available") : t("diag.unavailable"))}</span>
+        <small class="field-hint">${esc(audio.backend || "")}</small>
+      </div>
+    </div>`;
+  const microphones = audio.microphones || [];
+  const systemSources = audio.system_sources || [];
+  root.innerHTML = device("🎤", t("diag.microphone"), microphones[0]?.name)
+    + device("🔊", t("diag.systemAudio"), systemSources[0]?.name);
 }
 
 async function refreshLogs() {
@@ -1119,6 +1292,28 @@ function humanBytes(value) {
 
 async function refreshModels() {
   clearTimeout(state.modelTimer);
+  // Подсветка вкладки всегда следует за состоянием: иначе после первого
+  // открытия активной выглядит одна вкладка, а список показывает другую.
+  // Загрузка рекомендованного набора: сервер сам запускает скачивание и включает
+// шаги обработки, которым эти модели служат.
+$("#downloadRecommended").onclick = async () => {
+  const button = $("#downloadRecommended");
+  button.disabled = true;
+  try {
+    const result = await api("/api/v1/models/recommended", { method: "POST" });
+    const started = Array.isArray(result?.started) ? result.started.length : 0;
+    toast(started ? t("models.recommendedStarted", { n: started }) : t("models.recommendedNothing"));
+    await refreshModels();
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    button.disabled = false;
+  }
+};
+
+$$("#modelTabs [data-mgroup]").forEach((button) => {
+    button.classList.toggle("active", button.dataset.mgroup === state.modelTab);
+  });
   const root = $("#modelsList");
   try {
     const models = await api("/api/v1/models");
@@ -1130,7 +1325,10 @@ async function refreshModels() {
       { id: "speech_filter", title: t("models.group.speech_filter.title"), description: t("models.group.speech_filter.desc") },
       { id: "diarization", title: t("models.group.diarization.title"), description: t("models.group.diarization.desc") },
     ];
-    groups.forEach((group) => {
+    // Вкладка показывает свою часть: VAD относится к транскрибации, как в макете.
+    const tabGroups = state.modelTab === "speakers" ? ["diarization"]
+      : (state.modelTab === "runtime" ? ["runtime"] : ["transcription", "speech_filter"]);
+    groups.filter((group) => tabGroups.includes(group.id)).forEach((group) => {
       const entries = models.filter((item) => item.group === group.id);
       if (!entries.length) return;
       const section = document.createElement("section");
@@ -1153,7 +1351,44 @@ async function refreshModels() {
           ? `<button class="primary small apply-model" ${model.selected || model.downloading ? "disabled" : ""}>${model.selected ? t("models.appliedBtn") : t("models.apply")}</button>`
           : "";
         const test = model.exists ? `<button class="ghost small test-model" ${model.downloading ? "disabled" : ""}>${t("models.test")}</button>` : "";
-        node.innerHTML = `<div class="model-head"><div><strong>${esc(model.name)}</strong><div class="model-description">${esc(model.description || "")}</div><small>${esc(size)}${size ? " · " : ""}${esc(model.path)}${model.license ? ` · ${t("models.license", { license: esc(model.license) })}` : ""}</small></div><div class="model-actions">${test}${apply}<button class="ghost small download-model" ${model.downloading ? "disabled" : ""}>${model.exists ? t("models.redownload") : t("models.download")}</button></div></div><div class="model-status">${esc(status)}</div><div class="model-test-result hidden"></div>${model.downloading && model.total_bytes > 0 ? `<progress max="100" value="${progress}"></progress>` : ""}${model.last_error ? `<div class="model-error">${esc(model.last_error)}</div>` : ""}`;
+        // Раскладка карточки как в макете: заголовок с пометкой, описание,
+        // размер и лицензия, пилюля состояния, ряд кнопок и сворачиваемый путь
+        // к файлу. Длинный путь в строке выдавливал кнопки за край карточки.
+        // Подписи «Применена» и «Установлена» не влезали в угол карточки: их
+        // заменили значки. Текст остался в подсказке при наведении.
+        const installedState = model.downloading ? "downloading" : (model.exists ? "on" : "off");
+        const installedLabel = model.downloading
+          ? t("models.downloadingShort")
+          : (model.exists ? t("models.installed") : t("models.notInstalled"));
+        const appliedLabel = model.selected ? t("models.appliedBtn") : t("models.notApplied");
+        const flags = `<span class="model-flags">`
+          + `<span class="model-flag installed ${installedState}" title="${esc(installedLabel)}" role="img" aria-label="${esc(installedLabel)}">${MODEL_INSTALLED_ICON}</span>`
+          + `<span class="model-flag applied ${model.selected ? "on" : "off"}" title="${esc(appliedLabel)}" role="img" aria-label="${esc(appliedLabel)}">${MODEL_CHECK_ICON}</span>`
+          + `</span>`;
+        const sizeText = model.exists ? humanBytes(model.size_bytes) : (model.approx_bytes > 0 ? t("models.approxSize", { size: humanBytes(model.approx_bytes) }) : "");
+        const licenseText = model.license ? `<span>${esc(t("models.license", { license: model.license }))}</span>` : "";
+        node.innerHTML = `<div class="model-title"><strong>${esc(model.name)}</strong>${flags}</div>`
+          + `<div class="model-description">${esc(model.description || "")}</div>`
+          + `<div class="model-meta"><span>${esc(sizeText)}</span>${licenseText}</div>`
+          + `<div class="model-actions">${test}${apply}<button class="ghost small download-model" ${model.downloading ? "disabled" : ""}>${model.exists ? t("models.redownload") : t("models.download")}</button></div>`
+          + `<div class="model-test-result hidden"></div>`
+          + (model.downloading && model.total_bytes > 0 ? `<progress max="100" value="${progress}"></progress>` : "")
+          + (model.last_error ? `<div class="model-error">${esc(model.last_error)}</div>` : "")
+          // Строку с файлом показываем только у скачанной модели: у отсутствующей
+          // нет ни пути для показа, ни файла для удаления.
+          + (model.exists && model.path ? `<details class="model-file"><summary><span>${esc(t("models.file"))}</span><span class="model-file-tools"><button type="button" class="model-delete" title="${esc(t("models.delete"))}">${TRASH_ICON}</button></span></summary><code>${esc(model.path)}</code></details>` : "");
+        const removeButton = node.querySelector(".model-delete");
+        if (removeButton) removeButton.onclick = async (event) => {
+          // Кнопка внутри summary: без этого клик ещё и раскрывал бы блок.
+          event.preventDefault();
+          event.stopPropagation();
+          if (!confirm(t("models.deleteConfirm", { name: model.name }))) return;
+          try {
+            await api(`/api/v1/models/${encodeURIComponent(model.id)}/delete`, { method: "POST" });
+            toast(t("models.deleted"));
+            await refreshModels();
+          } catch (error) { toast(error.message); }
+        };
         node.querySelector(".download-model").onclick = async () => {
           try {
             await api(`/api/v1/models/${encodeURIComponent(model.id)}/download`, { method: "POST" });
@@ -1200,6 +1435,14 @@ async function refreshModels() {
     root.innerHTML = `<div class="model-error">${esc(error.message)}</div>`;
   }
 }
+
+$$("#modelTabs [data-mgroup]").forEach((button) => {
+  button.onclick = () => {
+    state.modelTab = button.dataset.mgroup;
+    $$("#modelTabs [data-mgroup]").forEach((other) => other.classList.toggle("active", other === button));
+    refreshModels();
+  };
+});
 
 async function showModels() {
   $("#modelsDialog").showModal();
@@ -1425,9 +1668,13 @@ async function loadSettings(resetDirty = true) {
   const payload = await api("/api/v1/settings");
   state.settings = payload;
   if (resetDirty) state.settingsDirty.clear();
-  const nav = $("#settingsNav");
-  nav.innerHTML = "";
-  (payload.groups || []).forEach((group) => {
+  const GROUP_SECTIONS = [
+    { caption: "settings.group.basic", ids: ["app", "audio", "desktop"] },
+    { caption: "settings.group.processing", ids: ["transcription", "diarization", "summary"] },
+    { caption: "settings.group.system", ids: ["inference", "storage", "models", "logging"] },
+  ];
+  const byId = new Map((payload.groups || []).map((group) => [group.id, group]));
+  const addButton = (group) => {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "settings-nav-item";
@@ -1435,7 +1682,20 @@ async function loadSettings(resetDirty = true) {
     button.textContent = group.title;
     button.onclick = () => renderSettingsGroup(group.id);
     nav.appendChild(button);
+  };
+  const nav = $("#settingsNav");
+  nav.innerHTML = "";
+  const used = new Set();
+  GROUP_SECTIONS.forEach((section) => {
+    const groups = section.ids.map((id) => byId.get(id)).filter(Boolean);
+    if (!groups.length) return;
+    const caption = document.createElement("div");
+    caption.className = "settings-nav-caption";
+    caption.textContent = t(section.caption);
+    nav.appendChild(caption);
+    groups.forEach((group) => { used.add(group.id); addButton(group); });
   });
+  (payload.groups || []).forEach((group) => { if (!used.has(group.id)) addButton(group); });
   $("#settingsDirty").textContent = t("settings.noChanges");
   $("#saveSettings").disabled = true;
   renderSettingsGroup(payload.groups?.[0]?.id);
@@ -1538,7 +1798,7 @@ function closeDetailWithCheck() {
   if (state.speakerEditor?.dirty && !confirm(t("detail.closeDirtyConfirm"))) return;
   closeDialog("#detailDialog");
 }
-$("#closeDetail").onclick = $("#closeDetail2").onclick = closeDetailWithCheck;
+$("#closeDetail").onclick = closeDetailWithCheck;
 $("#detailDialog").addEventListener("cancel", (event) => {
   if (state.speakerEditor?.dirty && !confirm(t("detail.closeDirtyConfirm"))) event.preventDefault();
 });
@@ -1616,10 +1876,18 @@ $("#diagBtn").onclick = showDiagnostics;
 $$("#calendarView button").forEach((button) => { button.onclick = () => setCalendarView(button.dataset.view); });
 $("#filterToggle").onclick = () => toggleSearchPanel();
 $("#refreshLogs").onclick = refreshLogs;
-$("#closeDiag").onclick = $("#closeDiag2").onclick = () => closeDialog("#diagDialog");
+$("#closeDiag").onclick = () => closeDialog("#diagDialog");
 $("#modelsBtn").onclick = showModels;
 $("#refreshModels").onclick = refreshModels;
-$("#closeModels").onclick = $("#closeModels2").onclick = () => closeDialog("#modelsDialog");
+$("#deleteAllModels").onclick = async () => {
+  if (!confirm(t("models.deleteAllConfirm"))) return;
+  try {
+    const result = await api("/api/v1/models/delete-all", { method: "POST" });
+    toast(t("models.deletedAll", { n: Number(result?.removed || 0) }));
+    await refreshModels();
+  } catch (error) { toast(error.message); }
+};
+$("#closeModels").onclick = () => closeDialog("#modelsDialog");
 $("#settingsBtn").onclick = showSettings;
 $("#saveSettings").onclick = saveSettings;
 $("#settingsForm").onsubmit = (event) => event.preventDefault();
@@ -1627,7 +1895,7 @@ $("#settingsDialog").addEventListener("cancel", (event) => {
   if (state.settingsDirty.size && !confirm(t("settings.closeConfirm"))) event.preventDefault();
   else state.settingsDirty.clear();
 });
-$("#closeSettings").onclick = $("#closeSettings2").onclick = () => {
+$("#closeSettings").onclick = () => {
   if (state.settingsDirty.size && !confirm(t("settings.closeConfirm"))) return;
   state.settingsDirty.clear();
   closeDialog("#settingsDialog");
@@ -1637,7 +1905,13 @@ $("#closeSettings").onclick = $("#closeSettings2").onclick = () => {
 
 function switchIntegrationsTab(name) {
   $$("#integrationsDialog [data-igtab]").forEach((button) => button.classList.toggle("active", button.dataset.igtab === name));
-  ["tokens", "browser", "audit"].forEach((tab) => $("#ig-" + tab).classList.toggle("hidden", tab !== name));
+  // Вкладка «Токены» временно скрыта; её раздел остаётся в разметке, поэтому
+  // переключаем только видимые.
+  ["browser", "audit"].forEach((tab) => $("#ig-" + tab).classList.toggle("hidden", tab !== name));
+  // Настройки браузера сохраняются кнопкой в шапке; аудит пишется сразу при
+  // переключении, а токены создаются своей формой — там кнопка не нужна.
+  $("#saveBrowser").classList.toggle("hidden", name !== "browser");
+  if (name === "browser") updateBrowserDirty();
 }
 
 // resetTokenSecrets drops one-time secrets left over from an earlier visit.
@@ -1650,6 +1924,8 @@ function resetTokenSecrets() {
 
 async function openIntegrations() {
   $("#integrationsDialog").showModal();
+  switchIntegrationsTab("browser");
+  setTokenFormOpen(false);
   resetTokenSecrets();
   await Promise.all([loadTokens(), loadBrowserConfig(), loadAudit()]);
 }
@@ -1659,46 +1935,85 @@ function fmtExpiry(value) {
   return new Intl.DateTimeFormat(LOCALE, { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value));
 }
 
+// Идентификатор служебного токена плагина: заполняется при загрузке списка.
+let pluginsTokenID = "";
+
+// Копировать можно только тот токен, значение которого известно: сервер
+// показывает секрет один раз — при создании или перегенерации.
+function updatePluginCopyState() {
+  const button = $("#copyPluginToken");
+  if (!button) return;
+  const secret = pluginsTokenID ? state.tokenSecrets.get(pluginsTokenID) : "";
+  button.disabled = !secret;
+  button.setAttribute("data-tip", secret ? t("integrations.copyPluginBuffer") : t("integrations.copyPluginToken"));
+}
+
 async function loadTokens() {
   const tokens = await api("/api/v1/integrations/tokens");
+  const plugin = tokens.find((token) => token.kind === "plugins");
+  const others = tokens.filter((token) => token.kind !== "plugins");
+
+  // Служебный токен плагина — отдельная карточка. Его идентификатор нужен
+  // разделу «Браузер», чтобы перегенерировать токен прямо там.
+  const pluginCard = $("#pluginTokenCard");
+  pluginsTokenID = plugin ? plugin.id : "";
+  if (plugin) {
+    const secret = state.tokenSecrets.get(plugin.id);
+    pluginCard.classList.remove("hidden");
+    pluginCard.innerHTML =
+      `<div class="card-head">` +
+        `<div class="icon-tile">${GLOBE_ICON}</div>` +
+        `<div class="plugin-token-title"><h3>${esc(plugin.name)}</h3><p>${esc(t("integrations.pluginSubtitle"))}</p>` +
+          `<div class="plugin-token-meta"><span class="pill">${esc(t("integrations.tabBrowser"))}</span><span class="plugin-token-tail">…${esc(plugin.fingerprint || "")}</span></div></div>` +
+      `</div>` +
+      `<div class="plugin-token-foot">` +
+        `<span class="status-line"><span class="status-dot ok"></span>${esc(t("integrations.pluginActive"))}</span>` +
+        `<button type="button" class="ghost small renew-plugin">${esc(t("integrations.renewToken"))}</button>` +
+      `</div>` +
+      (secret ? `<div class="token-reveal"><span class="token-note">${esc(t("integrations.secretOnce"))}</span>${tokenFieldHTML(secret)}</div>` : "");
+    const copy = pluginCard.querySelector(".token-field");
+    if (copy) copy.onclick = () => copySecretText(secret);
+    const renew = pluginCard.querySelector(".renew-plugin");
+    renew.onclick = () => regenerateToken(plugin.id);
+  } else {
+    pluginCard.classList.add("hidden");
+  }
+
+  // Остальные токены — таблица.
   const root = $("#tokenList");
   root.innerHTML = "";
-  if (!tokens.length) {
+  if (!others.length) {
     root.innerHTML = `<div class="hint">${esc(t("integrations.noTokens"))}</div>`;
     return;
   }
-  tokens.forEach((token) => {
+  others.forEach((token) => {
     const item = document.createElement("div");
     item.className = "token-item";
-    const info = document.createElement("div");
-    info.className = "token-info";
     const secret = state.tokenSecrets.get(token.id);
-    info.innerHTML =
-      `<div class="token-name">${esc(token.name)}</div>` +
-      `<div class="token-meta">${esc(token.kind)} · …${esc(token.fingerprint || "")} · ${esc(t("integrations.expires"))} ${esc(fmtExpiry(token.expires_at))}</div>` +
+    item.innerHTML =
+      `<div class="token-cell token-name-cell"><div class="token-name">${esc(token.name)}</div><div class="token-meta">…${esc(token.fingerprint || "")}</div></div>` +
+      `<div class="token-cell">${esc(token.kind === "read_only" ? t("integrations.readOnly") : t("integrations.readWrite"))}</div>` +
+      `<div class="token-cell">${esc(fmtExpiry(token.expires_at))}</div>` +
+      `<div class="token-actions">` +
+        `<button type="button" class="ghost small" data-act="regen">${esc(t("integrations.regenerate"))}</button>` +
+        `<button type="button" class="ghost small" data-act="revoke">${esc(t("integrations.revoke"))}</button>` +
+      `</div>` +
       (secret ? `<div class="token-reveal"><span class="token-note">${esc(t("integrations.secretOnce"))}</span>${tokenFieldHTML(secret)}</div>` : "");
-    const copy = info.querySelector(".token-field");
+    item.querySelector('[data-act="regen"]').onclick = () => regenerateToken(token.id);
+    item.querySelector('[data-act="revoke"]').onclick = () => revokeToken(token.id);
+    const copy = item.querySelector(".token-field");
     if (copy) copy.onclick = () => copySecretText(secret);
-    const actions = document.createElement("div");
-    actions.className = "token-actions";
-    if (token.kind !== "plugins") {
-      const revoke = document.createElement("button");
-      revoke.type = "button";
-      revoke.className = "ghost small";
-      revoke.textContent = t("integrations.revoke");
-      revoke.onclick = () => revokeToken(token.id);
-      actions.appendChild(revoke);
-    }
-    const regen = document.createElement("button");
-    regen.type = "button";
-    regen.className = "ghost small";
-    regen.textContent = t("integrations.regenerate");
-    regen.onclick = () => regenerateToken(token.id);
-    actions.appendChild(regen);
-    item.append(info, actions);
     root.appendChild(item);
   });
 }
+
+// Индикаторы модели: галка в круге — применена, стрелка на диск — установлена.
+const MODEL_CHECK_ICON = `<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>`;
+const MODEL_INSTALLED_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11"/><path d="M7.5 10.5L12 15l4.5-4.5"/><rect x="4" y="17.5" width="16" height="3" rx="1.5"/></svg>`;
+
+const KEY_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="7.5" cy="15.5" r="3.5"/><path d="M10 13l8-8m-3 3l3 3m-5-1l2 2"/></svg>`;
+const TRASH_ICON = `<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M3 6h18M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2m3 0v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/></svg>`;
+const GLOBE_ICON = `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/></svg>`;
 
 const COPY_ICON = `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>`;
 
@@ -1760,6 +2075,7 @@ async function submitTokenForm(event) {
     if (result.token?.id) state.tokenSecrets.set(result.token.id, result.secret);
     $("#tokenName").value = "";
     $("#tokenExpires").value = "";
+    setTokenFormOpen(false);
     await loadTokens();
   } catch (error) { toast(error.message); }
 }
@@ -1811,11 +2127,13 @@ function renderMaskRows(rows) {
   rows.forEach((row, index) => {
     const el = document.createElement("div");
     el.className = "mask-row";
+    // Название и шаблон стоят в одной строке: две строки занимали вдвое больше
+    // места без всякой пользы.
     el.innerHTML =
       `<input type="checkbox"${row.enabled ? " checked" : ""} title="${esc(t("integrations.maskEnabled"))}">` +
       `<input type="text" class="mask-name" autocomplete="off" value="${esc(row.name || "")}" placeholder="${esc(t("integrations.maskName"))}">` +
       `<input type="text" class="mask-pattern" autocomplete="off" spellcheck="false" value="${esc(row.pattern || "")}" placeholder="*example.com/*">` +
-      `<button type="button" class="mask-remove" title="${esc(t("integrations.maskRemove"))}">✕</button>`;
+      `<button type="button" class="mask-remove" title="${esc(t("integrations.maskRemove"))}">${TRASH_ICON}</button>`;
     el.querySelector(".mask-remove").onclick = () => {
       const current = collectMaskRows();
       current.splice(index, 1);
@@ -1823,6 +2141,7 @@ function renderMaskRows(rows) {
     };
     root.appendChild(el);
   });
+  updateBrowserDirty();
 }
 
 function addEmptyMaskRow() {
@@ -1876,6 +2195,26 @@ function updatePortWarning(configured, effective) {
   }
 }
 
+// browserConfigSnapshot фиксирует состояние формы: «Сохранить» активна только
+// тогда, когда что-то действительно изменилось.
+function browserConfigSnapshot() {
+  return JSON.stringify({
+    enabled: $("#browserEnabled").checked,
+    masks: serializeMaskRows(collectMaskRows()),
+    mode: $("#browserMode").value,
+    title: $("#browserTitleTemplate").value,
+    missed: $("#browserMissedPolls").value,
+    poll: $("#browserPoll").value,
+  });
+}
+
+let browserCleanSnapshot = "";
+
+function updateBrowserDirty() {
+  const button = $("#saveBrowser");
+  if (button) button.disabled = browserConfigSnapshot() === browserCleanSnapshot;
+}
+
 async function loadBrowserConfig() {
   const cfg = await api("/api/v1/integrations/browser");
   $("#browserEnabled").checked = !!cfg.enabled;
@@ -1885,11 +2224,18 @@ async function loadBrowserConfig() {
   $("#browserMissedPolls").value = String(cfg.stop_after_missed_polls ?? 4);
   $("#browserPoll").value = String(cfg.poll_interval_seconds ?? 20);
   updatePortWarning(Number(cfg.configured_port || 0), Number(cfg.effective_port || 0));
+  $("#browserLinkSummary").textContent = t("integrations.linkSummary", {
+    polls: cfg.stop_after_missed_polls ?? 4,
+    interval: cfg.poll_interval_seconds ?? 20,
+  });
+  browserCleanSnapshot = browserConfigSnapshot();
+  updateBrowserDirty();
+  updatePluginCopyState();
   const tokenBox = $("#browserTokenBox");
   if (cfg.plugins_token) {
-    tokenBox.innerHTML = `${esc(t("integrations.pluginsToken"))}: …${esc(cfg.plugins_token.fingerprint || "")}`;
+    tokenBox.innerHTML = `${KEY_ICON}<span>${esc(t("integrations.pluginsToken"))}: …${esc(cfg.plugins_token.fingerprint || "")}</span>`;
   } else {
-    tokenBox.textContent = t("integrations.noPluginsToken");
+    tokenBox.innerHTML = `${KEY_ICON}<span>${esc(t("integrations.noPluginsToken"))}</span>`;
   }
 }
 
@@ -1926,16 +2272,62 @@ function renderAudit(entries) {
     root.innerHTML = `<div class="hint">${esc(t("integrations.auditEmpty"))}</div>`;
     return;
   }
-  const head = `<thead><tr><th>${esc(t("integrations.auditTime"))}</th><th>${esc(t("integrations.auditToken"))}</th><th>IP</th><th>User-Agent</th><th>${esc(t("integrations.auditMethod"))}</th><th>${esc(t("integrations.auditPath"))}</th><th>${esc(t("integrations.auditStatus"))}</th></tr></thead>`;
-  const rows = entries.map((e) => `<tr><td>${esc(e.time || "")}</td><td>${esc(e.token || "")}</td><td>${esc(e.ip || "")}</td><td>${esc(e.user_agent || "")}</td><td>${esc(e.method || "")}</td><td>${esc(e.path || "")}</td><td>${esc(String(e.status ?? ""))}</td></tr>`).join("");
-  root.innerHTML = `<table>${head}<tbody>${rows}</tbody></table>`;
+  // Аудит выводим как есть, строками лога: время, токен, вызов, статус и то,
+  // что известно только нам — событие, идентификатор команды, результат и
+  // адрес страницы, по которой плагин создал встречу.
+  const EVENT_TEXT = {
+    meeting_started: "integrations.auditMeetingStarted",
+    command: "integrations.auditCommand",
+  };
+  const lines = entries.map((entry) => {
+    const time = entry.time ? new Date(entry.time).toLocaleTimeString(LOCALE, { hour12: false }) : "";
+    const eventText = EVENT_TEXT[entry.event] ? t(EVENT_TEXT[entry.event]) : (entry.event || "");
+    const details = [
+      eventText,
+      entry.url || "",
+      entry.command_id ? `id ${entry.command_id}` : "",
+      entry.result || "",
+    ].filter(Boolean).join(" · ");
+    return `<div class="audit-line"><span class="audit-time">${esc(time)}</span><span class="audit-token">${esc(entry.token || "")}</span><span class="audit-call">${esc(`${entry.method || ""} ${entry.path || ""}`.trim())}</span><span class="audit-details">${esc(details)}</span><span class="audit-status">${esc(String(entry.status ?? ""))}</span></div>`;
+  }).join("");
+  root.innerHTML = `<div class="audit-log">${lines}</div>`;
 }
 
+
 $("#integrationsBtn").onclick = openIntegrations;
-$("#closeIntegrations").onclick = $("#closeIntegrations2").onclick = () => closeDialog("#integrationsDialog");
+$("#closeIntegrations").onclick = () => closeDialog("#integrationsDialog");
 $$("#integrationsDialog [data-igtab]").forEach((button) => { button.onclick = () => switchIntegrationsTab(button.dataset.igtab); });
 $("#tokenForm").onsubmit = submitTokenForm;
+// Форма создания не занимает место постоянно: её открывает кнопка.
+const setTokenFormOpen = (open) => {
+  $("#tokenForm").classList.toggle("hidden", !open);
+  $("#openTokenForm").classList.toggle("hidden", open);
+  if (open) $("#tokenName").focus();
+  else { $("#tokenName").value = ""; $("#tokenExpires").value = ""; }
+};
+$("#openTokenForm").onclick = () => setTokenFormOpen(true);
+$("#cancelTokenForm").onclick = () => setTokenFormOpen(false);
 $("#saveBrowser").onclick = saveBrowserConfig;
+$("#regeneratePluginToken").onclick = async () => {
+  if (!pluginsTokenID) { toast(t("integrations.noPluginsToken")); return; }
+  try {
+    const result = await api(`/api/v1/integrations/tokens/${encodeURIComponent(pluginsTokenID)}/regenerate`, { method: "POST" });
+    const secret = result.secret || "";
+    if (result.token?.id) state.tokenSecrets.set(result.token.id, secret);
+    showTokenSecret("#browserTokenSecret", secret, t("integrations.pluginsSecretOnce"));
+    updatePluginCopyState();
+    await loadBrowserConfig();
+    await loadTokens();
+    toast(t("integrations.tokenRegenerated"));
+  } catch (error) { toast(error.message); }
+};
+$("#copyPluginToken").onclick = async () => {
+  const secret = pluginsTokenID ? state.tokenSecrets.get(pluginsTokenID) : "";
+  if (!secret) { toast(t("integrations.tokenShownOnce")); return; }
+  await copySecretText(secret);
+};
+$("#ig-browser").addEventListener("input", updateBrowserDirty);
+$("#ig-browser").addEventListener("change", updateBrowserDirty);
 $("#goToPortSetting").onclick = async () => {
   closeDialog("#integrationsDialog");
   try {
@@ -1991,16 +2383,20 @@ async function bootstrap() {
     applyAppVersion();
     try {
       await Promise.all([loadMeetings(), refreshDevices(), refreshRecordingState(), executeMeetingSearch()]);
-      connectEvents();
     } catch (error) {
       if (!isForbidden(error)) throw error;
+    } finally {
+      // Live updates are independent of the first data load: without this the
+      // interface would silently stop refreshing until the page is reloaded.
+      connectEvents();
     }
   } catch (error) {
     toast(error.message);
     const bar = $("#diagAudio");
     bar.className = "diag-status error";
     bar.textContent = t("app.bootstrapError", { message: error.message });
-    $("#diagBadge").classList.remove("hidden");
+    const badge = $("#diagBadge");
+    if (badge) badge.classList.remove("hidden");
   }
 }
 

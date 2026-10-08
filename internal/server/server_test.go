@@ -47,6 +47,31 @@ func TestPublicConfigReportsVersion(t *testing.T) {
 	}
 }
 
+// TestRetryEncodingValidatesFormat keeps the per-run conversion format checked
+// before any audio work, so a typo is reported as a bad request rather than as a
+// missing-sources conflict.
+func TestRetryEncodingValidatesFormat(t *testing.T) {
+	s, handler := newIntegrationServer(t)
+	meeting := model.Meeting{UID: "format-check", Title: "Format check", StartedAt: time.Now(), Status: "created"}
+	if err := s.store.SaveMeeting(meeting); err != nil {
+		t.Fatal(err)
+	}
+	post := func(query string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/meetings/"+meeting.UID+"/jobs/encoding/retry"+query, nil)
+		req.Header.Set("X-Meeting-Token", s.token)
+		rr := httptest.NewRecorder()
+		handler.ServeHTTP(rr, req)
+		return rr
+	}
+	if rr := post("?format=bogus"); rr.Code != http.StatusBadRequest {
+		t.Fatalf("unknown format: got %d %s, want 400", rr.Code, rr.Body.String())
+	}
+	// A valid format passes validation and only then hits the missing audio.
+	if rr := post("?format=opus"); rr.Code != http.StatusConflict {
+		t.Fatalf("valid format: got %d %s, want 409", rr.Code, rr.Body.String())
+	}
+}
+
 func TestMeetingAPIAndCSRF(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.App.DataDir = t.TempDir()

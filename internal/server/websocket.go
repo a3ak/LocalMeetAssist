@@ -219,5 +219,5 @@ func (s *Server) websocketHandler(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "upgrade failed")
 		return
 	}
-	s.serveBrowserWS(conn)
+	s.serveBrowserWS(conn, remoteIP(r), r.UserAgent())
 }

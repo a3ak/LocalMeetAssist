@@ -28,17 +28,26 @@ button:disabled{opacity:.5;cursor:not-allowed}
 .diag-status{padding:9px 12px;border-radius:9px;font-size:13px;margin-bottom:12px}
 .diag-status.ok{background:var(--success-soft);color:var(--success)}
 .diag-status.error{background:var(--danger-soft);color:var(--danger)}
-.search-panel{max-width:1500px;margin:14px auto 0;padding:0 20px;flex:0 0 auto}
+/* width:100% обязателен: горизонтальные auto-отступы у flex-элемента
+   включают shrink-to-fit, и панель сжималась до ширины содержимого. */
+/* width:100% обязателен: горизонтальные auto-отступы у flex-элемента
+   включают shrink-to-fit, и панель сжималась до ширины содержимого. */
+.search-panel{width:100%;max-width:1500px;margin:14px auto 0;padding:0 20px;flex:0 0 auto}
 .search-line{display:flex;gap:8px}
-.search-line input{flex:1;background:var(--card);box-shadow:0 2px 4px rgba(22,32,44,.03)}
-.search-suggestions{display:flex;align-items:center;flex-wrap:wrap;gap:6px;margin-top:8px;color:var(--muted);font-size:11px}
-.search-suggestions button{padding:4px 8px;border:1px solid var(--line);border-radius:16px;background:var(--card);color:var(--ink);font-size:11px;font-weight:650}
+.search-line input{flex:1;padding:13px 16px;font-size:15px;background:var(--card);box-shadow:0 2px 4px rgba(22,32,44,.03)}
+.search-suggestions{display:flex;align-items:center;flex-wrap:wrap;gap:8px;margin-top:10px;color:var(--muted);font-size:11px}
+.search-suggestions button{padding:6px 12px;border:1px solid var(--line);border-radius:16px;background:var(--card);color:var(--ink);font-size:12px;font-weight:650}
 .search-suggestions button:hover{border-color:var(--accent);background:var(--accent2)}
 .search-suggestions span{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
-.search-status{margin-top:6px;color:var(--muted);font-size:11px}
+/* Подсказки спикеров — это подстановка конкретного имени, а не ещё одно
+   условие поиска, поэтому они отделены чертой и подсвечены голубым. */
+#speakerSuggestions{gap:6px;margin-left:2px;padding-left:10px;border-left:1px solid color-mix(in srgb,var(--accent) 45%,var(--line))}
+#speakerSuggestions button{background:color-mix(in srgb,var(--accent) 26%,var(--card));border-color:color-mix(in srgb,var(--accent) 55%,var(--line));color:var(--accent-ink);font-weight:700}
+#speakerSuggestions button:hover{background:color-mix(in srgb,var(--accent) 40%,var(--card));border-color:var(--accent)}
+.search-status{margin-top:8px;color:var(--muted);font-size:12px}
 .search-status.error{color:var(--danger)}
 main{flex:1;min-height:440px;display:grid;grid-template-columns:minmax(660px,1fr) 350px;grid-template-rows:1fr;gap:16px;padding:14px 20px 20px;width:100%;max-width:1500px;margin:0 auto;min-width:0}
-.calendar-panel,.sidebar{background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 2px 4px rgba(22,32,44,.03)}
+.calendar-panel,.sidebar{background:var(--card);border:1px solid var(--line);border-radius:var(--radius-lg);box-shadow:0 2px 4px rgba(22,32,44,.03)}
 .calendar-panel{padding:16px 18px;display:flex;flex-direction:column;min-width:0;min-height:0}
 .calendar-head{display:flex;align-items:center;gap:8px;margin-bottom:10px}
 .calendar-head h1{font-size:22px;margin:0 8px;min-width:220px}
@@ -55,25 +64,24 @@ main{flex:1;min-height:440px;display:grid;grid-template-columns:minmax(660px,1fr
 .calendar{flex:1;min-height:0;grid-auto-rows:minmax(0,1fr)}
 .weekdays{flex:0 0 auto}
 .weekdays span{padding:6px;text-align:center;color:var(--muted);font-size:12px;font-weight:750;text-transform:uppercase}
-.day{border-top:1px solid var(--line);border-left:1px solid var(--line);padding:8px;overflow:hidden;min-height:0}
+.day{border-top:1px solid var(--line);border-left:1px solid var(--line);padding:6px;overflow:hidden;min-height:0}
 .day:nth-child(7n+1){border-left:0}
 .day.outside{background:color-mix(in srgb,var(--card) 72%,var(--bg));color:var(--muted)}
 .day.today .day-number{background:var(--accent);color:var(--on-accent)}
-.day-number{display:grid;place-items:center;width:28px;height:28px;border-radius:9px;font-weight:700;font-size:13px}
-.event{display:block;margin-top:5px;padding:6px 7px;border-radius:7px;background:var(--accent2);color:var(--accent-ink);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border-left:3px solid var(--accent)}
+.day-number{display:grid;place-items:center;width:24px;height:24px;border-radius:8px;font-weight:650;font-size:12px}
+.event{display:block;margin-top:4px;padding:4px 7px;border-radius:8px;font-weight:600;background:var(--accent2);color:var(--accent-ink);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;cursor:pointer;border-left:3px solid var(--accent)}
 .event.failed{background:var(--danger-soft);color:var(--danger);border-color:var(--danger)}
 .event.warning{background:var(--warn-soft);color:var(--warn);border-color:var(--warn)}
-.event.search-match,.meeting-item.search-match{border-color:var(--accent);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 24%,transparent)}
-.event.search-dimmed,.meeting-item.search-dimmed{filter:grayscale(.85);opacity:.28}
-.day.search-match-day{background:color-mix(in srgb,var(--accent2) 64%,var(--card));box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 35%,transparent)}
 
 /* Week view: the same seven columns, hour marks by height, meetings placed on
    their own time. The body keeps the height of the month grid. */
 .week-head{display:grid;grid-template-columns:58px repeat(7,1fr);border-top:1px solid var(--line)}
 .week-head .wh{padding:8px 6px;text-align:center;font-size:11px;font-weight:750;text-transform:uppercase;color:var(--muted);border-left:1px solid var(--line)}
 .week-head .wh:first-child{border-left:0}
-.week-head .wh b{display:block;font-size:14px;color:var(--ink);margin-top:2px;font-weight:700}
-.week-head .wh.today b{display:inline-grid;place-items:center;width:26px;height:26px;border-radius:9px;background:var(--accent);color:var(--on-accent)}
+/* Одинаковая коробка для числа у всех дней: у сегодняшнего дня меняется
+   только заливка, поэтому выделение не сдвигает ни день недели, ни число. */
+.week-head .wh b{display:grid;place-items:center;width:26px;height:26px;margin:2px auto 0;font-size:14px;font-weight:700;color:var(--ink)}
+.week-head .wh.today b{border-radius:9px;background:var(--accent);color:var(--on-accent)}
 .week-body{display:grid;grid-template-columns:58px repeat(7,1fr);flex:1;min-height:0}
 #weekCalendar{flex:1;display:flex;flex-direction:column;min-height:0}
 .week-hours{display:grid}
@@ -120,9 +128,20 @@ input:focus,select:focus,textarea:focus{outline:3px solid color-mix(in srgb,var(
 .detail-card{min-height:650px}
 .title-input{border:0;padding:2px 0;font-size:24px;font-weight:800;width:min(620px,70vw)}
 .status-strip{margin:16px 0;padding:10px 12px;border-radius:9px;background:var(--bg);color:var(--muted);font-size:13px}
-.tabs{display:flex;gap:4px;border-bottom:1px solid var(--line);overflow:auto}
-.tabs button{background:transparent;color:var(--muted);border-radius:8px 8px 0 0}
-.tabs button.active{color:var(--accent);background:var(--accent2)}
+/* Вкладки карточки — те же пилюли, что и в «Моделях»: одна форма вкладок
+   во всём приложении. */
+.tabs,.pills{display:inline-flex;gap:4px;padding:4px;border:1px solid var(--line);border-radius:var(--radius-pill);background:var(--surface);overflow:auto}
+.tabs button,.pills button{display:inline-flex;align-items:center;gap:7px;background:transparent;color:var(--muted);border-radius:var(--radius-pill);padding:8px 15px;font-weight:650}
+.tabs button:hover,.pills button:hover{color:var(--ink)}
+.tabs button.active,.pills button.active{background:var(--accent2);color:var(--accent-ink)}
+.tab-count{display:inline-grid;place-items:center;min-width:20px;padding:1px 6px;border-radius:var(--radius-pill);background:var(--surface2);color:var(--muted);font-size:11px;font-weight:700}
+.tabs button.active .tab-count{background:color-mix(in srgb,var(--accent) 26%,var(--surface2));color:var(--accent-ink)}
+/* Навигация диалога «Интеграции» — пилюли сверху, содержимое под ними. */
+/* Одна колонка и строки по содержимому: иначе единственная auto-строка
+   растягивается на всю высоту диалога и ряд пилюль превращается в столбец. */
+#integrationsDialog .settings-layout{grid-template-columns:1fr;flex-direction:column;align-content:start}
+#integrationsDialog .settings-nav,.ig-tabs{align-self:start}
+.ig-tabs{width:fit-content;max-width:100%;margin-bottom:16px}
 .tab-content{padding:16px 0;min-height:400px}
 .tab-content textarea{width:100%;min-height:330px;resize:vertical;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;line-height:1.55}
 .detail-footer{display:flex;justify-content:space-between;border-top:1px solid var(--line);padding-top:16px}
@@ -267,8 +286,15 @@ main{padding:10px}
 .audit-table table{width:100%;border-collapse:collapse;font-size:12px}
 .audit-table th,.audit-table td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line,#3c4450);white-space:nowrap}
 .ig-section{padding-bottom:20px}
-#ig-browser label{display:grid;grid-template-columns:200px 1fr;gap:8px;align-items:center;margin-bottom:10px}
+/* Поля браузерной интеграции повторяют сетку настроек: постоянная колонка
+   подписи и одинаковая ширина элементов управления во всех строках. */
+#ig-browser label{display:grid;grid-template-columns:minmax(200px,260px) minmax(0,1fr);gap:6px 16px;align-items:center;margin-bottom:14px}
+#ig-browser label>span:first-child{font-size:13px;font-weight:700;line-height:1.35}
+#ig-browser label small{grid-column:2;color:var(--muted);font-size:12px;line-height:1.35}
 #ig-browser label.check-row{display:flex;grid-template-columns:none}
+#ig-browser input:not([type=checkbox]),#ig-browser select{width:100%;min-width:0}
+#ig-browser #browserTokenBox,#ig-browser #browserTokenSecret{margin:2px 0 14px}
+#ig-browser #saveBrowser{align-self:flex-start}
 .mask-head{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:20px 0 8px;flex-wrap:wrap}
 .mask-head .setting-label{font-size:14px;font-weight:700}
 .mask-actions{display:flex;gap:6px;align-items:center}
@@ -284,3 +310,438 @@ main{padding:10px}
 .ig-warning{display:flex;align-items:center;gap:12px;flex-wrap:wrap;background:var(--warn-soft,#3a2f1e);color:var(--warn,#e0a84c);border:1px solid color-mix(in srgb,var(--warn,#e0a84c) 45%,var(--line,#3c4450));padding:10px 12px;border-radius:9px;margin:12px 0;font-size:13px}
 .ig-warning span{flex:1;min-width:180px}
 .ig-warning button{color:inherit;border-color:currentColor;flex:none}
+
+/* --- Общий стиль интерфейса ------------------------------------------------
+   Радиусы, отступы и элементы, повторяющие макет: карточка с рамкой, плитка
+   под иконку, переключатель, точка состояния, таблица и вкладки-подчёркивания.
+   Разметка разделов переводится на эти классы по мере правок. */
+:root{--radius-sm:10px;--radius-md:12px;--radius-lg:18px;--radius-pill:999px}
+
+/* Размеры кнопок задаём только настоящим кнопкам действий. Общее правило для
+   всех button ломало плашки встреч в календаре и иконочные кнопки: они тоже
+   button, но со своими размерами. */
+button{border-radius:var(--radius-md)}
+.primary,.ghost,.danger{padding:11px 18px;min-height:40px}
+.primary.small,.ghost.small,.danger.small{min-height:32px;padding:7px 12px}
+input,select,textarea{border-radius:var(--radius-sm);padding:12px 14px}
+input:focus-visible,select:focus-visible,textarea:focus-visible,button:focus-visible{outline:3px solid color-mix(in srgb,var(--accent) 28%,transparent);outline-offset:1px}
+
+/* Карточка-раздел: заголовок с подписью, содержимое и мягкая рамка. */
+.card{border:1px solid var(--line);border-radius:var(--radius-lg);background:var(--card);padding:18px 20px}
+.card+.card{margin-top:14px}
+.card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:14px}
+.card-head h3{margin:0;font-size:16px}
+.card-head p{margin:2px 0 0;color:var(--muted);font-size:13px}
+.card-actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* Плитка под иконку в заголовке диалога или карточки. */
+.icon-tile{display:grid;place-items:center;width:44px;height:44px;flex:none;border-radius:14px;background:color-mix(in srgb,var(--accent) 18%,var(--card));color:var(--accent-ink);border:1px solid color-mix(in srgb,var(--accent) 26%,var(--line))}
+
+/* Переключатель вместо чекбокса для одиночных настроек. */
+.switch{position:relative;display:inline-flex;width:44px;height:26px;flex:none;cursor:pointer}
+.switch input{position:absolute;opacity:0;width:100%;height:100%;margin:0;cursor:pointer}
+.switch span{flex:1;border-radius:var(--radius-pill);background:var(--surface2);border:1px solid var(--line);transition:background .15s ease}
+.switch span::after{content:"";position:absolute;top:3px;left:3px;width:20px;height:20px;border-radius:50%;background:var(--muted);transition:transform .15s ease,background .15s ease}
+.switch input:checked+span{background:var(--accent);border-color:var(--accent)}
+.switch input:checked+span::after{transform:translateX(18px);background:var(--on-accent)}
+.switch input:focus-visible+span{outline:3px solid color-mix(in srgb,var(--accent) 28%,transparent);outline-offset:2px}
+
+/* Вкладки-подчёркивания вместо вертикального списка. */
+.tabs-line{display:flex;gap:22px;border-bottom:1px solid var(--line);padding:0 2px}
+.tabs-line button{display:inline-flex;align-items:center;gap:8px;border:0;border-radius:0;background:transparent;color:var(--muted);padding:12px 2px;font-weight:650;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tabs-line button:hover{color:var(--ink)}
+.tabs-line button.active{color:var(--accent-ink);border-bottom-color:var(--accent)}
+
+/* Пометки: пилюля и точка состояния. */
+.pill{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:var(--radius-pill);background:color-mix(in srgb,var(--accent) 20%,var(--card));color:var(--accent-ink);font-size:12px;font-weight:650}
+.status-dot{display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.status-dot.ok{background:var(--success)}
+.status-dot.error{background:var(--danger)}
+
+/* Таблица данных: приглушённая шапка, разделители строк, просторные ячейки. */
+.data-table{width:100%;border-collapse:collapse;font-size:13px}
+.data-table th{text-align:left;font-weight:650;color:var(--muted);padding:10px 12px;border-bottom:1px solid var(--line);white-space:nowrap}
+.data-table td{padding:12px;border-bottom:1px solid var(--line);vertical-align:top}
+.data-table tr:last-child td{border-bottom:0}
+.data-table tbody tr:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+
+/* Преобразование форматов во вкладке «Файлы»: подпись и кнопки в одну строку. */
+.audio-actions{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 14px;padding:12px 14px;border:1px solid var(--line);border-radius:var(--radius-md);background:var(--surface)}
+.audio-actions-title{font-size:13px;font-weight:650;color:var(--muted);margin-right:auto}
+
+/* Строка «Ещё N» в дне: кнопка, открывающая этот день в панели справа,
+   и вторая строка карточки встречи. */
+.event-more{display:block;width:100%;margin-top:5px;padding:3px 7px;background:transparent;border:0;border-radius:8px;color:var(--muted);font-size:11px;font-weight:650;text-align:left;cursor:pointer}
+.event-more:hover{color:var(--accent-ink);background:var(--accent2)}
+.list-back{align-self:flex-start;margin-top:12px}
+.meeting-meta-line{display:flex;align-items:center;justify-content:space-between;gap:8px;color:var(--muted);font-size:12px}
+.meeting-meta-line .badge{margin-top:0}
+
+/* --- Сквозной стиль по макетам -------------------------------------------
+   Один проход по всем экранам: шапка, каркас диалога, поля с подписью сверху,
+   навигация, карточки встреч и файлов, блоки логов. Разметку не меняем, чтобы
+   ничего не сломать: правила намеренно идут после исходных. */
+
+/* Шапка: пункты без рамок, запись — залитая пилюля. */
+.topbar{height:60px;padding:0 22px}
+.record-actions{gap:4px}
+.record-actions button{background:transparent;border:1px solid transparent;font-weight:600}
+.record-actions button:hover{background:var(--accent2);border-color:transparent}
+.record-actions .primary{background:var(--accent);color:var(--on-accent);border-radius:var(--radius-pill);padding:10px 20px}
+.record-actions .primary:hover{background:var(--accent-hover)}
+.record-actions .danger{background:var(--danger-soft);color:var(--danger)}
+.record-actions .nav-badge{top:-2px;right:-2px}
+
+/* Каркас диалога: шапка с подписью и линии во всю ширину карточки. */
+.dialog-card>.dialog-head:first-child,.detail-card>.dialog-head:first-child{margin:-22px -22px 18px;padding:20px 22px 16px;border-bottom:1px solid var(--line)}
+.dialog-head h2{margin:0;font-size:21px}
+.dialog-head .meta{margin-top:4px;font-size:13px;line-height:1.45}
+.dialog-card>.dialog-actions,.detail-card>.dialog-actions{margin:20px -22px -22px;padding:16px 22px;border-top:1px solid var(--line);align-items:center}
+.dialog-actions .meta{margin-right:auto}
+
+/* Поля настроек: подпись над полем, подсказка под ним — как в макетах. */
+.setting-field{grid-template-columns:minmax(0,1fr)!important;gap:6px!important;align-items:start;padding:14px 2px}
+.setting-field .setting-label{font-size:13px;font-weight:650}
+.setting-field small{grid-column:1!important;margin-top:2px;font-size:12px!important;line-height:1.4}
+.setting-field input[type=checkbox]{justify-self:start;width:18px;height:18px}
+
+/* Навигация внутри диалогов: активный пункт — залитая плашка. */
+.settings-nav-item{border-radius:var(--radius-md);font-weight:650}
+.settings-nav-item.active{background:var(--accent2);color:var(--accent-ink)}
+.settings-layout{gap:22px;margin-top:0}
+
+/* Сворачиваемые разделы настроек: строка с линией сверху. */
+.settings-section-title{margin:22px 2px 6px;padding:14px 0 8px;border:0;border-top:1px solid var(--line);color:var(--muted);font-size:12px;font-weight:700;letter-spacing:.06em;text-transform:uppercase}
+
+/* Карточка встречи в списке — строка со разделителем, без своей рамки. */
+.meeting-item{padding:14px 4px;border:0;border-bottom:1px solid var(--line);border-radius:0}
+.meeting-item:hover{background:color-mix(in srgb,var(--accent) 7%,transparent);border-color:var(--line)}
+.meeting-item.hovered{background:color-mix(in srgb,var(--accent) 11%,transparent);border-color:var(--line);box-shadow:none}
+.meeting-item strong{font-size:14px;margin-top:3px}
+.meeting-item .meta{margin-top:0}
+
+/* Файлы и этапы: просторнее, с подсветкой строки. */
+.artifact,.speaker,.job{padding:14px 4px;gap:14px}
+.artifact:hover,.job:hover{background:color-mix(in srgb,var(--accent) 6%,transparent)}
+
+/* Блоки логов и JSON — врезка на тёмном фоне. */
+.diagnostics{border-radius:var(--radius-md);padding:14px;font-size:12px;line-height:1.55;margin:0}
+.dialog-head h3{margin:0;font-size:15px}
+
+/* Пометки: единая форма пилюли. */
+.badge{border-radius:var(--radius-pill);padding:4px 10px;font-size:11px;font-weight:700;margin-top:0}
+.count{border-radius:var(--radius-pill)}
+
+/* Аудит и журнал — строки лога на тёмной врезке. */
+.audit-log{display:flex;flex-direction:column;gap:2px;max-height:320px;overflow:auto;padding:12px 14px;background:var(--input);border:1px solid var(--line);border-radius:var(--radius-md);font:12px/1.7 ui-monospace,SFMono-Regular,Menlo,monospace}
+.audit-line{display:flex;gap:12px;align-items:baseline}
+.audit-time{color:var(--muted);min-width:64px}
+.audit-token{min-width:130px}
+.audit-call{color:var(--muted)}
+.audit-details{color:var(--accent-ink)}
+.audit-status{margin-left:auto;color:var(--muted)}
+
+/* «Интеграции»: секции карточками, переключатель со подписью, поля с подписью
+   сверху и сворачиваемые «Параметры связи». */
+.ig-section{display:flex;flex-direction:column;gap:14px}
+.ig-section .card{margin:0}
+.switch-line{display:flex;gap:14px;align-items:flex-start;justify-content:flex-start;text-align:left;cursor:pointer}
+.switch-text{display:flex;flex-direction:column;gap:3px;min-width:0;flex:1;text-align:left}
+.switch-text strong{font-size:15px}
+.switch-text small{color:var(--muted);font-size:12.5px;line-height:1.45}
+.field{display:flex;flex-direction:column;gap:6px;margin-top:14px}
+.field>span{font-size:13px;font-weight:650}
+.field-hint{color:var(--muted);font-size:12px;line-height:1.4}
+.collapsible>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;font-size:15px;font-weight:650;list-style:none}
+.collapsible>summary::-webkit-details-marker{display:none}
+.collapsible>summary::after{content:"+";color:var(--muted);font-size:18px;line-height:1}
+.collapsible[open]>summary::after{content:"−"}
+.token-row{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+.ig-footer{display:flex;justify-content:flex-end}
+.mask-head{display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap}
+
+/* --- Плотность как в макетах --------------------------------------------
+   Макеты заметно компактнее: меньше отступы, кегли и высоты элементов.
+   Правила намеренно в конце файла и с !important там, где общие правила для
+   label и кнопок перебивали раскладку карточек. */
+
+.card{padding:16px 18px;border-radius:16px}
+.dialog-head h2{font-size:20px}
+.dialog-head .meta{font-size:12.5px}
+.dialog-card>.dialog-head:first-child,.detail-card>.dialog-head:first-child{padding:16px 20px 14px;margin:-22px -22px 14px}
+.dialog-card>.dialog-actions,.detail-card>.dialog-actions{padding:13px 20px;margin:16px -22px -22px}
+.primary,.ghost,.danger{padding:9px 15px;min-height:36px}
+.primary.small,.ghost.small,.danger.small{min-height:29px;padding:6px 11px}
+.badge{padding:3px 9px;font-size:11px}
+.field{margin-top:12px}
+.field>span{font-size:12.5px}
+.ig-section{gap:12px}
+#integrationsDialog,.settings-dialog{max-width:min(1020px,calc(100vw - 30px))}
+
+/* Раскладка карточек не должна зависеть от глобальных правил label. */
+.card label.switch-line{display:flex!important;flex-direction:row!important;align-items:flex-start!important;
+  grid-template-columns:none!important;gap:14px!important;margin:0!important;font-weight:400!important;text-align:left!important}
+.card label.field{display:flex!important;flex-direction:column!important;align-items:stretch!important;
+  grid-template-columns:none!important;gap:6px!important;margin:12px 0 0!important;font-weight:400!important;text-align:left!important}
+.card label.field:first-child{margin-top:0!important}
+.switch-text strong{font-size:14px;font-weight:650}
+.switch-text small{font-size:12px;line-height:1.4}
+.mask-columns,.mask-row{padding-left:14px;padding-right:14px}
+
+/* Диагностика: карточки устройств, сворачиваемый JSON, журнал. */
+.diag-devices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px}
+.diag-device{margin:0}
+.diag-device .card-head h3{display:flex;align-items:center;gap:8px}
+.diag-device .meta{margin:6px 0 10px;font-size:13px}
+.diag-json{margin-top:16px}
+.diag-json>summary{display:flex;align-items:center;justify-content:space-between;gap:12px;cursor:pointer;font-size:14px;font-weight:650;list-style:none;padding:6px 0}
+.diag-json>summary::-webkit-details-marker{display:none}
+.diag-json>summary::after{content:"+";color:var(--muted);font-size:18px;line-height:1}
+.diag-json[open]>summary::after{content:"−"}
+.diag-logs-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin:18px 0 10px}
+.diag-logs-head h3{margin:0;font-size:14px}
+
+/* Модели: сетка карточек в две колонки, как в макете. */
+.model-group-items{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
+.model-item{border:1px solid var(--line);border-radius:16px;background:var(--card);padding:16px 18px}
+.model-item.selected{border-color:color-mix(in srgb,var(--accent) 55%,var(--line))}
+.model-item h3,.model-item h4{font-size:15px;margin:0}
+.model-item p,.model-item small{color:var(--muted);font-size:12px;line-height:1.45}
+.model-group+.model-group{margin-top:16px}
+.model-tabs{margin-bottom:14px}
+@media (max-width:760px){.diag-devices,.model-group-items{grid-template-columns:1fr}}
+
+/* Карточка модели: столбик без переполнения, кнопки в свою строку, путь файла —
+   в сворачиваемом блоке. */
+.model-item{display:flex!important;flex-direction:column;gap:8px;align-items:stretch;min-width:0}
+.model-item *{min-width:0}
+.model-title{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
+.model-title strong{font-size:15px;overflow-wrap:anywhere}
+.model-description{color:var(--muted);font-size:12.5px;line-height:1.45;overflow-wrap:anywhere}
+.model-meta{display:flex;gap:10px;flex-wrap:wrap;color:var(--muted);font-size:12px}
+.model-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+.model-item>.badge,.model-item>.pill{align-self:flex-start}
+.model-file{margin-top:4px;padding-top:10px;border-top:1px solid var(--line)}
+.model-file>summary{display:flex;align-items:center;justify-content:space-between;gap:10px;cursor:pointer;list-style:none;font-size:12.5px;font-weight:650}
+.model-file>summary::-webkit-details-marker{display:none}
+.model-file>summary::after{content:"+";color:var(--muted);font-size:16px;line-height:1}
+.model-file[open]>summary::after{content:"−"}
+.model-file code{display:block;margin-top:8px;font-size:11.5px;line-height:1.5;color:var(--muted);white-space:normal;word-break:break-all}
+.model-group-head h3{font-size:16px}
+.model-group-head p{color:var(--muted);font-size:12.5px;line-height:1.45;margin:4px 0 12px}
+
+/* Кнопки карточки модели — в строку: старое правило задавало столбец и
+   перебивало по специфичности. */
+.model-item .model-actions{display:flex!important;flex-direction:row!important;flex-wrap:wrap!important;gap:8px!important}
+.model-item .model-actions button{width:auto!important}
+
+/* Подсветка выбранной встречи при наведении на плашку в календаре: раньше она
+   была видна, я её ослабил до почти незаметной. */
+.meeting-item.hovered{background:color-mix(in srgb,var(--accent) 16%,transparent)!important;
+  border-color:transparent!important;box-shadow:inset 0 0 0 2px color-mix(in srgb,var(--accent) 60%,transparent)!important}
+
+/* Адаптивность: обе колонки сжимаются, на узком окне список уходит вниз. */
+main{grid-template-columns:minmax(0,1fr) minmax(260px,340px)!important}
+@media (max-width:1100px){
+  main{grid-template-columns:minmax(0,1fr)!important;grid-template-rows:auto auto!important;padding:10px!important}
+  .sidebar{max-height:none}
+}
+@media (max-width:820px){
+  .topbar{height:auto!important;flex-wrap:wrap;gap:8px;padding:8px 12px!important}
+  .calendar-head{flex-wrap:wrap;gap:6px}
+  .calendar-head h1{min-width:0!important;font-size:17px}
+}
+
+/* Переключатель в шапке карточки — справа, подпись слева. */
+.card label.switch-line{justify-content:space-between!important;align-items:center!important}
+.card label.switch-line .switch{order:2}
+.card label.switch-line .switch-text{order:1}
+
+/* Маски: имя жирным, шаблон серым ниже, корзина справа. */
+.mask-row{display:grid;grid-template-columns:24px minmax(0,1fr) 32px;gap:12px;align-items:start;border:1px solid var(--line);border-radius:12px;padding:12px 14px;margin-top:8px}
+.mask-row input[type=checkbox]{width:18px;height:18px;margin:2px 0 0;justify-self:center}
+.mask-fields{display:flex;flex-direction:column;gap:4px;min-width:0}
+.mask-name{font-weight:650;font-size:14px}
+.mask-pattern{font-size:12.5px;color:var(--muted)}
+.mask-row input[type=text]{width:100%;min-width:0;padding:7px 10px;background:var(--input);border:1px solid transparent;border-radius:8px}
+.mask-row input[type=text]:hover{border-color:var(--line)}
+.mask-row input[type=text]:focus{border-color:var(--accent)}
+.mask-remove{background:transparent;border:0;color:var(--muted);cursor:pointer;padding:4px;border-radius:6px;display:grid;place-items:center}
+.mask-remove:hover{color:var(--danger);background:color-mix(in srgb,var(--danger) 14%,transparent)}
+
+/* Сводка значения в сворачиваемой строке. */
+.collapsible-summary{color:var(--muted);font-size:12px;font-weight:400}
+.token-row .meta{display:flex;align-items:center;gap:8px}
+.token-row .meta svg{color:var(--muted)}
+
+/* Токены: служебная карточка и таблица остальных. */
+#pluginTokenCard .card-head{align-items:center}
+.plugin-token-title{min-width:0;flex:1}
+.plugin-token-title h3{margin:0;font-size:16px}
+.plugin-token-title p{margin:2px 0 8px;color:var(--muted);font-size:13px}
+.plugin-token-meta{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.plugin-token-tail{color:var(--muted);font-size:13px}
+.plugin-token-foot{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.status-line{display:flex;align-items:center;gap:8px;font-size:13px}
+.token-form{display:flex;flex-direction:column;gap:12px;margin:16px 0 4px;max-width:460px}
+.token-form .field{margin-top:0}
+.token-form-actions{display:flex;gap:8px;margin-top:2px}
+.token-columns{display:grid;grid-template-columns:minmax(0,1fr) 150px 150px auto;gap:12px;padding:0 14px;margin:18px 0 4px;font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.04em}
+.token-item{display:grid;grid-template-columns:minmax(0,1fr) 150px 150px auto;gap:12px;align-items:center;padding:12px 14px;border-bottom:1px solid var(--line)}
+.token-item:last-child{border-bottom:0}
+.token-name-cell .token-name{font-weight:650;font-size:14px}
+.token-name-cell .token-meta{color:var(--muted);font-size:12px}
+.token-cell{color:var(--muted);font-size:13px}
+.token-actions{display:flex;gap:6px;justify-content:flex-end}
+.token-reveal{grid-column:1 / -1;margin-top:4px}
+.token-list{margin-bottom:0}
+@media (max-width:700px){.token-columns,.token-item{grid-template-columns:minmax(0,1fr) auto}.token-cell:nth-child(2),.token-columns span:nth-child(2),.token-cell:nth-child(3),.token-columns span:nth-child(3){display:none}}
+
+/* Навигация настроек: подписи групп капсом. */
+.settings-nav-caption{font-size:11px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.06em;padding:14px 12px 4px}
+.settings-nav-caption:first-child{padding-top:4px}
+/* Ошибка в карточке встречи — рядом с пилюлей статуса. */
+.status-strip .detail-error{color:var(--danger);font-size:12px;margin-left:8px}
+.status-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+
+/* Токен плагина — строкой внизу карточки «Браузерная интеграция». */
+.browser-token{display:flex;align-items:center;gap:8px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+.browser-token svg{flex:none;color:var(--muted)}
+
+/* Маски: название и шаблон в одной строке. */
+.mask-row{display:grid;grid-template-columns:24px minmax(120px,1fr) minmax(180px,1.6fr) 32px;gap:10px;align-items:center;border:1px solid var(--line);border-radius:12px;padding:10px 14px;margin-top:8px}
+.mask-row input[type=checkbox]{width:18px;height:18px;margin:0;justify-self:center}
+.mask-row input[type=text]{width:100%;min-width:0;padding:7px 10px;background:var(--input);border:1px solid transparent;border-radius:8px}
+.mask-name{font-weight:650}
+.mask-pattern{color:var(--muted);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12.5px}
+@media (max-width:700px){.mask-row{grid-template-columns:24px minmax(0,1fr) 32px}.mask-pattern{display:none}}
+
+/* Индикаторы модели в углу карточки: галка — применена, стрелка на диск —
+   установлена. Зелёный — да, серый — нет, янтарный — идёт загрузка. */
+.model-flags{display:flex;align-items:center;gap:6px;flex:none;margin-left:8px}
+.model-flag{display:grid;place-items:center;width:24px;height:24px;border-radius:50%;flex:none;background:var(--surface2);color:var(--muted)}
+.model-flag.installed.on{background:var(--success-soft);color:var(--success)}
+.model-flag.installed.downloading{background:var(--warn-soft);color:var(--warn)}
+.model-flag.applied.on{background:var(--success-soft);color:var(--success)}
+.model-flag.applied.off{background:var(--surface2);color:var(--muted)}
+.model-title{min-width:0}
+.model-title strong{min-width:0;flex:1}
+
+/* Диагностика: карточки одной высоты, подпись драйвера прижата к низу. */
+.diag-devices{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;margin-top:14px;align-items:stretch}
+.diag-device{display:flex;flex-direction:column;gap:6px;margin:0;min-width:0}
+.diag-device-name{font-size:13px;color:var(--ink);overflow-wrap:anywhere}
+.diag-device-foot{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:auto;padding-top:10px}
+.diag-device-foot .field-hint{color:var(--muted)}
+
+/* Карточка встречи в списке: снова аккуратная карточка с заметной подсветкой
+   при наведении, как было раньше. */
+.meeting-item{padding:12px 14px;border:1px solid var(--line);border-radius:12px;cursor:pointer;margin-bottom:8px}
+.meeting-item:last-child{margin-bottom:0}
+.meeting-item:hover{border-color:var(--accent);background:var(--accent2)}
+.meeting-item.hovered{border-color:var(--accent);background:var(--accent2);box-shadow:0 0 0 2px color-mix(in srgb,var(--accent) 40%,transparent)}
+
+/* Кнопка и крестик в шапке диалога моделей. */
+.dialog-head-actions{display:flex;align-items:center;gap:10px;flex:none}
+
+/* Диалог моделей: шапка и вкладки на месте, прокручивается только список. */
+#modelsDialog .models-card{display:flex;flex-direction:column;min-height:0;max-height:min(84vh,880px)}
+#modelsDialog #modelsList{flex:1;min-height:0;overflow:auto;padding-right:4px}
+.models-toolbar{display:flex;align-items:center;gap:8px;margin:0 0 12px}
+.models-toolbar .icon-action{width:38px;height:38px;display:grid;place-items:center}
+.models-toolbar .icon-action.danger{color:var(--muted)}
+.models-toolbar .icon-action.danger:hover{color:var(--danger);background:color-mix(in srgb,var(--danger) 14%,transparent)}
+/* Корзина удаления модели в строке «Файл модели». */
+.model-file-tools{margin-left:auto;display:flex;align-items:center;gap:8px}
+.model-delete{background:transparent;border:0;color:var(--danger);cursor:pointer;padding:3px;border-radius:6px;display:grid;place-items:center;opacity:.75}
+.model-delete:hover{opacity:1;background:color-mix(in srgb,var(--danger) 14%,transparent)}
+
+/* Диалог моделей: жёсткая высота нужна, иначе flex-список не получает
+   определённой высоты и прокрутка не появляется вовсе. */
+#modelsDialog{max-height:min(86vh,900px);overflow:hidden;padding:0}
+#modelsDialog .models-card{display:flex;flex-direction:column;height:min(86vh,900px);max-height:min(86vh,900px);min-height:0;overflow:hidden;padding-bottom:0}
+#modelsDialog #modelsList{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:22px}
+
+/* Пилюли моделей: переносим строки вместо горизонтальной прокрутки, иначе
+   на узком окне третья пилюля обрезается полосой прокрутки. */
+.pills,.tabs{overflow:visible}
+#modelTabs{display:flex;flex-wrap:wrap;width:100%;max-width:100%;row-gap:6px;border-radius:16px;padding:5px}
+#modelTabs button{flex:0 1 auto;min-width:0;padding:8px 12px}
+@media (max-width:640px){
+  #modelTabs button{padding:7px 9px;font-size:12.5px;gap:5px}
+  .models-toolbar{gap:6px}
+}
+
+/* Группа моделей — flex-элемент списка, и с overflow:hidden её сжимало по
+   высоте: содержимое обрезалось, а прокрутка не появлялась. */
+.models-list .model-group{flex:0 0 auto;overflow:visible}
+.model-group-head{border-radius:14px 14px 0 0}
+
+/* Сохранить и крестик в шапке диалога интеграций. */
+.dialog-head-actions{display:flex;align-items:center;gap:10px;flex:none}
+
+/* Интеграции: диалог ограничен по высоте, лог аудита занимает свободное место,
+   а не обрезается на 320 px. */
+#integrationsDialog{max-height:min(88vh,940px);overflow:hidden;padding:0}
+#integrationsDialog .settings-card{display:flex;flex-direction:column;height:min(88vh,940px);max-height:min(88vh,940px);min-height:0;overflow:hidden;padding-bottom:0}
+#integrationsDialog .settings-layout{flex:1;min-height:0}
+#integrationsDialog .settings-form{flex:1;min-height:0;display:flex;flex-direction:column;overflow-y:auto;padding-bottom:20px}
+/* Аудит — исключение: он растягивается и отдаёт высоту логу. */
+#integrationsDialog .settings-form>.ig-section:not(#ig-audit){flex:none}
+#ig-audit{flex:1 1 auto;min-height:340px;display:flex;flex-direction:column}
+#ig-audit>.card{flex:none}
+#auditTable{flex:1;min-height:0;display:flex;flex-direction:column;margin-top:12px}
+#auditTable>.audit-log{flex:1;min-height:0;max-height:none}
+
+/* Диагностика: шапка закреплена, прокручивается только содержимое. */
+#diagDialog{max-height:min(88vh,940px);overflow:hidden;padding:0}
+#diagDialog .diagnostics-card{display:flex;flex-direction:column;height:min(88vh,940px);max-height:min(88vh,940px);min-height:0;overflow:hidden;padding-bottom:0}
+.diag-body{flex:1;min-height:0;overflow-y:auto;padding-bottom:22px}
+/* Название устройства занимает две строки всегда: иначе карточки микрофона и
+   системного звука стоят на разной высоте. */
+.diag-device-name{min-height:2.9em}
+
+/* Раскладка интеграций — сетка, поэтому растяжение задаём строками: вкладка
+   аудита должна занимать всю свободную высоту и отдавать её логу. */
+#integrationsDialog .settings-layout{grid-template-rows:auto minmax(0,1fr);align-content:stretch}
+
+/* Вторая карточка устройства получала margin-top от правила .card+.card и
+   уезжала вниз: в сетке отступ между ними уже задан gap. */
+#diagDevices .card{margin-top:0}
+
+/* Иконки в шапке: одинаковая ширина независимо от роли. Класс danger приносил
+   кнопке отступы обычной кнопки действия, из-за чего квадрат съезжал. */
+.icon-action,.icon-action.danger{padding:0;min-height:0;width:38px;height:38px}
+
+/* Быстрая подсказка вместо системной: системная всплывает слишком долго. */
+.icon-action[data-tip]{position:relative}
+.icon-action[data-tip]::after{content:attr(data-tip);position:absolute;top:calc(100% + 6px);left:50%;transform:translateX(-50%);
+  white-space:nowrap;background:var(--surface2);color:var(--ink);border:1px solid var(--line);border-radius:8px;
+  padding:5px 9px;font-size:12px;line-height:1.2;opacity:0;pointer-events:none;transition:opacity .12s ease;z-index:60}
+.icon-action[data-tip]:hover::after{opacity:1}
+.icon-action.danger{color:var(--muted)}
+.icon-action.danger:hover{color:var(--danger);background:color-mix(in srgb,var(--danger) 14%,transparent);border-color:transparent}
+
+/* Карточка встречи: шапка с вкладками на месте, прокручивается содержимое. */
+#detailDialog{max-height:min(90vh,960px);overflow:hidden;padding:0}
+#detailDialog .detail-card{display:flex;flex-direction:column;height:min(90vh,960px);max-height:min(90vh,960px);min-height:0;overflow:hidden;padding-bottom:0}
+#detailDialog #statusStrip{flex:none}
+#detailDialog .tabs{flex:none}
+#detailDialog .tab-content{flex:1;min-height:0;overflow-y:auto;padding-bottom:20px}
+
+/* Подсказка иконок не должна вылезать за диалог: переносим текст и
+   прижимаем её к левому краю кнопки, а в шапке — к правому. */
+.icon-action[data-tip]::after{left:0;transform:none;white-space:normal;text-align:left;max-width:min(260px,58vw);width:max-content}
+.dialog-head-actions .icon-action[data-tip]::after{left:auto;right:0;text-align:right}
+
+/* Токен плагина: текст слева, действия справа, в одной строке. */
+.browser-token{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding-top:14px;border-top:1px solid var(--line)}
+.browser-token-text{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:12.5px;min-width:0}
+.browser-token-text svg{flex:none}
+.browser-token-actions{display:flex;align-items:center;gap:6px;flex:none}
+.browser-token-actions .icon-action{width:34px;height:34px}
+
+/* Кнопки токена стоят сразу за текстом, а не у правого края: у правого края
+   подсказка не помещалась и давала горизонтальную прокрутку. */
+.browser-token{justify-content:flex-start}
+.browser-token-text{flex:0 1 auto}

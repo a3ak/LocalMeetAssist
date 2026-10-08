@@ -88,8 +88,6 @@ timeout_seconds = 3600
 num_threads = 4
 # Оставлены для чтения старых конфигураций; новый пайплайн всегда использует
 # окна PyAnnote по 10 секунд с перекрытием 5 секунд.
-chunk_seconds = 0
-chunk_overlap_seconds = 0
 
 [models]
 download_timeout_seconds = 7200
@@ -124,7 +122,6 @@ token_env = "MEETING_LLM_TOKEN"
 timeout_seconds = 300
 max_retries = 2
 system_prompt = ""
-prompt_file = "./prompts/meeting_summary.md"
 # Язык ответа протокола: пусто — как язык интерфейса; либо ru/en.
 language = ""
 tls_verify = true

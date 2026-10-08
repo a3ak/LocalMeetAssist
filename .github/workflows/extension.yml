@@ -23,16 +23,16 @@ jobs:
       run:
         working-directory: browser-extension
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: '24'
 
       - name: Собрать, проверить и упаковать
         run: npm run package
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: localmeetassist-browser-extensions
           path: browser-extension/artifacts/*.zip
