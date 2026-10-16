@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"localmeetassist/internal/config"
+	"localmeetassist/internal/modelmanager"
+	"localmeetassist/internal/sysinfo"
 )
 
 // modelList returns the state of all known models and runtimes.
@@ -24,6 +26,10 @@ func (s *Server) modelList(w http.ResponseWriter, r *http.Request) {
 // modelPath routes model download, apply and test actions.
 func (s *Server) modelPath(w http.ResponseWriter, r *http.Request) {
 	parts := splitPath(strings.TrimPrefix(r.URL.Path, "/api/v1/models/"))
+	if len(parts) == 1 && parts[0] == "resources" && r.Method == http.MethodGet {
+		writeJSON(w, http.StatusOK, sysinfo.Detect(s.config().App.DataDir))
+		return
+	}
 	if r.Method != http.MethodPost {
 		http.NotFound(w, r)
 		return
@@ -42,6 +48,18 @@ func (s *Server) modelPath(w http.ResponseWriter, r *http.Request) {
 	}
 	switch parts[1] {
 	case "download":
+		var request struct {
+			Force bool `json:"force"`
+		}
+		// Тело необязательно: без него запрос означает обычную загрузку.
+		if r.Body != nil {
+			_ = decodeJSON(r, &request)
+		}
+		if resources, spec, found, short := s.resourceShortfall(parts[0]); found && short && !request.Force {
+			s.logger.Printf("model download refused id=%s: insufficient resources", parts[0])
+			writeResourceRefusal(w, resources, spec)
+			return
+		}
 		if err := s.models.Start(parts[0]); err != nil {
 			writeError(w, http.StatusConflict, err.Error())
 			return
@@ -95,12 +113,68 @@ func (s *Server) applyModel(w http.ResponseWriter, id string) {
 
 // downloadRecommended starts downloads for every recommended model that is not
 // installed yet and switches on the pipeline steps those models serve.
+// resourceShortfallFor compares a model requirement with the machine. Kept
+// separate from detection so both directions can be tested: on a large machine
+// the shortage branch would otherwise never run.
+func resourceShortfallFor(resources sysinfo.Resources, spec modelmanager.Spec) bool {
+	if spec.MinRAMBytes > 0 && int64(resources.TotalRAMBytes) < spec.MinRAMBytes {
+		return true
+	}
+	return spec.MinDiskBytes > 0 && int64(resources.FreeDiskBytes) < spec.MinDiskBytes
+}
+
+// resourceShortfall reports the model requirement when the machine cannot run
+// it. found is false when the model is unknown or has no stated requirement.
+func (s *Server) resourceShortfall(id string) (sysinfo.Resources, modelmanager.Spec, bool, bool) {
+	for _, status := range s.models.Statuses() {
+		if status.ID != id {
+			continue
+		}
+		if status.MinRAMBytes <= 0 && status.MinDiskBytes <= 0 {
+			return sysinfo.Resources{}, status.Spec, true, false
+		}
+		resources := sysinfo.Detect(s.config().App.DataDir)
+		return resources, status.Spec, true, resourceShortfallFor(resources, status.Spec)
+	}
+	return sysinfo.Resources{}, modelmanager.Spec{}, false, false
+}
+
+// writeResourceRefusal explains that a model cannot run here and lets the UI ask
+// the user whether to download it anyway.
+func writeResourceRefusal(w http.ResponseWriter, resources sysinfo.Resources, spec modelmanager.Spec) {
+	writeJSON(w, http.StatusConflict, map[string]any{
+		"code":                "insufficient_resources",
+		"model":               spec.ID,
+		"name":                spec.Name,
+		"required_ram_bytes":  spec.MinRAMBytes,
+		"required_disk_bytes": spec.MinDiskBytes,
+		"total_ram_bytes":     resources.TotalRAMBytes,
+		"free_disk_bytes":     resources.FreeDiskBytes,
+	})
+}
+
 func (s *Server) downloadRecommended(w http.ResponseWriter) {
 	ids := make([]string, 0)
+	skipped := make([]map[string]any, 0)
 	for _, status := range s.models.Statuses() {
-		if status.Recommended && !status.Exists && !status.Downloading {
-			ids = append(ids, status.ID)
+		if !status.Recommended || status.Exists || status.Downloading {
+			continue
 		}
+		// Модель, которой не хватает ресурсов, в набор не попадает: иначе одна
+		// кнопка тянула бы то, что на этой машине всё равно не запустится.
+		if resources, spec, found, short := s.resourceShortfall(status.ID); found && short {
+			skipped = append(skipped, map[string]any{
+				"id":                  spec.ID,
+				"name":                spec.Name,
+				"required_ram_bytes":  spec.MinRAMBytes,
+				"required_disk_bytes": spec.MinDiskBytes,
+				"total_ram_bytes":     resources.TotalRAMBytes,
+				"free_disk_bytes":     resources.FreeDiskBytes,
+			})
+			s.logger.Printf("recommended model skipped id=%s: insufficient resources", status.ID)
+			continue
+		}
+		ids = append(ids, status.ID)
 	}
 	for _, id := range ids {
 		if err := s.models.Start(id); err != nil {
@@ -113,8 +187,8 @@ func (s *Server) downloadRecommended(w http.ResponseWriter) {
 			s.logger.Printf("enable steps after recommended download: %v", err)
 		}
 	}
-	s.logger.Printf("recommended models requested count=%d", len(ids))
-	writeJSON(w, http.StatusAccepted, map[string]any{"started": ids})
+	s.logger.Printf("recommended models requested count=%d skipped=%d", len(ids), len(skipped))
+	writeJSON(w, http.StatusAccepted, map[string]any{"started": ids, "skipped": skipped})
 }
 
 // deleteModel removes one installed model so the disk space can be reclaimed.

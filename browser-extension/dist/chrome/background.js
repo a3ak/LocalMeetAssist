@@ -751,11 +751,14 @@
     get compatible() { return !!(this.config?.protocol_version === 1 && this.config.capabilities?.includes('manual_tabs') && this.config.capabilities.includes('recording_state')); }
     get active() { return this.recordingKnown && this.control.data.active === true; }
     async updateBadge() {
+      const disabled = this.config?.enabled === false;
       const waiting = this.status === 'online' && this.config?.enabled && this.matchedCount > 0 && this.state.owner && this.state.state === 'awaiting_confirmation';
       const disconnected = this.status !== 'online';
-      const presentation = { text:this.status==='not_configured'?'':disconnected?'!':waiting?'?':'', recording:!disconnected&&this.active,
-        color:disconnected?'#b45309':waiting?'#facc15':'#4263eb',textColor:waiting?'#111827':'#ffffff',
-        title:'LocalMeetAssist — '+(disconnected?'Состояние записи неизвестно':this.active?(this.control.data.notice||'Идёт запись встречи'):waiting?'Начать запись встречи? Нажмите значок, чтобы ответить':this.config?.enabled===false?'Интеграция выключена':this.config?.mode==='notify'?'Спрашивать перед записью — ожидание встречи':'Автоматическая запись — ожидание встречи') };
+      // Выключенная интеграция — постоянный жёлтый «!». Раньше значок мигал
+      // оранжевым, потому что состояние соединения успевало измениться.
+      const presentation = { text:this.status==='not_configured'?'':(disabled||disconnected)?'!':waiting?'?':'', recording:!disabled&&!disconnected&&this.active,
+        color:disabled?'#facc15':disconnected?'#b45309':waiting?'#facc15':'#4263eb',textColor:(disabled||waiting)?'#111827':'#ffffff',
+        title:'LocalMeetAssist — '+(disabled?'Интеграция выключена':disconnected?'Состояние записи неизвестно':this.active?(this.control.data.notice||'Идёт запись встречи'):waiting?'Начать запись встречи? Нажмите значок, чтобы ответить':this.config?.mode==='notify'?'Спрашивать перед записью — ожидание встречи':'Автоматическая запись — ожидание встречи') };
       const task = this.actionQueue.then(()=>this.api.presentAction(presentation)); this.actionQueue=task.catch(()=>{}); await task;
     }
     async recording(message) {

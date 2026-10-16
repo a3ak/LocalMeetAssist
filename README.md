@@ -50,6 +50,8 @@ LocalMeetAssist записывает встречу с микрофона и с�
 - саммари через любой сервер с OpenAI-совместимым API: локальный llama.cpp, Ollama, LM Studio или внешний сервис;
 - менеджер моделей: скачивание, проверка и переключение;
 - значок в системном трее, глобальные горячие клавиши и индикация идущей записи;
+- включённое по умолчанию определение конференции по одновременной активности микрофона и системного звука с подтверждением перед записью; окно ожидания настраивается и по умолчанию равно 10 секундам;
+- выбор нескольких переподключений в правой панели и объединение их аудио и временной шкалы в одну встречу;
 - тёмная и светлая темы, русский и английский интерфейс;
 - диагностика: состояние аудиоподсистемы и последние строки лога;
 
@@ -297,6 +299,8 @@ The application captures audio itself, while the control interface opens in a br
 - summaries through any server with an OpenAI-compatible API: local llama.cpp, Ollama, LM Studio, or a remote service;
 - a model manager for downloading, validating, and switching models;
 - a system tray icon, global hotkeys, and a recording indicator;
+- conference detection enabled by default from simultaneous microphone capture and system playback, always asking before recording; the configurable confirmation window defaults to 10 seconds;
+- multi-select and merge for reconnection fragments, including a wall-clock-correct audio timeline;
 - dark and light themes, Russian and English interfaces;
 - diagnostics with audio subsystem state and recent log lines;
 

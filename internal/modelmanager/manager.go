@@ -52,15 +52,19 @@ type Spec struct {
 	Group          string   `json:"group"`
 	// Recommended marks the models the default pipeline needs: the button in the
 	// UI installs exactly this set.
-	Recommended bool        `json:"recommended,omitempty"`
-	Description string      `json:"description"`
-	ApproxBytes int64       `json:"approx_bytes,omitempty"`
-	SettingKey  string      `json:"-"`
-	Engine      string      `json:"-"`
-	Selectable  bool        `json:"selectable,omitempty"`
-	Selected    bool        `json:"selected,omitempty"`
-	License     string      `json:"license,omitempty"`
-	Components  []Component `json:"components,omitempty"`
+	Recommended bool   `json:"recommended,omitempty"`
+	Description string `json:"description"`
+	ApproxBytes int64  `json:"approx_bytes,omitempty"`
+	// MinRAMBytes and MinDiskBytes are what the machine needs to actually run
+	// the model. Zero means there is no meaningful requirement.
+	MinRAMBytes  int64       `json:"min_ram_bytes,omitempty"`
+	MinDiskBytes int64       `json:"min_disk_bytes,omitempty"`
+	SettingKey   string      `json:"-"`
+	Engine       string      `json:"-"`
+	Selectable   bool        `json:"selectable,omitempty"`
+	Selected     bool        `json:"selected,omitempty"`
+	License      string      `json:"license,omitempty"`
+	Components   []Component `json:"components,omitempty"`
 }
 
 // Status is a Spec plus its current installation and download state.
@@ -178,7 +182,7 @@ func onnxRuntimeSpec(cfg config.Config) Spec {
 		"windows/arm64": {"onnxruntime-win-arm64-" + version + ".zip", "onnxruntime.dll", "1cfe88b6435df3b5fb0e9f6bd7d6f5df1e887b6174de7f6e2a47bab956f3f168", 78_932_411},
 	}
 	asset, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
-	spec := Spec{ID: "onnx-runtime", Name: "ONNX Runtime " + version, Path: path, Group: "runtime", Recommended: true, Description: "Нативная среда выполнения ONNX для этой ОС и архитектуры. Загружается один раз; CLI-приложения не используются.", Selected: true, License: "MIT"}
+	spec := Spec{ID: "onnx-runtime", MinRAMBytes: 536870912, MinDiskBytes: 209715200, Name: "ONNX Runtime " + version, Path: path, Group: "runtime", Recommended: true, Description: "Нативная среда выполнения ONNX для этой ОС и архитектуры. Загружается один раз; CLI-приложения не используются.", Selected: true, License: "MIT"}
 	if !ok || version != "1.23.2" {
 		return spec
 	}
@@ -206,6 +210,54 @@ func WhisperRuntimeLibraryPath(configured string) string {
 	}
 }
 
+// LlamaRuntimeLibraryPath returns the platform path of the llama.cpp library.
+func LlamaRuntimeLibraryPath(configured string) string {
+	base := filepath.Join(filepath.Clean(configured), runtime.GOOS+"-"+runtime.GOARCH)
+	switch runtime.GOOS {
+	case "darwin":
+		return filepath.Join(base, "libllama.0.dylib")
+	case "windows":
+		return filepath.Join(base, "llama.dll")
+	default:
+		return filepath.Join(base, "libllama.so.0")
+	}
+}
+
+// llamaRuntimeSpec describes the llama.cpp runtime used by local summarization.
+// Like whisper.cpp it downloads the official prebuilt release, so no compiler is
+// needed on any supported platform. Sizes, checksums, archive prefixes and the
+// library file name were taken from release b11696.
+func llamaRuntimeSpec(cfg config.Config) Spec {
+	const tag = "b11696"
+	base := filepath.Join(filepath.Clean(cfg.Inference.WhisperRuntimePath), "..", "llama.cpp", runtime.GOOS+"-"+runtime.GOARCH)
+	base = filepath.Clean(base)
+	type asset struct {
+		name, archive, prefix, runtimeFile, sha string
+		size                                    int64
+	}
+	assets := map[string]asset{
+		// Файлы лежат в каталоге llama-b11696/, библиотеки версионированные.
+		"darwin/amd64": {"llama-b11696-bin-macos-x64.tar.gz", "tgzlibs", "llama-b11696/", "libllama.0.dylib", "366662e7a501cddcf8c0b743ce081d150edd15869cb7e5b0877fbeb1cbfcc171", 11_704_689},
+		"darwin/arm64": {"llama-b11696-bin-macos-arm64.tar.gz", "tgzlibs", "llama-b11696/", "libllama.0.dylib", "6aac007fbe153efefe06250d2cf05d0487583aa0706379082ebef2b05579f649", 12_222_784},
+		"linux/amd64":  {"llama-b11696-bin-ubuntu-x64.tar.gz", "tgzlibs", "llama-b11696/", "libllama.so.0", "6a04629ca5265eb4c5c7d6edec8d6fa429e7e7da2de1cd5d5e357a492fc8f802", 17_883_307},
+		"linux/arm64":  {"llama-b11696-bin-ubuntu-arm64.tar.gz", "tgzlibs", "llama-b11696/", "libllama.so.0", "2a415c6641e1ba4ba73a6db91479bb88382419e913973ceddac2f63865191202", 13_935_439},
+		// Windows-архив распаковывается в корень, без каталога-обёртки.
+		"windows/amd64": {"llama-b11696-bin-win-cpu-x64.zip", "ziplibs", "", "llama.dll", "1e7c47dff58467540d53e6cf302d83951bcb165afb252c2952ed3872190fc60d", 19_575_690},
+		"windows/arm64": {"llama-b11696-bin-win-cpu-arm64.zip", "ziplibs", "", "llama.dll", "6a5eed00283fdf2c343b4659018408c9e84f2932cddb133c92a0966146911ca8", 12_469_399},
+	}
+	a, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
+	spec := Spec{ID: "llama-runtime", MinRAMBytes: 536870912, MinDiskBytes: 314572800, Name: "llama.cpp native runtime", Path: base, Group: "runtime", Description: "Нативная библиотека llama.cpp для локальной саммаризации. Скачивается готовая сборка; llama-cli не устанавливается и не запускается.", License: "MIT"}
+	if !ok {
+		return spec
+	}
+	spec.URL = "https://github.com/ggml-org/llama.cpp/releases/download/" + tag + "/" + a.name
+	spec.DownloadSHA256 = a.sha
+	spec.Archive = a.archive + ":" + a.prefix
+	spec.RequiredFiles = []string{a.runtimeFile}
+	spec.ApproxBytes = a.size
+	return spec
+}
+
 func whisperRuntimeSpec(cfg config.Config) Spec {
 	const tag = "b5130"
 	base := filepath.Join(filepath.Clean(cfg.Inference.WhisperRuntimePath), runtime.GOOS+"-"+runtime.GOARCH)
@@ -222,7 +274,7 @@ func whisperRuntimeSpec(cfg config.Config) Spec {
 		"windows/arm64": {"whisper-bin-win-cpu-arm64.zip", "ziplibs", "Release/", "whisper.dll", "799543b926ab5b6c2d60cab269a2092e0ae8d27820e9e15429e59de3699546fc", 4_361_895},
 	}
 	a, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
-	spec := Spec{ID: "whisper-runtime", Name: "Whisper.cpp native runtime", Path: base, Group: "runtime", Description: "Нативная библиотека whisper.cpp. LocalMeetAssist вызывает её напрямую; whisper-cli не устанавливается и не запускается.", Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native"), License: "MIT"}
+	spec := Spec{ID: "whisper-runtime", MinRAMBytes: 536870912, MinDiskBytes: 314572800, Name: "Whisper.cpp native runtime", Path: base, Group: "runtime", Description: "Нативная библиотека whisper.cpp. LocalMeetAssist вызывает её напрямую; whisper-cli не устанавливается и не запускается.", Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native"), License: "MIT"}
 	if !ok {
 		return spec
 	}
@@ -248,21 +300,23 @@ func New(cfg config.Config, logger *log.Logger) *Manager {
 	}
 	runtimeSpec := onnxRuntimeSpec(cfg)
 	whisperSpec := whisperRuntimeSpec(cfg)
+	llamaSpec := llamaRuntimeSpec(cfg)
 	specs := []Spec{
 		runtimeSpec,
 		whisperSpec,
-		{ID: "gigaam-v3-e2e-rnnt-int8", Name: "GigaAM v3 E2E RNNT INT8", Path: gigaDir, Group: "transcription", Recommended: true, Description: "Рекомендуемая русскоязычная модель: пунктуация и нормализация текста, RNNT-декодирование, около 227 МБ. Обрабатывает найденные VAD речевые фрагменты непосредственно в LocalMeetAssist.", ApproxBytes: 226_500_000, SettingKey: "transcription.model_path", Engine: "gigaam-onnx", Selectable: true, Selected: samePath(cfg.Transcription.ModelPath, gigaDir) && strings.EqualFold(cfg.Transcription.Engine, "gigaam-onnx"), License: "MIT", Components: []Component{
+		llamaSpec,
+		{ID: "gigaam-v3-e2e-rnnt-int8", MinRAMBytes: 1610612736, MinDiskBytes: 419430400, Name: "GigaAM v3 E2E RNNT INT8", Path: gigaDir, Group: "transcription", Recommended: true, Description: "Рекомендуемая русскоязычная модель: пунктуация и нормализация текста, RNNT-декодирование, около 227 МБ. Обрабатывает найденные VAD речевые фрагменты непосредственно в LocalMeetAssist.", ApproxBytes: 226_500_000, SettingKey: "transcription.model_path", Engine: "gigaam-onnx", Selectable: true, Selected: samePath(cfg.Transcription.ModelPath, gigaDir) && strings.EqualFold(cfg.Transcription.Engine, "gigaam-onnx"), License: "MIT", Components: []Component{
 			{Name: "encoder", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_encoder.int8.onnx"), URL: cfg.Models.GigaAMEncoderURL, SHA256: cfg.Models.GigaAMEncoderSHA256, ApproxBytes: 224_570_477},
 			{Name: "decoder", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_decoder.int8.onnx"), URL: cfg.Models.GigaAMDecoderURL, SHA256: cfg.Models.GigaAMDecoderSHA256, ApproxBytes: 1_159_170},
 			{Name: "joint", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_joint.int8.onnx"), URL: cfg.Models.GigaAMJointURL, SHA256: cfg.Models.GigaAMJointSHA256, ApproxBytes: 687_791},
 			{Name: "vocabulary", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_vocab.txt"), URL: cfg.Models.GigaAMVocabURL, SHA256: cfg.Models.GigaAMVocabSHA256, ApproxBytes: 13_400},
 		}},
-		{ID: "whisper-small-q5", Name: "Whisper small Q5_1", Path: filepath.Join(modelsBase, "ggml-small-q5_1.bin"), URL: cfg.Models.WhisperSmallURL, SHA256: cfg.Models.WhisperSmallSHA256, Group: "transcription", Description: "Компактный мультиязычный Whisper: быстрее medium, около 181 МБ. Подходит для быстрых черновиков и слабых CPU.", ApproxBytes: 190_085_487, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-small-q5_1.bin")), License: "MIT"},
-		{ID: "whisper-medium-q5", Name: "Whisper medium Q5_0", Path: filepath.Join(modelsBase, "ggml-medium-q5_0.bin"), URL: cfg.Models.WhisperMediumURL, SHA256: cfg.Models.WhisperMediumSHA256, Group: "transcription", Description: "Более точный мультиязычный Whisper, около 514 МБ. Хороший баланс для сложной речи и терминов.", ApproxBytes: 539_212_467, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-medium-q5_0.bin")), License: "MIT"},
-		{ID: "whisper-large-v3-turbo-q5", Name: "Whisper large-v3-turbo Q5_0", Path: filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin"), URL: cfg.Models.WhisperTurboURL, SHA256: cfg.Models.WhisperTurboSHA256, Group: "transcription", Description: "Наиболее качественный из предлагаемых Whisper при заметно меньшей цене, чем full large-v3; около 574 МБ.", ApproxBytes: 574_041_195, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin")), License: "MIT"},
-		{ID: "silero-vad", Name: "Silero VAD 6.2 ONNX", Path: cfg.Transcription.VADModelPath, URL: cfg.Models.VADURL, SHA256: cfg.Models.VADSHA256, Group: "speech_filter", Recommended: true, Description: "Находит речь и делит длинную встречу на фрагменты до 20 секунд. Снижает повторы и выдуманный текст на тишине.", ApproxBytes: 2_330_000, Selected: true, License: "MIT"},
-		{ID: "diarization-segmentation", Name: "PyAnnote Segmentation 3.0 ONNX", Path: cfg.Diarization.SegmentationModel, URL: cfg.Models.SegmentationURL, SHA256: cfg.Models.SegmentationSHA256, Group: "diarization", Recommended: true, Description: "Определяет локальные дорожки речи и перекрытия голосов в окнах по 10 секунд. Работает без Python и Hugging Face token.", ApproxBytes: 5_986_908, Selected: true, License: "MIT"},
-		{ID: "diarization-embedding-wespeaker", Name: "WeSpeaker ResNet34-LM VoxCeleb", Path: cfg.Diarization.EmbeddingModel, URL: cfg.Models.EmbeddingURL, SHA256: cfg.Models.EmbeddingSHA256, Group: "diarization", Recommended: true, Description: "Строит 256-мерные признаки голосов для глобальной кластеризации по всей встрече. Количество участников встречи используется как точное ограничение.", ApproxBytes: 26_530_309, SettingKey: "diarization.embedding_model", Selectable: true, Selected: true, License: "CC BY 4.0"},
+		{ID: "whisper-small-q5", MinRAMBytes: 1610612736, MinDiskBytes: 367001600, Name: "Whisper small Q5_1", Path: filepath.Join(modelsBase, "ggml-small-q5_1.bin"), URL: cfg.Models.WhisperSmallURL, SHA256: cfg.Models.WhisperSmallSHA256, Group: "transcription", Description: "Компактный мультиязычный Whisper: быстрее medium, около 181 МБ. Подходит для быстрых черновиков и слабых CPU.", ApproxBytes: 190_085_487, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-small-q5_1.bin")), License: "MIT"},
+		{ID: "whisper-medium-q5", MinRAMBytes: 2684354560, MinDiskBytes: 838860800, Name: "Whisper medium Q5_0", Path: filepath.Join(modelsBase, "ggml-medium-q5_0.bin"), URL: cfg.Models.WhisperMediumURL, SHA256: cfg.Models.WhisperMediumSHA256, Group: "transcription", Description: "Более точный мультиязычный Whisper, около 514 МБ. Хороший баланс для сложной речи и терминов.", ApproxBytes: 539_212_467, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-medium-q5_0.bin")), License: "MIT"},
+		{ID: "whisper-large-v3-turbo-q5", MinRAMBytes: 3221225472, MinDiskBytes: 943718400, Name: "Whisper large-v3-turbo Q5_0", Path: filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin"), URL: cfg.Models.WhisperTurboURL, SHA256: cfg.Models.WhisperTurboSHA256, Group: "transcription", Description: "Наиболее качественный из предлагаемых Whisper при заметно меньшей цене, чем full large-v3; около 574 МБ.", ApproxBytes: 574_041_195, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin")), License: "MIT"},
+		{ID: "silero-vad", MinRAMBytes: 536870912, MinDiskBytes: 52428800, Name: "Silero VAD 6.2 ONNX", Path: cfg.Transcription.VADModelPath, URL: cfg.Models.VADURL, SHA256: cfg.Models.VADSHA256, Group: "speech_filter", Recommended: true, Description: "Находит речь и делит длинную встречу на фрагменты до 20 секунд. Снижает повторы и выдуманный текст на тишине.", ApproxBytes: 2_330_000, Selected: true, License: "MIT"},
+		{ID: "diarization-segmentation", MinRAMBytes: 1073741824, MinDiskBytes: 104857600, Name: "PyAnnote Segmentation 3.0 ONNX", Path: cfg.Diarization.SegmentationModel, URL: cfg.Models.SegmentationURL, SHA256: cfg.Models.SegmentationSHA256, Group: "diarization", Recommended: true, Description: "Определяет локальные дорожки речи и перекрытия голосов в окнах по 10 секунд. Работает без Python и Hugging Face token.", ApproxBytes: 5_986_908, Selected: true, License: "MIT"},
+		{ID: "diarization-embedding-wespeaker", MinRAMBytes: 1073741824, MinDiskBytes: 104857600, Name: "WeSpeaker ResNet34-LM VoxCeleb", Path: cfg.Diarization.EmbeddingModel, URL: cfg.Models.EmbeddingURL, SHA256: cfg.Models.EmbeddingSHA256, Group: "diarization", Recommended: true, Description: "Строит 256-мерные признаки голосов для глобальной кластеризации по всей встрече. Количество участников встречи используется как точное ограничение.", ApproxBytes: 26_530_309, SettingKey: "diarization.embedding_model", Selectable: true, Selected: true, License: "CC BY 4.0"},
 	}
 	m := &Manager{client: &http.Client{Timeout: timeout}, logger: logger, language: cfg.App.Language, specs: make(map[string]Spec), state: make(map[string]*Status)}
 	for _, spec := range specs {

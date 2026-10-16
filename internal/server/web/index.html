@@ -63,7 +63,7 @@
     </section>
 
     <aside class="sidebar">
-      <div class="sidebar-head"><h2 id="meetingListTitle" data-i18n="meetings.title">Встречи</h2><span id="meetingCount" class="count">0</span></div>
+      <div class="sidebar-head"><h2 id="meetingListTitle" data-i18n="meetings.title">Встречи</h2><div class="sidebar-counts"><span id="selectedMeetingCount" class="count selected-count hidden"></span><button id="mergeMeetings" type="button" class="icon-action hidden" data-i18n-title="meetings.merge" title="Объединить выбранные встречи" aria-label="Объединить выбранные встречи"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 3v5a4 4 0 0 0 4 4h6"/><path d="M7 21v-5a4 4 0 0 1 4-4"/><path d="m14 8 4 4-4 4"/></svg></button><span id="meetingCount" class="count">0</span></div></div>
       <div id="meetingList" class="meeting-list"></div>
     </aside>
   </main>
@@ -78,6 +78,15 @@
       <div id="permissionHint" class="hint"></div>
       <div class="dialog-actions"><button id="cancelRecord" type="button" class="ghost" data-i18n="common.cancel">Отмена</button><button id="confirmRecord" type="submit" class="primary" data-i18n="record.confirm">Начать</button></div>
     </form>
+  </dialog>
+
+  <dialog id="conferenceDialog">
+    <div class="dialog-card conference-card">
+      <div class="dialog-head"><div><h2 data-i18n="conference.title">Похоже, началась онлайн-встреча</h2><div id="conferenceApp" class="meta"></div></div></div>
+      <p id="conferenceQuestion"></p>
+      <div id="conferenceBackend" class="hint"></div>
+      <div class="dialog-actions" id="conferenceActions"></div>
+    </div>
   </dialog>
 
   <dialog id="createDialog">
@@ -227,7 +236,7 @@
     </div>
   </dialog>
 
-  <div id="toast" class="toast hidden"></div>
+  <div id="toast" class="toast" popover="manual"></div>
   <script src="/web/app.js"></script>
 </body>
 </html>

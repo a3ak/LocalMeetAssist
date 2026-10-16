@@ -75,6 +75,10 @@ func (s *Server) meetingPath(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
+	if parts[0] == "merge" {
+		s.mergeMeetings(w, r)
+		return
+	}
 	uid := parts[0]
 	if len(parts) == 1 {
 		s.meetingCRUD(w, r, uid)

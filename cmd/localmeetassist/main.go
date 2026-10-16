@@ -101,6 +101,8 @@ func main() {
 			logger.Printf("http server: %v", err)
 		}
 	}()
+	detectionCtx, stopDetection := context.WithCancel(context.Background())
+	app.StartConferenceDetection(detectionCtx)
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
@@ -119,6 +121,7 @@ func main() {
 	} else {
 		<-ch
 	}
+	stopDetection()
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := app.StopActiveRecording(ctx); err != nil {

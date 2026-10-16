@@ -52,6 +52,8 @@ func (s *Server) eventStream(w http.ResponseWriter, r *http.Request) {
 	active, _ := s.activeRecording()
 	initial, _ := json.Marshal(map[string]any{"type": "recording", "payload": recordingState(active)})
 	_, _ = fmt.Fprintf(w, "data: %s\n\n", initial)
+	conference, _ := json.Marshal(map[string]any{"type": "conference_detection", "payload": s.conferenceSnapshot()})
+	_, _ = fmt.Fprintf(w, "data: %s\n\n", conference)
 	flusher.Flush()
 	keepAlive := time.NewTicker(15 * time.Second)
 	defer keepAlive.Stop()

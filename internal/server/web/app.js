@@ -26,6 +26,8 @@ const state = {
   searchSpeakers: [],
   searchTimer: null,
   searchRequest: 0,
+  conferenceCandidate: null,
+  selectedMeetings: new Set(),
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -106,9 +108,11 @@ async function api(path, options = {}) {
   }
   if (response.status === 403) showAuthHint();
   if (!response.ok) {
-    let error = {};
-    try { error = await response.json(); } catch {}
-    throw new Error(error.error || `HTTP ${response.status}`);
+    let payload = {};
+    try { payload = await response.json(); } catch {}
+    const error = new Error(payload.error || `HTTP ${response.status}`);
+    error.payload = payload;
+    throw error;
   }
   if (response.status === 204) return null;
   return response.json();
@@ -117,8 +121,16 @@ async function api(path, options = {}) {
 function toast(message) {
   const node = $("#toast");
   node.textContent = message;
-  node.classList.remove("hidden");
   clearTimeout(node._timer);
+  // Модальное окно живёт в top layer и перекрывает любой z-index, поэтому
+  // уведомление показывается как popover: он тоже попадает в top layer и
+  // оказывается поверх открытых настроек. Без поддержки — обычный показ.
+  if (typeof node.showPopover === "function") {
+    if (!node.matches(":popover-open")) node.showPopover();
+    node._timer = setTimeout(() => node.hidePopover(), 6500);
+    return;
+  }
+  node.classList.remove("hidden");
   node._timer = setTimeout(() => node.classList.add("hidden"), 6500);
 }
 
@@ -162,6 +174,8 @@ async function loadMeetings() {
   const { from, to } = calendarBounds(state.month);
   const result = await api(`/api/v1/meetings?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
   state.meetings = Array.isArray(result) ? result : [];
+  const loaded = new Set(state.meetings.map((meeting) => meeting.uid));
+  state.selectedMeetings = new Set([...state.selectedMeetings].filter((uid) => loaded.has(uid)));
   // Период сменился — выбранный день из него больше не актуален.
   state.listDay = null;
   renderCalendar();
@@ -184,6 +198,17 @@ function clearListDay() {
 document.addEventListener("click", (event) => {
   if (event.target.closest("#meetingList") || event.target.closest(".event-more")) return;
   clearListDay();
+});
+
+// ESC снимает временные состояния списка: выбор встреч для объединения и
+// выбранный день. Открытые диалоги обрабатывают ESC сами, поэтому их не трогаем.
+document.addEventListener("keydown", (event) => {
+  if (event.key !== "Escape") return;
+  if (document.querySelector("dialog[open]")) return;
+  if (!state.selectedMeetings.size && !state.listDay) return;
+  state.selectedMeetings.clear();
+  state.listDay = null;
+  renderList();
 });
 
 function appendSearchCondition(value) {
@@ -317,14 +342,73 @@ function connectEvents() {
   source.onmessage = (event) => {
     try {
       const message = JSON.parse(event.data);
-      if (message.type !== "recording") return;
       const payload = message.payload || {};
-      const changed = renderRecordingState(payload.active ? payload.meeting : null);
-      if (changed) loadMeetings().catch(() => {});
+      if (message.type === "recording") {
+        const changed = renderRecordingState(payload.active ? payload.meeting : null);
+        if (payload.active) renderConferenceCandidate(null);
+        if (changed) loadMeetings().catch(() => {});
+      } else if (message.type === "conference_detection") {
+        renderConferenceCandidate(payload.candidate || null);
+      }
     } catch (error) {
       console.warn("LocalMeetAssist event ignored", error);
     }
   };
+}
+
+function renderConferenceCandidate(candidate) {
+  state.conferenceCandidate = candidate;
+  const dialog = $("#conferenceDialog");
+  if (!dialog) return;
+  if (!candidate) {
+    if (dialog.open) dialog.close();
+    return;
+  }
+  $("#conferenceBackend").textContent = candidate.backend || "";
+  const app = candidate.app_name || "";
+  $("#conferenceApp").textContent = app ? t("conference.appLabel", { app }) : "";
+  const question = $("#conferenceQuestion");
+  const actions = $("#conferenceActions");
+  // Доверенное (или безымянное) приложение — сразу вопрос о записи; неизвестное —
+  // вопрос о добавлении в доверенные/исключения.
+  if (candidate.trusted) {
+    question.textContent = t("conference.trustedQuestion");
+    actions.innerHTML =
+      `<button type="button" class="ghost" data-action="dismiss">${esc(t("conference.dismiss"))}</button>` +
+      `<button type="button" class="primary" data-action="start">${esc(t("conference.start"))}</button>`;
+  } else {
+    question.textContent = t("conference.unknownQuestion", { app });
+    actions.innerHTML =
+      `<button type="button" class="ghost" data-action="dismiss">${esc(t("conference.skip"))}</button>` +
+      `<button type="button" class="ghost" data-action="exclude">${esc(t("conference.exclude"))}</button>` +
+      `<button type="button" class="primary" data-action="trust">${esc(t("conference.trust"))}</button>`;
+  }
+  actions.querySelectorAll("[data-action]").forEach((button) => {
+    button.onclick = () => answerConferenceCandidate(button.dataset.action);
+  });
+  if (!dialog.open) dialog.showModal();
+}
+
+async function answerConferenceCandidate(action) {
+  const candidate = state.conferenceCandidate;
+  if (!candidate) return;
+  const buttons = $("#conferenceActions").querySelectorAll("button");
+  buttons.forEach((button) => { button.disabled = true; });
+  try {
+    const result = await api("/api/v1/conference-detection", { method: "POST", json: { action, candidate_id: candidate.id } });
+    renderConferenceCandidate(null);
+    if (action === "start" || action === "trust") {
+      renderRecordingState(result);
+      await loadMeetings();
+      toast(t(action === "trust" ? "conference.trustedAndStarted" : "conference.started"));
+    } else if (action === "exclude") {
+      toast(t("conference.excluded"));
+    }
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    buttons.forEach((button) => { button.disabled = false; });
+  }
 }
 
 function sameDay(a, b) {
@@ -389,7 +473,11 @@ function renderCalendar() {
       more.className = "event-more";
       more.textContent = t("calendar.moreEvents", { count: dayMeetings.length - visible.length });
       // «Ещё N» временно показывает в панели справа только этот день.
-      more.onclick = () => { state.listDay = new Date(day); renderList(); };
+      more.onclick = () => {
+        state.listDay = new Date(day);
+        renderList();
+        toast(t("calendar.moreHint"));
+      };
       cell.appendChild(more);
     }
     root.appendChild(cell);
@@ -575,12 +663,13 @@ function renderList() {
   // нашлось, а счётчик считает именно показанные.
   const shown = listMeetings();
   $("#meetingCount").textContent = shown.length;
+  updateMeetingSelectionHeader();
   $("#meetingListTitle").textContent = state.listDay
     ? new Intl.DateTimeFormat(LOCALE, { day: "numeric", month: "long" }).format(state.listDay)
     : t("meetings.title");
   shown.forEach((meeting) => {
     const node = document.createElement("div");
-    node.className = "meeting-item";
+    node.className = `meeting-item${state.selectedMeetings.has(meeting.uid) ? " selected" : ""}`;
     const topic = meetingTopic(meeting.summary);
     const participants = activeParticipants(meeting.transcript, 5);
     const participantText = participants.names.length
@@ -593,7 +682,18 @@ function renderList() {
     const stamp = state.listDay ? esc(range) : `${esc(fmtDayShort(meeting.started_at))} · ${esc(range)}`;
     node.innerHTML = `<div class="meta">${stamp}</div><strong>${esc(meeting.title)}</strong><div class="meeting-meta-line"><span>${formatDuration(meeting.duration_ms)}</span><span class="badge ${meeting.status}">${statusText(meeting.status)}</span></div>${topic ? `<div class="meeting-topic" title="${esc(topic)}">${esc(topic)}</div>` : ""}${participants.names.length ? `<div class="meeting-participants">${participantText}</div>` : ""}`;
     node.dataset.uid = meeting.uid;
-    node.onclick = () => openDetail(meeting.uid);
+    node.onclick = (event) => {
+      if (event.ctrlKey || event.metaKey) {
+        event.preventDefault();
+        toggleMeetingSelection(meeting.uid);
+        return;
+      }
+      openDetail(meeting.uid);
+    };
+    node.oncontextmenu = (event) => {
+      event.preventDefault();
+      toggleMeetingSelection(meeting.uid);
+    };
     root.appendChild(node);
   });
   if (!shown.length) root.innerHTML = `<div class="hint">${t(state.searchMatches ? "list.noMatches" : "list.noMeetings")}</div>`;
@@ -604,6 +704,40 @@ function renderList() {
     back.textContent = t("list.allPeriod");
     back.onclick = () => { state.listDay = null; renderList(); };
     root.appendChild(back);
+  }
+}
+
+function toggleMeetingSelection(uid) {
+  if (state.selectedMeetings.has(uid)) state.selectedMeetings.delete(uid);
+  else state.selectedMeetings.add(uid);
+  renderList();
+}
+
+function updateMeetingSelectionHeader() {
+  const count = state.selectedMeetings.size;
+  const label = $("#selectedMeetingCount");
+  const button = $("#mergeMeetings");
+  label.textContent = t("meetings.selected", { count });
+  button.setAttribute("aria-label", t("meetings.merge"));
+  label.classList.toggle("hidden", count === 0);
+  button.classList.toggle("hidden", count === 0);
+  button.disabled = count < 2;
+}
+
+async function mergeSelectedMeetings() {
+  const ids = [...state.selectedMeetings];
+  if (ids.length < 2 || !confirm(t("meetings.mergeConfirm", { count: ids.length }))) return;
+  const button = $("#mergeMeetings");
+  button.disabled = true;
+  try {
+    const merged = await api("/api/v1/meetings/merge", { method: "POST", timeoutMs: 10 * 60 * 1000, json: { meeting_uids: ids } });
+    state.selectedMeetings.clear();
+    await loadMeetings();
+    toast(t("meetings.merged"));
+    await openDetail(merged.uid);
+  } catch (error) {
+    toast(error.message);
+    updateMeetingSelectionHeader();
   }
 }
 
@@ -921,6 +1055,7 @@ function clockMS(value) {
 }
 
 function renderSpeakers(items, artifacts, uid) {
+  stopSpeakerFragment();
   const root = $("#speakersList");
   root.innerHTML = items.length ? "" : `<div class="hint">${t("speakers.empty")}</div>`;
   state.speakerEditor = {
@@ -942,16 +1077,9 @@ function renderSpeakers(items, artifacts, uid) {
     node.className = "speaker";
     node.dataset.speakerId = speaker.id;
     const source = sampleSource(speaker, artifacts);
-    const samples = Array.isArray(speaker.samples) ? speaker.samples.slice(0, 3) : [];
+    // Раздел образцов голоса убран: у системных спикеров их всё равно нельзя
+    // переносить, а после объединения встреч их привязка к времени ненадёжна.
     const fragments = Array.isArray(speaker.fragments) ? speaker.fragments : [];
-    const sampleHTML = source && samples.length
-      ? `<div class="speaker-samples">${samples.map((sample, index) => {
-          const start = Math.max(0, Number(sample.start_ms || 0) / 1000 - 0.25);
-          const end = Math.min(start + 10, Math.max(start + 0.5, Number(sample.end_ms || 0) / 1000 + 0.35));
-          const url = audioArtifactURL(uid, source);
-          return `<div class="voice-sample"><span>${t("speakers.sample", { n: index + 1 })} · ${clockMS(sample.start_ms)}–${clockMS(sample.end_ms)}</span><button type="button" class="ghost small play-fragment" data-url="${esc(url)}" data-start="${start}" data-end="${end}">▶</button></div>`;
-        }).join("")}</div>`
-      : `<div class="hint speaker-hint">${t("speakers.noAudio")}</div>`;
     const fragmentHTML = fragments.length
       ? `<div class="speaker-fragments-head"><span>${t("speakers.fragments", { n: fragments.length })}</span><small>${t("speakers.fragmentsHint")}</small></div><div class="speaker-fragments">${fragments.map((fragment) => {
           const start = Math.max(0, Number(fragment.start_ms || 0) / 1000 - 0.15);
@@ -963,7 +1091,7 @@ function renderSpeakers(items, artifacts, uid) {
           return `<div class="speaker-fragment" draggable="true" data-fragment-id="${esc(fragment.id)}" data-source-speaker="${esc(speaker.id)}"><input class="fragment-select" type="checkbox" aria-label="${t("speakers.fragmentSelect")}"><button type="button" class="ghost play-fragment" data-url="${esc(url)}" data-start="${start}" data-end="${end}" ${url ? "" : "disabled"}>▶</button><div><div class="fragment-time">${clockMS(fragment.start_ms)}–${clockMS(fragment.end_ms)}</div><div class="fragment-text" title="${esc(fragment.text || "")}">${esc(fragment.text || t("speakers.noText"))}</div></div></div>`;
         }).join("")}</div>`
       : `<div class="hint speaker-hint">${t("speakers.oldFragments")}</div>`;
-    node.innerHTML = `<div class="speaker-info"><strong class="speaker-card-title" draggable="true" title="${t("speakers.dragTitle")}">${esc(speaker.id)}</strong><div class="meta">${esc(speaker.source)}</div>${sampleHTML}${fragmentHTML}</div><div class="speaker-name"><input value="${esc(speaker.display_name)}" aria-label="${t("speakers.nameLabel", { id: esc(speaker.id) })}"></div>`;
+    node.innerHTML = `<div class="speaker-info"><strong class="speaker-card-title" draggable="true" title="${t("speakers.dragTitle")}">${esc(speaker.id)}</strong><div class="meta">${esc(speaker.source)}</div>${fragmentHTML}</div><div class="speaker-name"><input value="${esc(speaker.display_name)}" aria-label="${t("speakers.nameLabel", { id: esc(speaker.id) })}"></div>`;
     const nameInput = node.querySelector(".speaker-name input");
     nameInput.addEventListener("input", () => {
       state.speakerEditor.names.set(speaker.id, nameInput.value);
@@ -979,7 +1107,8 @@ function renderSpeakers(items, artifacts, uid) {
       });
     });
     node.querySelectorAll(".play-fragment").forEach((button) => {
-      button.onclick = () => playSpeakerFragment(button.dataset.url, Number(button.dataset.start), Number(button.dataset.end));
+      button.setAttribute("aria-label", t("speakers.play"));
+      button.onclick = () => playSpeakerFragment(button, button.dataset.url, Number(button.dataset.start), Number(button.dataset.end));
     });
     node.querySelectorAll(".speaker-fragment").forEach((fragment) => {
       fragment.addEventListener("dragstart", (event) => {
@@ -1088,13 +1217,60 @@ function mergeSpeakerDraft(fromID, intoID) {
   markSpeakerEditorDirty();
 }
 
-function playSpeakerFragment(url, start, end) {
+function stopSpeakerFragment() {
+  const current = state.speakerPlayer;
+  if (!current) return;
+  // Ссылку снимаем первым делом, чтобы обработчики уже остановленного плеера
+  // не приняли его за активный.
+  state.speakerPlayer = null;
+  current.audio.pause();
+  // Освобождаем источник: без этого загрузка потока продолжалась, и звук мог
+  // играть дальше, хотя остановить его было уже нечем.
+  current.audio.removeAttribute("src");
+  current.audio.load();
+  if (current.button?.isConnected) {
+    current.button.textContent = "▶";
+    current.button.classList.remove("playing");
+    current.button.setAttribute("aria-label", t("speakers.play"));
+  }
+}
+
+function playSpeakerFragment(button, url, start, end) {
   if (!url) return;
-  if (state.speakerPlayer) state.speakerPlayer.pause();
-  const player = new Audio(url);
-  state.speakerPlayer = player;
-  player.addEventListener("loadedmetadata", () => { player.currentTime = start; player.play().catch((error) => toast(error.message)); }, { once: true });
-  player.addEventListener("timeupdate", () => { if (player.currentTime >= end) player.pause(); });
+  if (state.speakerPlayer?.button === button) {
+    stopSpeakerFragment();
+    return;
+  }
+  stopSpeakerFragment();
+  const player = new Audio();
+  const session = { audio: player, button };
+  state.speakerPlayer = session;
+  // Обработчики навешиваются до загрузки и проверяют, что плеер всё ещё
+  // активен. Иначе отложенный loadedmetadata запускал уже остановленный плеер,
+  // и он доигрывал весь файл: остановка искала его через state и не находила.
+  const isCurrent = () => state.speakerPlayer === session;
+  const stopThis = () => { if (isCurrent()) stopSpeakerFragment(); };
+  player.addEventListener("loadedmetadata", () => {
+    if (!isCurrent()) return;
+    player.currentTime = start;
+    player.play().catch((error) => { stopThis(); toast(error.message); });
+  }, { once: true });
+  player.addEventListener("timeupdate", () => {
+    if (!isCurrent()) {
+      // Плеер остановлен, но всё ещё играет — глушим безусловно.
+      player.pause();
+      player.removeAttribute("src");
+      return;
+    }
+    if (player.currentTime >= end) stopSpeakerFragment();
+  });
+  player.addEventListener("ended", stopThis, { once: true });
+  player.addEventListener("error", stopThis, { once: true });
+  button.textContent = "■";
+  button.classList.add("playing");
+  button.setAttribute("aria-label", t("speakers.stop"));
+  player.src = url;
+  player.load();
 }
 
 async function saveSpeakerChanges() {
@@ -1221,6 +1397,9 @@ async function retryProcessing(stage, button = null, format = "") {
 }
 
 function showTab(name) {
+  // Переключение вкладки глушит проигрывание образца голоса: иначе звук
+  // продолжал бы играть, пока кнопка скрыта на другой вкладке.
+  stopSpeakerFragment();
   state.detailTab = name;
   $$(".tabs button").forEach((button) => button.classList.toggle("active", button.dataset.tab === name));
   $$(".tab-content").forEach((content) => content.classList.add("hidden"));
@@ -1291,18 +1470,70 @@ function humanBytes(value) {
 }
 
 async function refreshModels() {
+  try {
+    state.machineResources = await api("/api/v1/models/resources");
+  } catch { state.machineResources = null; }
   clearTimeout(state.modelTimer);
   // Подсветка вкладки всегда следует за состоянием: иначе после первого
   // открытия активной выглядит одна вкладка, а список показывает другую.
   // Загрузка рекомендованного набора: сервер сам запускает скачивание и включает
 // шаги обработки, которым эти модели служат.
+// modelFits reports whether this machine satisfies the model requirement. The
+// resources are measured on the server and fetched together with the list.
+function modelFits(model) {
+  const resources = state.machineResources || {};
+  if (model.min_ram_bytes > 0 && Number(resources.total_ram_bytes || 0) < model.min_ram_bytes) return false;
+  if (model.min_disk_bytes > 0 && Number(resources.free_disk_bytes || 0) < model.min_disk_bytes) return false;
+  return true;
+}
+
+// downloadModel starts a model download. When the machine cannot run the model,
+// the server refuses and the user decides whether to download it anyway.
+async function downloadModel(model) {
+  const path = `/api/v1/models/${encodeURIComponent(model.id)}/download`;
+  try {
+    await api(path, { method: "POST" });
+    await refreshModels();
+  } catch (error) {
+    if (error.payload?.code !== "insufficient_resources") {
+      toast(error.message);
+      return;
+    }
+    const required = t("models.requires", {
+      ram: formatGib(error.payload.required_ram_bytes),
+      disk: formatGib(error.payload.required_disk_bytes),
+    });
+    const question = t("models.insufficientResources", { name: error.payload.name || model.name, required });
+    if (!confirm(question)) return;
+    try {
+      await api(path, { method: "POST", json: { force: true } });
+      await refreshModels();
+    } catch (retryError) { toast(retryError.message); }
+  }
+}
+
+// formatGib renders a byte count as whole gibibytes for requirement messages.
+function formatGib(bytes) {
+  const value = Number(bytes || 0);
+  if (!value) return "";
+  return `${Math.ceil(value / (1024 * 1024 * 1024))} ${t("models.gib")}`;
+}
+
 $("#downloadRecommended").onclick = async () => {
   const button = $("#downloadRecommended");
   button.disabled = true;
   try {
     const result = await api("/api/v1/models/recommended", { method: "POST" });
     const started = Array.isArray(result?.started) ? result.started.length : 0;
+    const skipped = Array.isArray(result?.skipped) ? result.skipped : [];
     toast(started ? t("models.recommendedStarted", { n: started }) : t("models.recommendedNothing"));
+    if (skipped.length) {
+      toast(t("models.recommendedSkipped", {
+        names: skipped.map((item) => `${item.name} (${t("models.requires", {
+          ram: formatGib(item.required_ram_bytes), disk: formatGib(item.required_disk_bytes),
+        })})`).join(", "),
+      }));
+    }
     await refreshModels();
   } catch (error) {
     toast(error.message);
@@ -1367,9 +1598,16 @@ $$("#modelTabs [data-mgroup]").forEach((button) => {
           + `</span>`;
         const sizeText = model.exists ? humanBytes(model.size_bytes) : (model.approx_bytes > 0 ? t("models.approxSize", { size: humanBytes(model.approx_bytes) }) : "");
         const licenseText = model.license ? `<span>${esc(t("models.license", { license: model.license }))}</span>` : "";
+        // Требования показываем до загрузки: иначе о нехватке ресурсов
+        // пользователь узнаёт только по отказу.
+        const requirementText = (model.min_ram_bytes > 0 || model.min_disk_bytes > 0)
+          ? t("models.needsResources", { ram: formatGib(model.min_ram_bytes), disk: formatGib(model.min_disk_bytes) })
+          : "";
+        const tooSmall = !modelFits(model);
         node.innerHTML = `<div class="model-title"><strong>${esc(model.name)}</strong>${flags}</div>`
           + `<div class="model-description">${esc(model.description || "")}</div>`
-          + `<div class="model-meta"><span>${esc(sizeText)}</span>${licenseText}</div>`
+          + `<div class="model-meta"><span>${esc(sizeText)}</span>${licenseText}${requirementText ? `<span class="${tooSmall ? "model-requirement short" : "model-requirement"}">${esc(requirementText)}</span>` : ""}</div>`
+          + (tooSmall ? `<div class="model-error">${esc(t("models.notEnoughResources"))}</div>` : "")
           + `<div class="model-actions">${test}${apply}<button class="ghost small download-model" ${model.downloading ? "disabled" : ""}>${model.exists ? t("models.redownload") : t("models.download")}</button></div>`
           + `<div class="model-test-result hidden"></div>`
           + (model.downloading && model.total_bytes > 0 ? `<progress max="100" value="${progress}"></progress>` : "")
@@ -1390,10 +1628,7 @@ $$("#modelTabs [data-mgroup]").forEach((button) => {
           } catch (error) { toast(error.message); }
         };
         node.querySelector(".download-model").onclick = async () => {
-          try {
-            await api(`/api/v1/models/${encodeURIComponent(model.id)}/download`, { method: "POST" });
-            await refreshModels();
-          } catch (error) { toast(error.message); }
+          await downloadModel(model);
         };
         const applyButton = node.querySelector(".apply-model");
         if (applyButton) applyButton.onclick = async () => {
@@ -1532,7 +1767,60 @@ function applyAppVersion() {
   badge.title = state.appVersion ? `${t("settings.version")} ${state.appVersion}` : "";
 }
 
+// buildListSettingEditor renders a list of names as editable rows with a
+// remove button per row and one button to add a row. The hidden input keeps the
+// comma-separated value the settings API already expects.
+function buildListSettingEditor(input) {
+  const container = document.createElement("div");
+  container.className = "setting-list";
+  const rows = document.createElement("div");
+  rows.className = "setting-list-rows";
+  const sync = () => {
+    const names = [...rows.querySelectorAll("input[type=text]")]
+      .map((item) => item.value.trim())
+      .filter(Boolean);
+    input.value = names.join(", ");
+    updateSettingsDirty(input);
+  };
+  const addRow = (value) => {
+    const row = document.createElement("div");
+    row.className = "setting-list-row";
+    const text = document.createElement("input");
+    text.type = "text";
+    text.value = value || "";
+    text.autocomplete = "off";
+    text.placeholder = t("settings.appNamePlaceholder");
+    text.addEventListener("input", sync);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-action danger";
+    remove.title = t("settings.removeApp");
+    remove.setAttribute("aria-label", t("settings.removeApp"));
+    remove.innerHTML = TRASH_ICON;
+    remove.onclick = () => { row.remove(); sync(); };
+    row.append(text, remove);
+    rows.appendChild(row);
+    return text;
+  };
+  String(input.value || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean)
+    .forEach(addRow);
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "ghost small";
+  add.textContent = t("settings.addApp");
+  add.onclick = () => addRow("").focus();
+  const actions = document.createElement("div");
+  actions.className = "setting-list-actions";
+  actions.appendChild(add);
+  container.append(rows, actions);
+  return container;
+}
+
 function renderSettingsGroup(groupID) {
+  state.settingsGroup = groupID;
   const groups = state.settings?.groups || [];
   const group = groups.find((item) => item.id === groupID) || groups[0];
   if (!group) return;
@@ -1556,7 +1844,15 @@ function renderSettingsGroup(groupID) {
     title.className = "setting-label";
     title.textContent = field.label;
     let input;
-    if (field.kind === "select") {
+    let listEditor = null;
+    if (field.kind === "list") {
+      // Список приложений: значение живёт в скрытом поле, а редактируется
+      // построчно (см. buildListSettingEditor).
+      input = document.createElement("input");
+      input.type = "hidden";
+      input.value = field.value || "";
+      listEditor = buildListSettingEditor(input);
+    } else if (field.kind === "select") {
       input = document.createElement("select");
       (field.options || []).forEach((item) => {
         const option = document.createElement("option");
@@ -1571,7 +1867,8 @@ function renderSettingsGroup(groupID) {
       input.rows = 18;
     } else {
       input = document.createElement("input");
-      input.type = field.kind === "checkbox" ? "checkbox" : (field.kind === "hotkey" ? "text" : field.kind);
+      // "list" — список через запятую, поэтому это обычное текстовое поле.
+      input.type = field.kind === "checkbox" ? "checkbox" : (["hotkey", "list"].includes(field.kind) ? "text" : field.kind);
       if (field.kind === "checkbox") input.checked = field.value === "true";
       else input.value = field.value || "";
       if (field.kind === "number") input.step = field.integer ? "1" : "any";
@@ -1618,6 +1915,11 @@ function renderSettingsGroup(groupID) {
           updateSettingsDirty(input);
         };
         control.append(input, reset);
+        row.append(title, control, description);
+      } else if (field.kind === "list") {
+        const control = document.createElement("div");
+        control.className = "setting-control list-control";
+        control.append(listEditor, input);
         row.append(title, control, description);
       } else {
         row.append(title, input, description);
@@ -1669,7 +1971,7 @@ async function loadSettings(resetDirty = true) {
   state.settings = payload;
   if (resetDirty) state.settingsDirty.clear();
   const GROUP_SECTIONS = [
-    { caption: "settings.group.basic", ids: ["app", "audio", "desktop"] },
+    { caption: "settings.group.basic", ids: ["app", "audio", "desktop", "conference_detection"] },
     { caption: "settings.group.processing", ids: ["transcription", "diarization", "summary"] },
     { caption: "settings.group.system", ids: ["inference", "storage", "models", "logging"] },
   ];
@@ -1698,7 +2000,11 @@ async function loadSettings(resetDirty = true) {
   (payload.groups || []).forEach((group) => { if (!used.has(group.id)) addButton(group); });
   $("#settingsDirty").textContent = t("settings.noChanges");
   $("#saveSettings").disabled = true;
-  renderSettingsGroup(payload.groups?.[0]?.id);
+  // Сохранение перечитывает схему; остаёмся в том разделе, где был пользователь,
+  // и переходим к первому только если прежний раздел исчез.
+  const groups = payload.groups || [];
+  const keep = groups.some((group) => group.id === state.settingsGroup) ? state.settingsGroup : groups[0]?.id;
+  renderSettingsGroup(keep);
 }
 
 async function showSettings() {
@@ -1754,8 +2060,13 @@ $("#startBtn").onclick = async () => {
   try { await refreshDevices(); } catch (error) { toast(error.message); }
 };
 $("#stopBtn").onclick = stopRecording;
+$("#mergeMeetings").onclick = mergeSelectedMeetings;
 $("#recordForm").onsubmit = (event) => { event.preventDefault(); startRecording(); };
 $("#closeRecord").onclick = $("#cancelRecord").onclick = () => closeDialog("#recordDialog");
+$("#conferenceDialog").addEventListener("cancel", (event) => {
+  event.preventDefault();
+  answerConferenceCandidate("dismiss");
+});
 
 $("#createBtn").onclick = () => {
   $("#manualTitle").value = "";
@@ -1796,11 +2107,16 @@ $$('[data-search-key]').forEach((button) => { button.onclick = () => appendSearc
 $$(".tabs button").forEach((button) => { button.onclick = () => showTab(button.dataset.tab); });
 function closeDetailWithCheck() {
   if (state.speakerEditor?.dirty && !confirm(t("detail.closeDirtyConfirm"))) return;
+  stopSpeakerFragment();
   closeDialog("#detailDialog");
 }
 $("#closeDetail").onclick = closeDetailWithCheck;
 $("#detailDialog").addEventListener("cancel", (event) => {
-  if (state.speakerEditor?.dirty && !confirm(t("detail.closeDirtyConfirm"))) event.preventDefault();
+  if (state.speakerEditor?.dirty && !confirm(t("detail.closeDirtyConfirm"))) {
+    event.preventDefault();
+    return;
+  }
+  stopSpeakerFragment();
 });
 $("#saveSummary").onclick = () => saveMeetingField("summary");
 $("#saveTranscript").onclick = () => saveMeetingField("transcript");

@@ -2,15 +2,219 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #import <CoreMedia/CoreMedia.h>
 #import <AudioToolbox/AudioToolbox.h>
+#import <CoreAudio/CoreAudio.h>
 
 #include <math.h>
 #include <stdint.h>
+#include <unistd.h>
+#include <libproc.h>
 #include <stdio.h>
 #include <stdlib.h>
 
 void* lm_platform_wav_open(const char* path, unsigned int sample_rate, unsigned int channels);
 int lm_platform_wav_write(void* sink, const void* data, size_t bytes);
 int lm_platform_wav_close(void* sink);
+
+// lm_macos_device_channel_count reports how many channels a device exposes in
+// the given direction; devices without channels are skipped entirely.
+static int lm_macos_device_channel_count(AudioObjectID device, AudioObjectPropertyScope scope)
+{
+    AudioObjectPropertyAddress address = {
+        kAudioDevicePropertyStreamConfiguration,
+        scope,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(device, &address, 0, NULL, &size) != noErr || size == 0) return 0;
+    AudioBufferList* list = (AudioBufferList*)malloc(size);
+    if (list == NULL) return 0;
+    int channels = 0;
+    if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, list) == noErr) {
+        for (UInt32 index = 0; index < list->mNumberBuffers; index++) {
+            channels += (int)list->mBuffers[index].mNumberChannels;
+        }
+    }
+    free(list);
+    return channels;
+}
+
+// lm_macos_any_device_running scans every device in the given direction. The
+// default device alone is not enough: a headset or an external interface can
+// carry the meeting while the built-in devices stay idle.
+static int lm_macos_any_device_running(AudioObjectPropertyScope scope, int* active)
+{
+    *active = 0;
+    AudioObjectPropertyAddress address = {
+        kAudioHardwarePropertyDevices,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size) != noErr || size == 0) return -1;
+    int count = (int)(size / sizeof(AudioObjectID));
+    AudioObjectID* devices = (AudioObjectID*)calloc((size_t)count, sizeof(AudioObjectID));
+    if (devices == NULL) return -1;
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, devices) != noErr) {
+        free(devices);
+        return -1;
+    }
+    for (int index = 0; index < count; index++) {
+        if (lm_macos_device_channel_count(devices[index], scope) <= 0) continue;
+        UInt32 running = 0;
+        UInt32 running_size = sizeof(running);
+        AudioObjectPropertyAddress running_address = {
+            kAudioDevicePropertyDeviceIsRunningSomewhere,
+            scope,
+            kAudioObjectPropertyElementMain
+        };
+        if (AudioObjectGetPropertyData(devices[index], &running_address, 0, NULL, &running_size, &running) != noErr) continue;
+        if (running != 0) {
+            *active = 1;
+            break;
+        }
+    }
+    free(devices);
+    return 0;
+}
+
+// lm_macos_any_foreign_process_running_input reports whether some other process
+// is capturing the microphone. known stays 0 on macOS versions without the
+// per-process API, so the caller can fall back to the device scan.
+static int lm_macos_any_foreign_process_running_input(int* active, int* known)
+{
+    *active = 0;
+    *known = 0;
+    AudioObjectPropertyAddress address = {
+        kAudioHardwarePropertyProcessObjectList,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size) != noErr || size == 0) return -1;
+    int count = (int)(size / sizeof(AudioObjectID));
+    AudioObjectID* objects = (AudioObjectID*)calloc((size_t)count, sizeof(AudioObjectID));
+    if (objects == NULL) return -1;
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, objects) != noErr) {
+        free(objects);
+        return -1;
+    }
+    *known = 1;
+    for (int index = 0; index < count; index++) {
+        UInt32 running = 0;
+        UInt32 running_size = sizeof(running);
+        AudioObjectPropertyAddress running_address = {
+            kAudioProcessPropertyIsRunningInput,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        if (AudioObjectGetPropertyData(objects[index], &running_address, 0, NULL, &running_size, &running) != noErr || running == 0) continue;
+        pid_t pid = 0;
+        UInt32 pid_size = sizeof(pid);
+        AudioObjectPropertyAddress pid_address = {
+            kAudioProcessPropertyPID,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        if (AudioObjectGetPropertyData(objects[index], &pid_address, 0, NULL, &pid_size, &pid) != noErr) continue;
+        /* Собственный захват встречей не считается. */
+        if (pid == getpid()) continue;
+        *active = 1;
+        break;
+    }
+    free(objects);
+    return 0;
+}
+
+int lm_macos_audio_activity(int* microphone_active, int* system_active, char* error_text, size_t error_size)
+{
+    int mic_active = 0;
+    int mic_known = 0;
+    if (lm_macos_any_foreign_process_running_input(&mic_active, &mic_known) != 0) mic_known = 0;
+    if (!mic_known && lm_macos_any_device_running(kAudioDevicePropertyScopeInput, &mic_active) != 0) {
+        if (error_text != NULL && error_size > 0) snprintf(error_text, error_size, "%s", "CoreAudio activity query failed");
+        return -1;
+    }
+    if (lm_macos_any_device_running(kAudioDevicePropertyScopeOutput, system_active) != 0) {
+        if (error_text != NULL && error_size > 0) snprintf(error_text, error_size, "%s", "CoreAudio activity query failed");
+        return -1;
+    }
+    *microphone_active = mic_active;
+    return 0;
+}
+
+// lm_macos_active_input_app resolves the localized name of the process that is
+// actively capturing input, via the per-process CoreAudio objects introduced in
+// macOS 14.4. On older systems the query fails cleanly and found stays 0.
+int lm_macos_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size)
+{
+    (void)error_text;
+    (void)error_size;
+    if (name == NULL || name_size == 0 || found == NULL) return -1;
+    name[0] = '\0';
+    *found = 0;
+
+    AudioObjectPropertyAddress address = {
+        kAudioHardwarePropertyProcessObjectList,
+        kAudioObjectPropertyScopeGlobal,
+        kAudioObjectPropertyElementMain
+    };
+    UInt32 size = 0;
+    OSStatus status = AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size);
+    if (status != noErr || size == 0) return -1; /* API unavailable (pre-14.4) */
+
+    int count = (int)(size / sizeof(AudioObjectID));
+    AudioObjectID* objects = (AudioObjectID*)calloc((size_t)count, sizeof(AudioObjectID));
+    if (objects == NULL) return -1;
+    status = AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, objects);
+    if (status != noErr) { free(objects); return -1; }
+
+    for (int index = 0; index < count; index++) {
+        AudioObjectID object = objects[index];
+        UInt32 running = 0;
+        UInt32 running_size = sizeof(running);
+        AudioObjectPropertyAddress running_address = {
+            kAudioProcessPropertyIsRunningInput,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        if (AudioObjectGetPropertyData(object, &running_address, 0, NULL, &running_size, &running) != noErr || running == 0) continue;
+
+        pid_t pid = 0;
+        UInt32 pid_size = sizeof(pid);
+        AudioObjectPropertyAddress pid_address = {
+            kAudioProcessPropertyPID,
+            kAudioObjectPropertyScopeGlobal,
+            kAudioObjectPropertyElementMain
+        };
+        if (AudioObjectGetPropertyData(object, &pid_address, 0, NULL, &pid_size, &pid) != noErr || pid <= 0) continue;
+        /* Себя не показываем: приложение не должно предлагать записать самого себя. */
+        if (pid == getpid()) continue;
+
+        const char* label = NULL;
+        NSRunningApplication* application = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+        if (application != nil) {
+            if (application.localizedName != nil && application.localizedName.length > 0) label = [application.localizedName UTF8String];
+            if (label == NULL && application.bundleIdentifier != nil && application.bundleIdentifier.length > 0) label = [application.bundleIdentifier UTF8String];
+        }
+        if (label == NULL || label[0] == '\0') {
+            // Вспомогательный процесс (например, аудио-хелпер Zoom) может не быть
+            // зарегистрированным приложением — тогда берём имя процесса.
+            char process_name[512];
+            int name_len = proc_name(pid, process_name, sizeof(process_name));
+            if (name_len > 0) {
+                process_name[sizeof(process_name) - 1] = '\0';
+                label = process_name;
+            }
+        }
+        if (label == NULL || label[0] == '\0') continue;
+        snprintf(name, name_size, "%s", label);
+        *found = 1;
+        free(objects);
+        return 0;
+    }
+    free(objects);
+    return 0;
+}
 
 typedef struct {
     SCStream* stream;
@@ -304,7 +508,6 @@ int lm_macos_system_stop(void* opaque, char* error_text, size_t error_size)
             int timeout = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 15LL * NSEC_PER_SEC)) != 0;
             if (timeout) lm_macos_error(error_text, error_size, @"Истекло время остановки ScreenCaptureKit");
             if (stop_error != nil) lm_macos_error(error_text, error_size, stop_error.localizedDescription);
-            int had_stop_error = stop_error != nil;
             NSError* remove_error = nil;
             [capture->stream removeStreamOutput:capture->output type:SCStreamOutputTypeAudio error:&remove_error];
             /* stopCapture completion does not guarantee that every callback already
@@ -318,7 +521,14 @@ int lm_macos_system_stop(void* opaque, char* error_text, size_t error_size)
             [capture->stream release];
             [capture->output release];
             int wav_error = lm_platform_wav_close(capture->sink);
-            int failed = timeout || had_stop_error || callback_failed || wav_error != 0;
+            /* Ошибка самого stopCapture не делает остановку неудачной: система
+               могла уже закрыть поток сама (например, на длинной записи или при
+               смене разрешений на захват), и localizedDescription тогда говорит,
+               что трансляция уже остановлена. Объекты освобождаются ниже, а
+               очередь дренируется выше, поэтому захват прекращается в любом
+               случае. Фатальны только таймаут, сбой колбэков и ошибка WAV:
+               именно они означают потерю записанного звука. */
+            int failed = timeout || callback_failed || wav_error != 0;
             free(capture);
             if (failed && error_text != NULL && error_text[0] == '\0') {
                 if (callback_failed && callback_reason[0] != '\0') {

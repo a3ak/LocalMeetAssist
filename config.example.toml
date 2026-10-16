@@ -39,6 +39,12 @@ start_recording = ""
 stop_recording = ""
 open_ui = ""
 
+[conference_detection]
+# Best-effort OS session detection. When both microphone capture and system
+# playback stay active for this period, LocalMeetAssist asks before recording.
+enabled = true
+window_seconds = 10
+
 [inference]
 # Можно указать точный путь к вручную установленному .dll/.dylib/.so.
 # Если указан каталог, LocalMeetAssist добавляет подпапку <os>-<arch> и имя библиотеки.

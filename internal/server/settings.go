@@ -40,6 +40,18 @@ type settingGroup struct {
 	Fields      []settingField `json:"fields"`
 }
 
+// splitSettingList parses a comma-separated list typed into a settings field.
+func splitSettingList(value string) []string {
+	parts := strings.Split(value, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if part = strings.TrimSpace(part); part != "" {
+			out = append(out, part)
+		}
+	}
+	return out
+}
+
 func textSetting(key, label, description, value string) settingField {
 	return settingField{Key: key, Label: label, Description: description, Kind: "text", Value: value}
 }
@@ -51,6 +63,11 @@ func textareaSetting(key, label, description, value, defaultValue string, resett
 }
 func secretSetting(key, label, description string, set bool) settingField {
 	return settingField{Key: key, Label: label, Description: description, Kind: "password", SecretSet: set}
+}
+
+// listSetting edits a string slice as a comma-separated text field.
+func listSetting(key, label, description string, values []string) settingField {
+	return settingField{Key: key, Label: label, Description: description, Kind: "list", Value: strings.Join(values, ", ")}
 }
 func boolSetting(key, label, description string, value bool) settingField {
 	return settingField{Key: key, Label: label, Description: description, Kind: "checkbox", Value: strconv.FormatBool(value)}
@@ -109,15 +126,16 @@ func siblingModelOptions(current string, names ...settingOption) []settingOption
 }
 
 func summaryPromptValue(cfg config.Config) string {
-	if value := strings.TrimSpace(cfg.Summary.SystemPrompt); value != "" {
-		return value
-	}
-	return config.DefaultSummaryPrompt
+	return config.EffectiveSummaryPrompt(cfg.Summary)
 }
 
 // settingsSchema describes every editable setting, localized to the
 // configured interface language.
 func settingsSchema(cfg config.Config) []settingGroup {
+	defaultPrompt := cfg.Summary.DefaultPrompt
+	if strings.TrimSpace(defaultPrompt) == "" {
+		defaultPrompt = config.DefaultSummaryPrompt
+	}
 	groups := []settingGroup{
 		{ID: "app", Title: "Приложение", Description: "Интерфейс, каталог данных и локальный HTTP-сервер.", Fields: []settingField{
 			selectSetting("app.language", "Язык интерфейса", "Язык интерфейса LocalMeetAssist. Применяется после перезагрузки страницы.", cfg.App.Language, option("ru", "Русский"), option("en", "English")),
@@ -151,6 +169,12 @@ func settingsSchema(cfg config.Config) []settingGroup {
 			hotkeySetting("desktop.start_recording", "Начать запись", "Отдельная глобальная комбинация для начала записи.", cfg.Desktop.StartRecording),
 			hotkeySetting("desktop.stop_recording", "Остановить запись", "Отдельная глобальная комбинация для остановки записи.", cfg.Desktop.StopRecording),
 			hotkeySetting("desktop.open_ui", "Открыть UI", "Необязательная глобальная комбинация для открытия Web UI.", cfg.Desktop.OpenUI),
+		}},
+		{ID: "conference_detection", Title: "Определение конференции", Description: "Запрос на запись, когда ОС одновременно сообщает об использовании микрофона и воспроизведении системного звука.", Fields: []settingField{
+			boolSetting("conference_detection.enabled", "Предлагать запись", "Наблюдать системные аудиосессии и спрашивать перед началом записи. Громкость не анализируется: mute внутри приложения обычно не скрывает активную сессию.", cfg.ConferenceDetection.Enabled),
+			intSetting("conference_detection.window_seconds", "Окно проверки, сек", "Микрофон и системный звук должны оставаться активными одновременно. По умолчанию 10 секунд.", cfg.ConferenceDetection.WindowSeconds),
+			listSetting("conference_detection.trusted_apps", "Доверенные приложения", "Приложения, для которых запись предлагается сразу, без вопроса о добавлении.", cfg.ConferenceDetection.TrustedApps),
+			listSetting("conference_detection.excluded_apps", "Исключения", "Приложения, про которые не спрашиваем никогда.", cfg.ConferenceDetection.ExcludedApps),
 		}},
 		{ID: "inference", Title: "ONNX Runtime", Description: "Нативная библиотека нейросетевого вывода. LocalMeetAssist загружает её напрямую; CLI и Python не нужны.", Fields: []settingField{
 			textSetting("inference.runtime_path", "Библиотека или каталог", "Можно указать готовый .dll/.dylib/.so вручную. Для каталога LocalMeetAssist выбирает файл по ОС и архитектуре.", cfg.Inference.RuntimePath),
@@ -201,7 +225,7 @@ func settingsSchema(cfg config.Config) []settingGroup {
 			textSetting("summary.token_env", "Переменная токена", "Переменная окружения с токеном.", cfg.Summary.TokenEnv),
 			intSetting("summary.timeout_seconds", "Таймаут, сек", "Таймаут запроса к модели.", cfg.Summary.TimeoutSeconds),
 			intSetting("summary.max_retries", "Повторы", "Количество повторных запросов при временной ошибке.", cfg.Summary.MaxRetries),
-			textareaSetting("summary.system_prompt", "Системный промт", "Инструкция модели для формирования протокола. Результат — простой текст без разметки, готовый для вставки в письмо. Кнопка сброса возвращает встроенный безопасный шаблон.", summaryPromptValue(cfg), config.DefaultSummaryPrompt, true),
+			textareaSetting("summary.system_prompt", "Системный промт", "Инструкция модели для формирования протокола. Результат — простой текст без разметки, готовый для вставки в письмо. Кнопка сброса возвращает встроенный безопасный шаблон.", summaryPromptValue(cfg), defaultPrompt, true),
 			boolSetting("summary.tls_verify", "Проверять TLS", "Проверять сертификат сервера.", cfg.Summary.TLSVerify),
 			textSetting("summary.tls_ca_file", "CA-файл", "Дополнительный доверенный CA PEM.", cfg.Summary.TLSCAFile),
 			textSetting("summary.tls_server_name", "TLS server name", "Переопределение имени сертификата.", cfg.Summary.TLSServerName),
@@ -338,6 +362,8 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 			literals[key] = value
+		case "list":
+			literals[key] = config.QuotedList(splitSettingList(value))
 		case "password":
 			if value == "" {
 				continue

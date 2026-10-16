@@ -16,19 +16,20 @@ import (
 type Config struct {
 	// ConfigFile is the absolute path used to load the configuration. It is
 	// runtime metadata and is never parsed as a TOML setting.
-	ConfigFile    string
-	ConfigVersion int
-	App           App
-	Audio         Audio
-	Inference     Inference
-	Transcription Transcription
-	Diarization   Diarization
-	Models        Models
-	Summary       Summary
-	Storage       Storage
-	Logging       Logging
-	Desktop       Desktop
-	Integrations  Integrations
+	ConfigFile          string
+	ConfigVersion       int
+	App                 App
+	Audio               Audio
+	Inference           Inference
+	Transcription       Transcription
+	Diarization         Diarization
+	Models              Models
+	Summary             Summary
+	Storage             Storage
+	Logging             Logging
+	Desktop             Desktop
+	ConferenceDetection ConferenceDetection
+	Integrations        Integrations
 }
 
 // UpdateFile replaces selected section.key values while preserving unrelated
@@ -161,6 +162,19 @@ type Desktop struct {
 	OpenUI         string
 }
 
+// ConferenceDetection controls the best-effort native detector which asks
+// before recording when both a microphone capture session and system playback
+// remain active for the configured window. It observes OS session state rather
+// than audio amplitude, so an application-level mute normally still counts.
+type ConferenceDetection struct {
+	Enabled       bool
+	WindowSeconds int
+	// TrustedApps lists applications that may start a recording prompt without
+	// asking to be remembered first. ExcludedApps are never asked about.
+	TrustedApps  []string
+	ExcludedApps []string
+}
+
 // Inference configures the native ONNX Runtime loaded by the Go process.
 // RuntimePath may point to a manually supplied library. When AutoDownload is
 // enabled, the model manager downloads the matching official CPU runtime when
@@ -265,10 +279,27 @@ type Summary struct {
 	TimeoutSeconds int
 	MaxRetries     int
 	SystemPrompt   string
-	Language       string
-	TLSVerify      bool
-	TLSCAFile      string
-	TLSServerName  string
+	// DefaultPrompt is the template read from prompts/meeting_summary.md next to
+	// the configuration file, or the built-in template when that file is
+	// missing. It is not a TOML setting: it is resolved while loading.
+	DefaultPrompt string
+	Language      string
+	TLSVerify     bool
+	TLSCAFile     string
+	TLSServerName string
+}
+
+// EffectiveSummaryPrompt returns the template the summarizer must use: the
+// value from the settings when it is set, otherwise the template file, and the
+// built-in one as the last resort.
+func EffectiveSummaryPrompt(summary Summary) string {
+	if value := strings.TrimSpace(summary.SystemPrompt); value != "" {
+		return value
+	}
+	if value := strings.TrimSpace(summary.DefaultPrompt); value != "" {
+		return value
+	}
+	return DefaultSummaryPrompt
 }
 
 // DefaultSummaryPrompt is the built-in minutes template. The response
@@ -284,6 +315,10 @@ Formatting rules:
 - Separate sections with exactly one blank line.
 
 The section titles below are written in English only to identify them. Translate every title (BRIEF SUMMARY, PARTICIPANTS etc.) into the response language and never print the English wording.
+
+Example:
+
+The essence of the meeting in the title.
 
 BRIEF SUMMARY
 Describe the purpose of the meeting and its main outcomes in 3-7 bullet points.
@@ -364,12 +399,13 @@ func DefaultMicrophoneOwnerName(language string) string {
 // Defaults returns the configuration used when no config.toml is present.
 func Defaults() Config {
 	return Config{
-		ConfigVersion: 1,
-		App:           App{Language: "ru", Theme: "dark", DataDir: "./data", ListenHost: "127.0.0.1", ListenPort: 0, OpenBrowser: true, MicrophoneOwnerName: ""},
-		Audio:         Audio{Backend: "native", SampleRate: 16000, Channels: 1, BlockMS: 250, InputMode: "auto", OutputMode: "native", MicrophoneGain: 1, SystemGain: 1, Normalize: true, EchoCancellation: "auto", EchoDelayMS: 100},
-		Desktop:       Desktop{TrayEnabled: true},
-		Inference:     Inference{RuntimePath: "./runtime/onnxruntime", AutoDownload: true, RuntimeVersion: "1.23.2", WhisperRuntimePath: "./runtime/whisper.cpp"},
-		Transcription: Transcription{AutoRun: false, Engine: "gigaam-onnx", ModelPath: "./models/asr/gigaam-v3-e2e-rnnt-int8", Language: "ru", TimeoutSeconds: 3600, ChunkSeconds: 20, SourceMode: "auto", EchoDedupEnabled: true, EchoTimeToleranceMS: 1500, EchoTextSimilarity: 0.72, VADEnabled: true, VADModelPath: "./models/vad/silero-v6.2/silero_vad.onnx", VADThreshold: 0.5, VADMinSpeechMS: 250, VADMinSilenceMS: 300, SuppressNonSpeech: true, NoFallback: true, SilenceFilter: true, MinSegmentRMS: 0.0015, MixedFallbackEnabled: true, GigaAMModel: "v3_e2e_rnnt_int8", GigaAMBackend: "onnx", GigaAMONNXProvider: "cpu"},
+		ConfigVersion:       1,
+		App:                 App{Language: "ru", Theme: "dark", DataDir: "./data", ListenHost: "127.0.0.1", ListenPort: 0, OpenBrowser: true, MicrophoneOwnerName: ""},
+		Audio:               Audio{Backend: "native", SampleRate: 16000, Channels: 1, BlockMS: 250, InputMode: "auto", OutputMode: "native", MicrophoneGain: 1, SystemGain: 1, Normalize: true, EchoCancellation: "auto", EchoDelayMS: 100},
+		Desktop:             Desktop{TrayEnabled: true},
+		ConferenceDetection: ConferenceDetection{Enabled: true, WindowSeconds: 10},
+		Inference:           Inference{RuntimePath: "./runtime/onnxruntime", AutoDownload: true, RuntimeVersion: "1.23.2", WhisperRuntimePath: "./runtime/whisper.cpp"},
+		Transcription:       Transcription{AutoRun: false, Engine: "gigaam-onnx", ModelPath: "./models/asr/gigaam-v3-e2e-rnnt-int8", Language: "ru", TimeoutSeconds: 3600, ChunkSeconds: 20, SourceMode: "auto", EchoDedupEnabled: true, EchoTimeToleranceMS: 1500, EchoTextSimilarity: 0.72, VADEnabled: true, VADModelPath: "./models/vad/silero-v6.2/silero_vad.onnx", VADThreshold: 0.5, VADMinSpeechMS: 250, VADMinSilenceMS: 300, SuppressNonSpeech: true, NoFallback: true, SilenceFilter: true, MinSegmentRMS: 0.0015, MixedFallbackEnabled: true, GigaAMModel: "v3_e2e_rnnt_int8", GigaAMBackend: "onnx", GigaAMONNXProvider: "cpu"},
 		Diarization: Diarization{
 			AutoRun: false, Engine: "pyannote-wespeaker-onnx",
 			SegmentationModel: "./models/diarization/pyannote-segmentation-3/model.onnx", EmbeddingModel: "./models/diarization/wespeaker-resnet34-lm/voxceleb_resnet34_LM.onnx",
@@ -397,7 +433,7 @@ func Defaults() Config {
 			SegmentationSHA256:  "057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25",
 			EmbeddingURL:        "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx",
 			EmbeddingSHA256:     "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068"},
-		Summary:      Summary{AutoRun: false, TimeoutSeconds: 300, MaxRetries: 2, TokenEnv: "MEETING_LLM_TOKEN", TLSVerify: true},
+		Summary:      Summary{AutoRun: false, DefaultPrompt: DefaultSummaryPrompt, TimeoutSeconds: 300, MaxRetries: 2, TokenEnv: "MEETING_LLM_TOKEN", TLSVerify: true},
 		Storage:      Storage{FileNameTemplate: "{{date}}_{{time}}_{{title_slug}}_{{uid_short}}_{{artifact_type}}", DateFormat: "2006-01-02", TimeFormat: "15-04-05", AudioAfterProcessing: "wav", MP3BitrateKbps: 96, OpusBitrateKbps: 32, KeepSourceOnFailure: true, DatabasePath: "./data/database/meetings.db", BackupCount: 3},
 		Logging:      Logging{Level: "info", Directory: "./data/logs", MaxFileMB: 20, MaxFiles: 5},
 		Integrations: Integrations{AuditEnabled: false, Browser: BrowserIntegration{Mode: "auto", TitleTemplate: "{{title}} — {{date}} {{time}}", StopAfterMissedPolls: 4, PollIntervalSeconds: 20}},
@@ -513,6 +549,9 @@ func Load(path string) (Config, error) {
 	if cfg.Audio.EchoDelayMS < 0 || cfg.Audio.EchoDelayMS > 2000 {
 		return cfg, errors.New("audio.echo_delay_ms must be between 0 and 2000")
 	}
+	if cfg.ConferenceDetection.WindowSeconds < 1 || cfg.ConferenceDetection.WindowSeconds > 120 {
+		return cfg, errors.New("conference_detection.window_seconds must be between 1 and 120")
+	}
 	if cfg.Transcription.VADThreshold <= 0 || cfg.Transcription.VADThreshold > 1 {
 		return cfg, errors.New("transcription.vad_threshold must be in (0, 1]")
 	}
@@ -589,20 +628,69 @@ func ResolvePaths(cfg *Config, configPath string) {
 	cfg.Diarization.SegmentationModel = resolve(cfg.Diarization.SegmentationModel)
 	cfg.Diarization.EmbeddingModel = resolve(cfg.Diarization.EmbeddingModel)
 	cfg.Summary.TLSCAFile = resolve(cfg.Summary.TLSCAFile)
+	// Шаблон протокола можно править в prompts/meeting_summary.md: файл
+	// читается при каждой загрузке, поэтому правки применяются без правки кода.
+	cfg.Summary.DefaultPrompt = DefaultSummaryPrompt
+	if data, err := os.ReadFile(filepath.Join(base, "prompts", "meeting_summary.md")); err == nil {
+		if content := strings.TrimSpace(string(data)); content != "" {
+			cfg.Summary.DefaultPrompt = content
+		}
+	}
 	cfg.Storage.EncoderCommand = resolve(cfg.Storage.EncoderCommand)
 }
 
+// stripComment removes a trailing TOML comment. A '#' inside a basic string is
+// kept, and an escaped quote does not end the string. strconv.Quote escapes
+// every quote in a value, so a prompt containing a quotation mark used to flip
+// the quote state: everything after the next '#' was cut off, the string was
+// left unterminated and loading failed with "invalid syntax".
 func stripComment(s string) string {
 	inQuote := false
+	escaped := false
 	for i, r := range s {
-		if r == '"' {
+		switch {
+		case escaped:
+			escaped = false
+		case r == '\\' && inQuote:
+			escaped = true
+		case r == '"':
 			inQuote = !inQuote
-		}
-		if r == '#' && !inQuote {
+		case r == '#' && !inQuote:
 			return s[:i]
 		}
 	}
 	return s
+}
+
+// StringList parses a TOML array of double-quoted strings, e.g. `["a", "b"]`.
+func StringList(raw string) ([]string, error) {
+	raw = strings.TrimSpace(raw)
+	if !strings.HasPrefix(raw, "[") || !strings.HasSuffix(raw, "]") {
+		return nil, fmt.Errorf("expected a TOML array, got %q", raw)
+	}
+	inner := strings.TrimSpace(raw[1 : len(raw)-1])
+	if inner == "" {
+		return []string{}, nil
+	}
+	parts := strings.Split(inner, ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		value, err := text(strings.TrimSpace(part))
+		if err != nil {
+			return nil, fmt.Errorf("invalid string list element %q: %w", part, err)
+		}
+		out = append(out, value)
+	}
+	return out, nil
+}
+
+// QuotedList renders a string slice as a TOML array literal.
+func QuotedList(values []string) string {
+	quoted := make([]string, len(values))
+	for index, value := range values {
+		quoted[index] = strconv.Quote(value)
+	}
+	return "[" + strings.Join(quoted, ", ") + "]"
 }
 
 func text(v string) (string, error) {
@@ -622,8 +710,8 @@ func apply(c *Config, sec, key, raw string) error {
 	if err != nil {
 		return err
 	}
-	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
-	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
+	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "conference_detection.window_seconds": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
+	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "conference_detection.enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
 	floatKeys := map[string]bool{"audio.microphone_gain": true, "audio.system_gain": true, "transcription.echo_text_similarity": true, "transcription.vad_threshold": true, "transcription.min_segment_rms": true, "diarization.cluster_threshold": true}
 	if intKeys[full] {
 		if _, err := integer(raw); err != nil {
@@ -702,6 +790,22 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Desktop.StopRecording = s
 	case "desktop.open_ui":
 		c.Desktop.OpenUI = s
+	case "conference_detection.enabled":
+		c.ConferenceDetection.Enabled, _ = boolean(raw)
+	case "conference_detection.window_seconds":
+		c.ConferenceDetection.WindowSeconds, _ = integer(raw)
+	case "conference_detection.trusted_apps":
+		if list, listErr := StringList(raw); listErr == nil {
+			c.ConferenceDetection.TrustedApps = list
+		} else {
+			return listErr
+		}
+	case "conference_detection.excluded_apps":
+		if list, listErr := StringList(raw); listErr == nil {
+			c.ConferenceDetection.ExcludedApps = list
+		} else {
+			return listErr
+		}
 	case "inference.runtime_path":
 		c.Inference.RuntimePath = s
 	case "inference.auto_download":

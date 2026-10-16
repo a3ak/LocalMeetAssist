@@ -11,6 +11,16 @@ type Device struct {
 	IsDefault bool
 }
 
+// Activity is unavailable when CGO/native platform support is disabled.
+type Activity struct {
+	Microphone    bool   `json:"microphone"`
+	System        bool   `json:"system"`
+	Available     bool   `json:"available"`
+	Backend       string `json:"backend"`
+	Warning       string `json:"warning,omitempty"`
+	MicrophoneApp string `json:"microphone_app,omitempty"`
+}
+
 // StartRequest describes the two capture streams to open.
 type StartRequest struct {
 	MicrophoneID   string
@@ -39,6 +49,11 @@ func (b *Backend) Name() string { return "native audio unavailable (CGO disabled
 // Devices reports that capture is unavailable without CGO.
 func (b *Backend) Devices() ([]Device, []Device, error) {
 	return []Device{}, []Device{}, errors.New("native audio requires CGO_ENABLED=1")
+}
+
+// Activity reports that native activity observation is unavailable.
+func (b *Backend) Activity() Activity {
+	return Activity{Backend: b.Name(), Warning: "native audio activity detection requires CGO_ENABLED=1"}
 }
 
 // Start always fails without CGO.

@@ -30,6 +30,12 @@ func TestExampleConfigLoads(t *testing.T) {
 	if cfg.App.Theme != "dark" && cfg.App.Theme != "light" {
 		t.Fatalf("example theme = %q, want dark or light", cfg.App.Theme)
 	}
+	if cfg.ConferenceDetection.WindowSeconds != 10 {
+		t.Fatalf("conference detection window = %d, want 10", cfg.ConferenceDetection.WindowSeconds)
+	}
+	if !cfg.ConferenceDetection.Enabled {
+		t.Fatal("conference detection must be enabled by default")
+	}
 }
 
 func TestLoadOverridesDefaults(t *testing.T) {
@@ -246,5 +252,83 @@ func TestUpdateFilePreservesUnrelatedValuesAndValidates(t *testing.T) {
 	after, _ := os.ReadFile(path)
 	if string(before) != string(after) {
 		t.Fatal("invalid update changed configuration file")
+	}
+}
+
+func TestStringListRoundTrip(t *testing.T) {
+	values := []string{"Zoom Workplace", "Microsoft Teams", "teams"}
+	parsed, err := StringList(QuotedList(values))
+	if err != nil {
+		t.Fatalf("StringList(QuotedList(...)): %v", err)
+	}
+	if len(parsed) != len(values) {
+		t.Fatalf("length mismatch: got %d want %d", len(parsed), len(values))
+	}
+	for index := range values {
+		if parsed[index] != values[index] {
+			t.Fatalf("element %d: got %q want %q", index, parsed[index], values[index])
+		}
+	}
+	empty, err := StringList("[]")
+	if err != nil || len(empty) != 0 {
+		t.Fatalf("empty list: got %v err %v", empty, err)
+	}
+	if _, err := StringList("not-an-array"); err == nil {
+		t.Fatal("a non-array literal must be rejected")
+	}
+}
+
+// TestUpdateFileKeepsPromptWithQuotesAndHash covers the way prompts are stored:
+// UpdateFile writes them with strconv.Quote, which escapes every quotation mark.
+// Comment stripping used to count an escaped quote as a real one, so a '#' after
+// an odd number of quotes was cut off as a comment. When the value ended with a
+// quote right before the '#', loading failed with "invalid syntax"; other cases
+// silently truncated the saved prompt.
+func TestUpdateFileKeepsPromptWithQuotesAndHash(t *testing.T) {
+	prompts := map[string]string{
+		"цитата вплотную к решётке": "Пиши разделы как \"# Заголовок\" в ответе",
+		"нечётное число кавычек":    "Ты — ассистент.\nНе пиши символ \" в ответе.\n# Правила",
+		"чётное число кавычек":      "Ты — ассистент.\nОтвечай \"кратко\".\n# Правила",
+		"json-пример и решётка":     "Пример: {\"a\": 1}\n# JSON в ответе",
+		"решётка перед кавычкой":    "# Заголовок\nОтвечай \"да\"",
+		"обратные слэши и решётка":  "Путь C:\\\\Users\\\\test\n# хвост",
+	}
+	for name, prompt := range prompts {
+		path := filepath.Join(t.TempDir(), "config.toml")
+		if err := UpdateFile(path, map[string]string{"summary.system_prompt": strconv.Quote(prompt)}); err != nil {
+			t.Fatalf("%s: UpdateFile: %v", name, err)
+		}
+		loaded, err := Load(path)
+		if err != nil {
+			t.Fatalf("%s: Load: %v", name, err)
+		}
+		if loaded.Summary.SystemPrompt != prompt {
+			t.Fatalf("%s: prompt changed:\n got %q\nwant %q", name, loaded.Summary.SystemPrompt, prompt)
+		}
+	}
+}
+
+func TestResolvePathsReadsPromptFile(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "prompts"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	template := "Правила из файла.\n# и решётка внутри шаблона"
+	if err := os.WriteFile(filepath.Join(dir, "prompts", "meeting_summary.md"), []byte(template), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg := Defaults()
+	ResolvePaths(&cfg, filepath.Join(dir, "config.toml"))
+	if got := EffectiveSummaryPrompt(cfg.Summary); got != template {
+		t.Fatalf("шаблон из файла не применён:\n got %q\nwant %q", got, template)
+	}
+	cfg.Summary.SystemPrompt = "пользовательский промпт"
+	if got := EffectiveSummaryPrompt(cfg.Summary); got != "пользовательский промпт" {
+		t.Fatalf("пользовательское значение должно побеждать файл, получено %q", got)
+	}
+	empty := Defaults()
+	ResolvePaths(&empty, filepath.Join(t.TempDir(), "config.toml"))
+	if got := EffectiveSummaryPrompt(empty.Summary); got != DefaultSummaryPrompt {
+		t.Fatal("без файла должен использоваться встроенный шаблон")
 	}
 }

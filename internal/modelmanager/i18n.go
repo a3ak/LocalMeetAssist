@@ -8,6 +8,7 @@ import "strings"
 var modelDescriptionsEN = map[string]string{
 	"onnx-runtime":                    "Native ONNX execution environment for this OS and architecture. Downloaded once; no CLI applications are used.",
 	"whisper-runtime":                 "Native whisper.cpp library. LocalMeetAssist calls it directly; whisper-cli is neither installed nor launched.",
+	"llama-runtime":                   "Native llama.cpp library for local summarization. A prebuilt release is downloaded; llama-cli is neither installed nor launched.",
 	"gigaam-v3-e2e-rnnt-int8":         "Recommended Russian model: punctuation and text normalization, RNNT decoding, about 227 MB. It processes the detected VAD speech fragments directly inside LocalMeetAssist.",
 	"whisper-small-q5":                "Compact multilingual Whisper: faster than medium, about 181 MB. Good for quick drafts and weaker CPUs.",
 	"whisper-medium-q5":               "More accurate multilingual Whisper, about 514 MB. A good balance for difficult speech and terminology.",

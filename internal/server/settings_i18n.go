@@ -11,16 +11,17 @@ type settingTextEN struct {
 
 // settingGroupsEN translates the settings group titles and descriptions.
 var settingGroupsEN = map[string]settingTextEN{
-	"app":           {"Application", "Interface, data directory and local HTTP server."},
-	"audio":         {"Audio", "Native microphone and system audio recording."},
-	"desktop":       {"Tray and hotkeys", "Quick recording control without an open browser. Regular combinations on macOS do not require Accessibility; the registration result is written to the log."},
-	"inference":     {"ONNX Runtime", "Native neural inference library. LocalMeetAssist loads it directly; no CLI or Python needed."},
-	"transcription": {"Transcription", "GigaAM v3 or Whisper run directly inside LocalMeetAssist, without launching a CLI."},
-	"diarization":   {"Diarization", "PyAnnote Segmentation 3 + WeSpeaker with voice clustering in Go."},
-	"summary":       {"Summarization", "OpenAI-compatible minutes model."},
-	"storage":       {"Storage", "File names, Ogg/Opus and source WAV policy."},
-	"models":        {"Model files", "Direct ONNX model sources and checksums. The bundle can be downloaded and applied in the “Models” section."},
-	"logging":       {"Logging", "Level and rotation of the local log."},
+	"app":                  {"Application", "Interface, data directory and local HTTP server."},
+	"audio":                {"Audio", "Native microphone and system audio recording."},
+	"desktop":              {"Tray and hotkeys", "Quick recording control without an open browser. Regular combinations on macOS do not require Accessibility; the registration result is written to the log."},
+	"conference_detection": {"Conference detection", "Ask to record when the OS reports microphone capture and system playback at the same time."},
+	"inference":            {"ONNX Runtime", "Native neural inference library. LocalMeetAssist loads it directly; no CLI or Python needed."},
+	"transcription":        {"Transcription", "GigaAM v3 or Whisper run directly inside LocalMeetAssist, without launching a CLI."},
+	"diarization":          {"Diarization", "PyAnnote Segmentation 3 + WeSpeaker with voice clustering in Go."},
+	"summary":              {"Summarization", "OpenAI-compatible minutes model."},
+	"storage":              {"Storage", "File names, Ogg/Opus and source WAV policy."},
+	"models":               {"Model files", "Direct ONNX model sources and checksums. The bundle can be downloaded and applied in the “Models” section."},
+	"logging":              {"Logging", "Level and rotation of the local log."},
 }
 
 // settingSectionsEN translates the section headings used inside a group.
@@ -112,6 +113,12 @@ var settingFieldsEN = map[string]settingTextEN{
 	"desktop.start_recording": {"Start recording", "Separate global combination to start recording."},
 	"desktop.stop_recording":  {"Stop recording", "Separate global combination to stop recording."},
 	"desktop.open_ui":         {"Open UI", "Optional global combination to open the Web UI."},
+
+	// Conference detection
+	"conference_detection.enabled":        {"Offer to record", "Observe OS audio sessions and ask before recording. Audio amplitude is not inspected: an in-app mute normally leaves the session active."},
+	"conference_detection.window_seconds": {"Detection window, sec", "Microphone capture and system playback must remain active together. The default is 10 seconds."},
+	"conference_detection.trusted_apps":   {"Trusted applications", "Apps that are offered recording immediately, without asking to be remembered."},
+	"conference_detection.excluded_apps":  {"Exclusions", "Apps that are never asked about."},
 
 	// Inference
 	"inference.runtime_path":         {"Library or directory", "You can point to a ready .dll/.dylib/.so manually. For a directory, LocalMeetAssist picks the file by OS and architecture."},

@@ -29,21 +29,26 @@ import (
 
 // Manager owns the tray icon and registered global hotkeys.
 type Manager struct {
-	baseURL   string
-	token     string
-	openUI    func() error
-	config    func() config.Config
-	logger    *log.Logger
-	client    *http.Client
-	mu        sync.Mutex
-	active    *model.Meeting
-	bindings  []*hotkey.Hotkey
-	shortcut  config.Desktop
-	status    *systray.MenuItem
-	startItem *systray.MenuItem
-	stopItem  *systray.MenuItem
-	iconState int
-	renderCh  chan struct{}
+	baseURL          string
+	token            string
+	openUI           func() error
+	config           func() config.Config
+	logger           *log.Logger
+	client           *http.Client
+	mu               sync.Mutex
+	active           *model.Meeting
+	bindings         []*hotkey.Hotkey
+	shortcut         config.Desktop
+	status           *systray.MenuItem
+	startItem        *systray.MenuItem
+	stopItem         *systray.MenuItem
+	candidateItem    *systray.MenuItem
+	candidateStart   *systray.MenuItem
+	candidateDismiss *systray.MenuItem
+	candidateID      string
+	candidateOpened  string
+	iconState        int
+	renderCh         chan struct{}
 }
 
 // New creates the tray manager for the running server.
@@ -69,23 +74,34 @@ func (m *Manager) ready() {
 	m.startItem = systray.AddMenuItem(m.tr("Начать запись", "Start recording"), m.tr("Записать микрофон и системный звук", "Record microphone and system audio"))
 	m.stopItem = systray.AddMenuItem(m.tr("Остановить запись", "Stop recording"), m.tr("Завершить текущую встречу", "Finish the current meeting"))
 	m.stopItem.Disable()
+	m.candidateItem = systray.AddMenuItem(m.tr("Возможная онлайн-встреча", "Possible online meeting"), m.tr("Микрофон и системный звук активны", "Microphone and system audio are active"))
+	m.candidateItem.Disable()
+	m.candidateStart = systray.AddMenuItem(m.tr("Начать запись встречи", "Start meeting recording"), m.tr("Подтвердить обнаруженную встречу", "Confirm the detected meeting"))
+	m.candidateDismiss = systray.AddMenuItem(m.tr("Пропустить в этот раз", "Skip this time"), m.tr("Не спрашивать до завершения текущей активности", "Do not ask again until the current activity ends"))
+	m.candidateItem.Hide()
+	m.candidateStart.Hide()
+	m.candidateDismiss.Hide()
 	systray.AddSeparator()
 	openItem := systray.AddMenuItem(m.tr("Открыть Web UI", "Open Web UI"), m.tr("Открыть LocalMeetAssist в браузере", "Open LocalMeetAssist in the browser"))
 	quitItem := systray.AddMenuItem(m.tr("Завершить LocalMeetAssist", "Quit LocalMeetAssist"), m.tr("Остановить запись и закрыть приложение", "Stop recording and close the application"))
 
-	go m.menuLoop(m.startItem.ClickedCh, m.stopItem.ClickedCh, openItem.ClickedCh, quitItem.ClickedCh)
+	go m.menuLoop(m.startItem.ClickedCh, m.stopItem.ClickedCh, m.candidateStart.ClickedCh, m.candidateDismiss.ClickedCh, openItem.ClickedCh, quitItem.ClickedCh)
 	go m.presentationLoop()
 	go m.stateLoop()
 	m.reloadHotkeys()
 }
 
-func (m *Manager) menuLoop(start, stop, open, quit <-chan struct{}) {
+func (m *Manager) menuLoop(start, stop, candidateStart, candidateDismiss, open, quit <-chan struct{}) {
 	for {
 		select {
 		case <-start:
 			go m.startRecording()
 		case <-stop:
 			go m.stopRecording()
+		case <-candidateStart:
+			go m.answerConferenceCandidate("start")
+		case <-candidateDismiss:
+			go m.answerConferenceCandidate("dismiss")
 		case <-open:
 			m.openBrowser()
 		case <-quit:
@@ -138,6 +154,36 @@ func (m *Manager) refreshRecording() {
 	if changed {
 		m.requestPresentation()
 	}
+	m.refreshConferenceCandidate()
+}
+
+func (m *Manager) refreshConferenceCandidate() {
+	var snapshot struct {
+		Candidate *struct {
+			ID string `json:"id"`
+		} `json:"candidate"`
+	}
+	if err := m.request(http.MethodGet, "/api/v1/conference-detection", nil, &snapshot); err != nil {
+		return
+	}
+	m.mu.Lock()
+	previous := m.candidateID
+	m.candidateID = ""
+	if snapshot.Candidate != nil {
+		m.candidateID = snapshot.Candidate.ID
+	}
+	current := m.candidateID
+	shouldOpen := current != "" && current != m.candidateOpened
+	if shouldOpen {
+		m.candidateOpened = current
+	}
+	m.mu.Unlock()
+	if previous != current {
+		m.requestPresentation()
+	}
+	if shouldOpen {
+		m.openBrowser()
+	}
 }
 
 func (m *Manager) requestPresentation() {
@@ -156,6 +202,7 @@ func (m *Manager) presentationLoop() {
 func (m *Manager) updatePresentation() {
 	m.mu.Lock()
 	active := m.active
+	candidateID := m.candidateID
 	desiredIcon := 0
 	if active != nil {
 		desiredIcon = 1
@@ -163,14 +210,31 @@ func (m *Manager) updatePresentation() {
 	iconChanged := m.iconState != desiredIcon
 	m.iconState = desiredIcon
 	m.mu.Unlock()
+	if candidateID != "" && active == nil {
+		m.candidateItem.Show()
+		m.candidateStart.Show()
+		m.candidateDismiss.Show()
+	} else {
+		m.candidateItem.Hide()
+		m.candidateStart.Hide()
+		m.candidateDismiss.Hide()
+	}
 	if active == nil {
-		m.status.SetTitle(m.tr("Запись не ведётся", "Not recording"))
+		if candidateID != "" {
+			m.status.SetTitle(m.tr("Обнаружена возможная встреча", "Possible meeting detected"))
+		} else {
+			m.status.SetTitle(m.tr("Запись не ведётся", "Not recording"))
+		}
 		m.startItem.Enable()
 		m.stopItem.Disable()
 		if iconChanged {
 			systray.SetIcon(trayIcon(false))
 		}
-		systray.SetTooltip(m.tr("LocalMeetAssist — запись не ведётся", "LocalMeetAssist — not recording"))
+		if candidateID != "" {
+			systray.SetTooltip(m.tr("LocalMeetAssist — начать запись встречи?", "LocalMeetAssist — start meeting recording?"))
+		} else {
+			systray.SetTooltip(m.tr("LocalMeetAssist — запись не ведётся", "LocalMeetAssist — not recording"))
+		}
 		return
 	}
 	duration := time.Since(active.StartedAt)
@@ -185,6 +249,31 @@ func (m *Manager) updatePresentation() {
 		systray.SetIcon(trayIcon(true))
 	}
 	systray.SetTooltip("LocalMeetAssist — " + label)
+}
+
+func (m *Manager) answerConferenceCandidate(action string) {
+	m.mu.Lock()
+	id := m.candidateID
+	m.mu.Unlock()
+	if id == "" {
+		return
+	}
+	var meeting model.Meeting
+	var output any
+	if action == "start" {
+		output = &meeting
+	}
+	if err := m.request(http.MethodPost, "/api/v1/conference-detection", map[string]string{"action": action, "candidate_id": id}, output); err != nil {
+		m.showError("Conference detection", err)
+		return
+	}
+	m.mu.Lock()
+	m.candidateID = ""
+	if action == "start" {
+		m.active = &meeting
+	}
+	m.mu.Unlock()
+	m.requestPresentation()
 }
 
 func (m *Manager) startRecording() {

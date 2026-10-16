@@ -522,3 +522,86 @@ func (s *Store) ReplaceSpeakerState(meeting model.Meeting, segments []model.Segm
 		return nil
 	})
 }
+
+// MergeMeetingState atomically replaces source meetings with one fully built
+// meeting state. Files are prepared by the caller before this transaction; the
+// returned artifacts identify source files that may be removed afterwards.
+func (s *Store) MergeMeetingState(meeting model.Meeting, artifacts []model.Artifact, speakers []model.Speaker, segments []model.Segment, sourceUIDs []string) ([]model.Artifact, error) {
+	if meeting.UID == "" || len(sourceUIDs) < 2 {
+		return nil, errors.New("invalid meeting merge state")
+	}
+	sourceSet := make(map[string]struct{}, len(sourceUIDs))
+	for _, uid := range sourceUIDs {
+		if uid == "" || uid == meeting.UID {
+			return nil, errors.New("invalid source meeting uid")
+		}
+		sourceSet[uid] = struct{}{}
+	}
+	removed := make([]model.Artifact, 0)
+	err := s.db.Update(func(tx *bolt.Tx) error {
+		meetings := tx.Bucket(bMeetings)
+		for uid := range sourceSet {
+			if meetings.Get([]byte(uid)) == nil {
+				return os.ErrNotExist
+			}
+		}
+		artifactBucket := tx.Bucket(bArtifacts)
+		var artifactKeys [][]byte
+		if err := artifactBucket.ForEach(func(key, value []byte) error {
+			var artifact model.Artifact
+			if err := json.Unmarshal(value, &artifact); err != nil {
+				return err
+			}
+			if _, ok := sourceSet[artifact.MeetingUID]; ok {
+				removed = append(removed, artifact)
+				artifactKeys = append(artifactKeys, append([]byte(nil), key...))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, key := range artifactKeys {
+			if err := artifactBucket.Delete(key); err != nil {
+				return err
+			}
+		}
+		for uid := range sourceSet {
+			if err := meetings.Delete([]byte(uid)); err != nil {
+				return err
+			}
+			if err := deletePrefix(tx.Bucket(bJobs), uid+"/"); err != nil {
+				return err
+			}
+			if err := deletePrefix(tx.Bucket(bSpeakers), uid+"/"); err != nil {
+				return err
+			}
+			if err := tx.Bucket(bSegments).Delete([]byte(uid)); err != nil {
+				return err
+			}
+		}
+		if err := putJSON(meetings, meeting.UID, meeting); err != nil {
+			return err
+		}
+		for _, artifact := range artifacts {
+			if artifact.UID == "" || artifact.MeetingUID != meeting.UID {
+				return errors.New("invalid merged artifact")
+			}
+			if err := putJSON(artifactBucket, artifact.UID, artifact); err != nil {
+				return err
+			}
+		}
+		if err := putJSON(tx.Bucket(bSegments), meeting.UID, segments); err != nil {
+			return err
+		}
+		for _, speaker := range speakers {
+			if speaker.ID == "" || speaker.MeetingUID != meeting.UID {
+				return errors.New("invalid merged speaker")
+			}
+			if err := putJSON(tx.Bucket(bSpeakers), meeting.UID+"/"+speaker.ID, speaker); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return removed, err
+}

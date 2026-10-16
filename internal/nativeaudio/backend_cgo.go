@@ -7,15 +7,20 @@ package nativeaudio
 #cgo linux LDFLAGS: -ldl -lpthread -lm
 #cgo windows LDFLAGS: -lole32 -luuid -lksuser -lwinmm -lavrt
 #cgo darwin CFLAGS: -fblocks
-#cgo darwin LDFLAGS: -framework Foundation -framework CoreAudio -framework AudioToolbox -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo
+#cgo darwin LDFLAGS: -framework AppKit -framework Foundation -framework CoreAudio -framework AudioToolbox -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo
 #include <stdlib.h>
 #include "nativeaudio.h"
+// Declared here as well, so the cgo binding does not depend on the header
+// carrying the declaration: a partially applied change used to break the build
+// with "undefined: C.lm_audio_active_input_app".
+int lm_audio_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size);
 */
 import "C"
 
 import (
 	"errors"
 	"fmt"
+	"runtime"
 	"sync"
 	"unsafe"
 )
@@ -25,6 +30,20 @@ type Device struct {
 	ID        string
 	Name      string
 	IsDefault bool
+}
+
+// Activity is a snapshot of operating-system audio session activity. Active
+// means that a client holds a running capture/playback session; it is not an
+// amplitude measurement.
+type Activity struct {
+	Microphone bool   `json:"microphone"`
+	System     bool   `json:"system"`
+	Available  bool   `json:"available"`
+	Backend    string `json:"backend"`
+	Warning    string `json:"warning,omitempty"`
+	// MicrophoneApp is the localized name of the process that is actively
+	// capturing input, when the platform can attribute it. Empty when unknown.
+	MicrophoneApp string `json:"microphone_app,omitempty"`
 }
 
 // StartRequest describes the two capture streams to open.
@@ -71,6 +90,43 @@ func (b *Backend) Devices() (microphones, system []Device, err error) {
 		return nil, nil, err
 	}
 	return microphones, system, nil
+}
+
+// Activity reports whether other applications are actively using microphone
+// capture and system playback. Linux uses the PulseAudio/PipeWire compatibility
+// API with an ALSA fallback; Windows and macOS query native session state.
+func (b *Backend) Activity() Activity {
+	if runtime.GOOS == "linux" {
+		return linuxAudioActivity(b.Name())
+	}
+	errbuf := make([]byte, 2048)
+	var microphone, system C.int
+	result := C.lm_audio_activity(&microphone, &system, (*C.char)(unsafe.Pointer(&errbuf[0])), C.size_t(len(errbuf)))
+	activity := Activity{Microphone: microphone != 0, System: system != 0, Available: result == 0, Backend: b.Name()}
+	if result != 0 {
+		activity.Warning = cString(errbuf)
+	}
+	if activity.Microphone {
+		activity.MicrophoneApp = b.ActiveInputApp()
+	}
+	return activity
+}
+
+// ActiveInputApp returns the localized name of the process that is actively
+// capturing the microphone. Linux resolves it from pactl, macOS from CoreAudio
+// process objects; Windows reports an empty name for now.
+func (b *Backend) ActiveInputApp() string {
+	namebuf := make([]byte, 512)
+	errbuf := make([]byte, 256)
+	found := C.int(0)
+	result := C.lm_audio_active_input_app(
+		(*C.char)(unsafe.Pointer(&namebuf[0])), C.size_t(len(namebuf)), &found,
+		(*C.char)(unsafe.Pointer(&errbuf[0])), C.size_t(len(errbuf)),
+	)
+	if result != 0 || found == 0 {
+		return ""
+	}
+	return cString(namebuf)
 }
 
 func listDevices(kind C.int) ([]Device, error) {

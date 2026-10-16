@@ -6,16 +6,13 @@
   "common.delete": "Удалить",
   "common.open": "Открыть",
   "common.loading": "Загрузка…",
-
   "app.title": "LocalMeetAssist — локальные протоколы встреч",
   "app.tagline": "Локальные протоколы встреч",
   "app.audioChecking": "Проверка аудиоподсистемы…",
   "app.bootstrapError": "Ошибка запуска UI: {message}",
-
   "nav.settings": "Настройки",
   "nav.models": "Модели",
   "nav.diagnostics": "Диагностика",
-
   "record.startBtn": "● Начать запись",
   "record.stopBtn": "■ Завершить",
   "record.subtitle": "Микрофон и системный звук записываются приложением",
@@ -40,14 +37,26 @@
   "record.devicesOk": "Устройства обнаружены приложением по системным названиям.",
   "record.audioReady": "Аудио готово: {mics} микрофон(а), {systems} источник(а) системного звука",
   "record.audioNotReady": "Аудио не готово: {reason}",
-
+  "conference.appLabel": "Приложение: {app}",
+  "conference.trustedQuestion": "Кажется, у вас онлайн-встреча. Начать запись микрофона и системного звука?",
+  "conference.unknownQuestion": "Приложение «{app}» активировало микрофон. Включить его в доверенные для записи встреч?",
+  "conference.trust": "Да, в доверенные и начать запись",
+  "conference.exclude": "Нет, в исключения",
+  "conference.skip": "Пропустить",
+  "conference.trustedAndStarted": "Приложение добавлено в доверенные, запись начата",
+  "conference.excluded": "Приложение добавлено в исключения",
+  "conference.title": "Похоже, началась онлайн-встреча",
+  "conference.subtitle": "Микрофон и системный звук активны не менее заданного времени.",
+  "conference.question": "Начать запись микрофона и системного звука?",
+  "conference.start": "Да, начать запись",
+  "conference.dismiss": "Нет, пропустить",
+  "conference.started": "Запись обнаруженной встречи начата",
   "create.btn": "＋ Создать встречу",
   "create.title": "Создать встречу",
   "create.name": "Название",
   "create.datetime": "Дата и время",
   "create.confirm": "Создать",
   "create.created": "Встреча создана",
-
   "search.placeholder": "Найти фразу или использовать ключи: Speakers:, Meeting:, Discussion:, Date:",
   "search.clear": "Очистить",
   "search.addCondition": "Добавить условие:",
@@ -61,8 +70,8 @@
   "search.hint": "Введите точную фразу. Условия через точку с запятой объединяются по правилу «И».",
   "search.speakerSuggestionTitle": "Подставить имя «{name}»",
   "search.matchesInMonth": "Подходит встреч в текущем месяце: {visible} из {total}. Остальные встречи затенены.",
-
   "calendar.today": "Сегодня",
+  "calendar.moreHint": "Встречи за этот день показаны в панели «Встречи» справа",
   "calendar.moreEvents": "Ещё {count}",
   "calendar.month": "Месяц",
   "calendar.week": "Неделя",
@@ -74,18 +83,19 @@
   "weekday.fri": "Пт",
   "weekday.sat": "Сб",
   "weekday.sun": "Вс",
-
   "meetings.title": "Встречи",
+  "meetings.selected": "Выбрано: {count}",
+  "meetings.merge": "Объединить выбранные встречи",
+  "meetings.mergeConfirm": "Объединить выбранные встречи ({count})? Исходные встречи будут заменены одной общей встречей.",
+  "meetings.merged": "Встречи объединены",
   "list.noMeetings": "В этом месяце встреч пока нет.",
   "list.noMatches": "По этому фильтру ничего не найдено.",
   "list.allPeriod": "Показать все встречи периода",
   "list.noParticipants": "Участники ещё не определены",
-
   "duration.none": "без длительности",
   "duration.hours": "{hours} ч {minutes} мин",
   "duration.minutes": "{minutes} мин",
   "duration.seconds": "{n} сек",
-
   "status.created": "Создана",
   "status.starting": "Запуск записи",
   "status.recording": "Идёт запись",
@@ -97,7 +107,6 @@
   "status.warning": "С предупреждением",
   "status.failed": "Ошибка",
   "status.canceled": "Остановлено",
-
   "stage.queued": "в очереди",
   "stage.transcribing": "транскрибация",
   "stage.diarizing": "разделение спикеров",
@@ -107,7 +116,6 @@
   "stage.encoding": "сохранение аудио",
   "stage.completed": "завершено",
   "stage.canceled": "остановлено",
-
   "detail.status": "Статус: {status}",
   "detail.stage": "этап: {stage}",
   "detail.meta": "{date} · {duration} · микрофон: {mic} · системный звук: {sys}",
@@ -116,18 +124,14 @@
   "detail.deleteConfirm": "Удалить встречу и все связанные управляемые файлы?",
   "detail.deleted": "Встреча удалена",
   "detail.closeDirtyConfirm": "Закрыть встречу без сохранения изменений спикеров?",
-
   "tab.summary": "Протокол",
   "tab.transcript": "Транскрипт",
   "tab.speakers": "Спикеры",
   "tab.artifacts": "Файлы",
   "tab.jobs": "Обработка",
-
   "summary.stale": "Протокол создан по предыдущей версии транскрипта или списка спикеров. Последний успешный результат сохранён; рекомендуется повторить саммаризацию.",
   "summary.placeholder": "Саммари ещё не создано",
-
   "transcript.placeholder": "Транскрипт ещё не создан",
-
   "speakers.empty": "Спикеры появятся после включения этапа транскрибации.",
   "speakers.sample": "Образец {n}",
   "speakers.noAudio": "Для этой записи исходный аудиопоток недоступен.",
@@ -145,15 +149,15 @@
   "speakers.dirtyCount": "Несохранённых изменений: {n}",
   "speakers.selectedCount": "Выбрано фрагментов: {n}",
   "speakers.mergeConfirm": "Объединить {from} с {into}?",
+  "speakers.play": "Воспроизвести фрагмент",
+  "speakers.stop": "Остановить воспроизведение",
   "speakers.cantMove": "Нельзя переносить фрагменты между микрофонным и системным потоками",
   "speakers.cantMerge": "Нельзя объединять микрофонный и системный потоки",
   "speakers.cantReadDrop": "Не удалось прочитать переносимые фрагменты",
   "speakers.saved": "Все изменения спикеров сохранены; транскрипт обновлён",
   "speakers.discarded": "Несохранённые изменения спикеров отменены",
-
   "artifacts.deleteConfirm": "Удалить файл «{name}»? Это действие нельзя отменить.",
   "artifacts.deleted": "Файл удалён",
-
   "import.audioGroup": "Источник аудио (WAV, Opus или MP3)",
   "import.microphone": "Микрофон",
   "import.systemAudio": "Системный звук",
@@ -165,7 +169,6 @@
   "import.importBtn": "Импортировать",
   "import.hint": "Аудио автоматически преобразуется в рабочий PCM16 mono 16 кГц. Исходный файл после успешной проверки не сохраняется. Микрофон и системный звук можно загрузить последовательно; импорт mixed заменяет раздельную пару.",
   "import.attached": "Файл привязан к встрече",
-
   "jobs.participants": "Количество участников",
   "jobs.participantsHint": "Включая владельца микрофона. 0 — определить автоматически; для system.wav будет использовано N−1.",
   "jobs.saveForMeeting": "Сохранить для встречи",
@@ -185,7 +188,6 @@
   "jobs.participantsSaved": "Количество участников сохранено для встречи",
   "jobs.participantsError": "Укажите целое число участников от 0 до 65",
   "jobs.progressUpdateFailed": "Не удалось обновить прогресс: {message}",
-
   "models.downloadRecommended": "Установить все рекомендованные модели",
   "models.recommendedStarted": "Запущена загрузка моделей: {n}",
   "models.recommendedNothing": "Все рекомендованные модели уже установлены",
@@ -216,12 +218,14 @@
   "models.appliedToast": "Модель «{name}» применена",
   "models.testing": "Проверка…",
   "models.ms": " мс",
-
   "settings.title": "Настройки",
   "settings.meta": "Рабочие параметры применяются сразу. Адрес сервера, каталоги данных/логов и БД — после перезапуска.",
   "settings.version": "Версия",
   "settings.loading": "Загрузка настроек…",
   "settings.changedCount": "Изменено параметров: {n}",
+  "settings.addApp": "＋ Добавить приложение",
+  "settings.removeApp": "Удалить из списка",
+  "settings.appNamePlaceholder": "Название приложения",
   "settings.noChanges": "Нет несохранённых изменений",
   "settings.saved": "Настройки сохранены",
   "settings.savedToast": "Настройки сохранены и применены без перезапуска.",
@@ -240,7 +244,6 @@
   "settings.resetPrompt": "Сбросить промт",
   "settings.duplicateHotkey": "Сочетание {value} уже назначено другому действию",
   "settings.closeConfirm": "Закрыть настройки без сохранения изменений?",
-
   "diag.jsonTitle": "Полные данные диагностики · JSON",
   "diag.microphone": "Микрофон",
   "diag.systemAudio": "Системный звук",
@@ -263,15 +266,12 @@
   "diag.title": "Диагностика",
   "diag.recentLogs": "Последние строки лога",
   "diag.emptyLog": "Лог пока пуст.",
-
   "bytes.b": " Б",
   "bytes.kb": " КБ",
   "bytes.mb": " МБ",
   "bytes.gb": " ГБ",
-
   "api.sessionFailed": "Не удалось получить локальную сессию: HTTP {status}",
   "api.timeout": "Сервер не ответил за 15 секунд. Проверьте журнал LocalMeetAssist.",
-
   "nav.integrations": "Интеграции",
   "auth.hint": "Страница открыта вручную без авторизации. Откройте LocalMeetAssist из меню трея «Открыть Web UI» или перезапустите приложение.",
   "integrations.title": "Интеграции",
@@ -354,5 +354,11 @@
   "integrations.auditToken": "Токен",
   "integrations.auditMethod": "Метод",
   "integrations.auditPath": "Путь",
-  "integrations.auditStatus": "Статус"
+  "integrations.auditStatus": "Статус",
+  "models.requires": "нужно {ram} RAM и {disk} на диске",
+  "models.gib": "ГБ",
+  "models.insufficientResources": "Скачивание остановлено, т.к. недостаточно ресурсов для работы модели «{name}», рекомендуемые системные требования: {required}. Всё равно желаете скачать и протестировать на вашем компьютере?",
+  "models.recommendedSkipped": "Пропущено из-за нехватки ресурсов: {names}",
+  "models.needsResources": "Нужно {ram} RAM и {disk} на диске",
+  "models.notEnoughResources": "Этому компьютеру не хватает ресурсов для запуска модели"
 }

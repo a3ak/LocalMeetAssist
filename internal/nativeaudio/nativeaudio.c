@@ -1,3 +1,6 @@
+#if defined(_WIN32)
+#define COBJMACROS
+#endif
 #define MA_NO_DECODING
 #define MA_NO_ENCODING
 #define MA_NO_RESOURCE_MANAGER
@@ -15,11 +18,177 @@
 
 #if defined(_WIN32)
 #include <windows.h>
+#include <audiopolicy.h>
+#include <mmdeviceapi.h>
+#include <wchar.h>
+/* QueryFullProcessImageNameW and the limited-information access right need a
+ * Vista-era target; older SDK headers may not define them. */
+#ifndef PROCESS_QUERY_LIMITED_INFORMATION
+#define PROCESS_QUERY_LIMITED_INFORMATION 0x1000
+#endif
 #endif
 
 #if defined(__APPLE__)
 void* lm_macos_system_start(const char* path, unsigned int sample_rate, unsigned int channels, char* error_text, size_t error_size);
 int lm_macos_system_stop(void* handle, char* error_text, size_t error_size);
+int lm_macos_audio_activity(int* microphone_active, int* system_active, char* error_text, size_t error_size);
+int lm_macos_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size);
+#endif
+
+#if defined(_WIN32)
+static void lm_set_error(char* target, size_t size, const char* message);
+static int lm_wasapi_active_capture_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size);
+static int lm_wasapi_has_active_session(EDataFlow flow, int* active, char* error_text, size_t error_size)
+{
+    IMMDeviceEnumerator* enumerator = NULL;
+    IMMDeviceCollection* devices = NULL;
+    HRESULT initialized = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    int uninitialize = SUCCEEDED(initialized);
+    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) {
+        lm_set_error(error_text, error_size, "WASAPI COM initialization failed");
+        return -1;
+    }
+    HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
+                                  &IID_IMMDeviceEnumerator, (void**)&enumerator);
+    if (FAILED(hr)) goto failed;
+    hr = IMMDeviceEnumerator_EnumAudioEndpoints(enumerator, flow, DEVICE_STATE_ACTIVE, &devices);
+    if (FAILED(hr)) goto failed;
+    UINT device_count = 0;
+    hr = IMMDeviceCollection_GetCount(devices, &device_count);
+    if (FAILED(hr)) goto failed;
+    *active = 0;
+    for (UINT device_index = 0; device_index < device_count && !*active; device_index++) {
+        IMMDevice* device = NULL;
+        IAudioSessionManager2* manager = NULL;
+        IAudioSessionEnumerator* sessions = NULL;
+        if (FAILED(IMMDeviceCollection_Item(devices, device_index, &device))) continue;
+        hr = IMMDevice_Activate(device, &IID_IAudioSessionManager2, CLSCTX_ALL, NULL, (void**)&manager);
+        if (SUCCEEDED(hr)) hr = IAudioSessionManager2_GetSessionEnumerator(manager, &sessions);
+        if (SUCCEEDED(hr) && sessions != NULL) {
+            int session_count = 0;
+            if (SUCCEEDED(IAudioSessionEnumerator_GetCount(sessions, &session_count))) {
+                for (int session_index = 0; session_index < session_count; session_index++) {
+                    IAudioSessionControl* session = NULL;
+                    AudioSessionState state = AudioSessionStateInactive;
+                    if (SUCCEEDED(IAudioSessionEnumerator_GetSession(sessions, session_index, &session)) && session != NULL) {
+                        if (SUCCEEDED(IAudioSessionControl_GetState(session, &state)) && state == AudioSessionStateActive) *active = 1;
+                        IAudioSessionControl_Release(session);
+                    }
+                    if (*active) break;
+                }
+            }
+        }
+        if (sessions != NULL) IAudioSessionEnumerator_Release(sessions);
+        if (manager != NULL) IAudioSessionManager2_Release(manager);
+        IMMDevice_Release(device);
+    }
+    IMMDeviceCollection_Release(devices);
+    IMMDeviceEnumerator_Release(enumerator);
+    if (uninitialize) CoUninitialize();
+    return 0;
+
+failed:
+    if (devices != NULL) IMMDeviceCollection_Release(devices);
+    if (enumerator != NULL) IMMDeviceEnumerator_Release(enumerator);
+    if (uninitialize) CoUninitialize();
+    lm_set_error(error_text, error_size, "WASAPI session enumeration failed");
+    return -1;
+}
+
+/* lm_windows_process_name resolves a process id to the executable base name. */
+static void lm_windows_process_name(DWORD pid, char* name, size_t name_size)
+{
+    name[0] = '\0';
+    HANDLE process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, FALSE, pid);
+    if (process == NULL) return;
+    wchar_t path[MAX_PATH];
+    DWORD path_size = (DWORD)(sizeof(path) / sizeof(path[0]));
+    if (QueryFullProcessImageNameW(process, 0, path, &path_size) && path_size > 0) {
+        const wchar_t* base = wcsrchr(path, L'\\');
+        base = (base != NULL) ? base + 1 : path;
+        if (WideCharToMultiByte(CP_UTF8, 0, base, -1, name, (int)name_size, NULL, NULL) > 0) {
+            name[name_size - 1] = '\0';
+        } else {
+            name[0] = '\0';
+        }
+    }
+    CloseHandle(process);
+}
+
+/* lm_wasapi_active_capture_app reports the application holding an active
+ * capture session. Every active capture endpoint is inspected, not just the
+ * default one, because a headset or an external interface can carry a call. */
+static int lm_wasapi_active_capture_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size)
+{
+    if (name == NULL || name_size == 0 || found == NULL) {
+        lm_set_error(error_text, error_size, "invalid active input app result pointers");
+        return -1;
+    }
+    *found = 0;
+    name[0] = '\0';
+    DWORD self = GetCurrentProcessId();
+    IMMDeviceEnumerator* enumerator = NULL;
+    IMMDeviceCollection* devices = NULL;
+    HRESULT initialized = CoInitializeEx(NULL, COINIT_MULTITHREADED);
+    int uninitialize = SUCCEEDED(initialized);
+    if (FAILED(initialized) && initialized != RPC_E_CHANGED_MODE) {
+        lm_set_error(error_text, error_size, "WASAPI COM initialization failed");
+        return -1;
+    }
+    HRESULT hr = CoCreateInstance(&CLSID_MMDeviceEnumerator, NULL, CLSCTX_ALL,
+                                  &IID_IMMDeviceEnumerator, (void**)&enumerator);
+    if (FAILED(hr)) goto failed;
+    hr = IMMDeviceEnumerator_EnumAudioEndpoints(enumerator, eCapture, DEVICE_STATE_ACTIVE, &devices);
+    if (FAILED(hr)) goto failed;
+    UINT device_count = 0;
+    hr = IMMDeviceCollection_GetCount(devices, &device_count);
+    if (FAILED(hr)) goto failed;
+    for (UINT device_index = 0; device_index < device_count && !*found; device_index++) {
+        IMMDevice* device = NULL;
+        IAudioSessionManager2* manager = NULL;
+        IAudioSessionEnumerator* sessions = NULL;
+        if (FAILED(IMMDeviceCollection_Item(devices, device_index, &device))) continue;
+        hr = IMMDevice_Activate(device, &IID_IAudioSessionManager2, CLSCTX_ALL, NULL, (void**)&manager);
+        if (SUCCEEDED(hr)) hr = IAudioSessionManager2_GetSessionEnumerator(manager, &sessions);
+        if (SUCCEEDED(hr) && sessions != NULL) {
+            int session_count = 0;
+            if (SUCCEEDED(IAudioSessionEnumerator_GetCount(sessions, &session_count))) {
+                for (int session_index = 0; session_index < session_count && !*found; session_index++) {
+                    IAudioSessionControl* session = NULL;
+                    AudioSessionState state = AudioSessionStateInactive;
+                    if (FAILED(IAudioSessionEnumerator_GetSession(sessions, session_index, &session)) || session == NULL) continue;
+                    if (SUCCEEDED(IAudioSessionControl_GetState(session, &state)) && state == AudioSessionStateActive) {
+                        IAudioSessionControl2* control = NULL;
+                        if (SUCCEEDED(IAudioSessionControl_QueryInterface(session, &IID_IAudioSessionControl2, (void**)&control)) && control != NULL) {
+                            DWORD pid = 0;
+                            /* Собственный захват встречей не считается. */
+                            if (SUCCEEDED(IAudioSessionControl2_GetProcessId(control, &pid)) && pid != 0 && pid != self) {
+                                lm_windows_process_name(pid, name, name_size);
+                                if (name[0] != '\0') *found = 1;
+                            }
+                            IAudioSessionControl2_Release(control);
+                        }
+                    }
+                    IAudioSessionControl_Release(session);
+                }
+            }
+        }
+        if (sessions != NULL) IAudioSessionEnumerator_Release(sessions);
+        if (manager != NULL) IAudioSessionManager2_Release(manager);
+        IMMDevice_Release(device);
+    }
+    IMMDeviceCollection_Release(devices);
+    IMMDeviceEnumerator_Release(enumerator);
+    if (uninitialize) CoUninitialize();
+    return 0;
+
+failed:
+    if (devices != NULL) IMMDeviceCollection_Release(devices);
+    if (enumerator != NULL) IMMDeviceEnumerator_Release(enumerator);
+    if (uninitialize) CoUninitialize();
+    lm_set_error(error_text, error_size, "WASAPI session enumeration failed");
+    return -1;
+}
 #endif
 
 typedef struct {
@@ -569,6 +738,46 @@ int lm_audio_stop(lm_capture* capture, char* error_text, size_t error_size)
         return -1;
     }
     return 0;
+}
+
+int lm_audio_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size)
+{
+    if (name == NULL || name_size == 0 || found == NULL) {
+        lm_set_error(error_text, error_size, "invalid active input app result pointers");
+        return -1;
+    }
+    name[0] = '\0';
+    *found = 0;
+#if defined(__APPLE__)
+    return lm_macos_active_input_app(name, name_size, found, error_text, error_size);
+#elif defined(_WIN32)
+    return lm_wasapi_active_capture_app(name, name_size, found, error_text, error_size);
+#else
+    (void)error_text;
+    (void)error_size;
+    /* Linux resolves the microphone app in Go through pactl. */
+    return 0;
+#endif
+}
+
+int lm_audio_activity(int* microphone_active, int* system_active, char* error_text, size_t error_size)
+{
+    if (microphone_active == NULL || system_active == NULL) {
+        lm_set_error(error_text, error_size, "invalid activity result pointers");
+        return -1;
+    }
+    *microphone_active = 0;
+    *system_active = 0;
+#if defined(_WIN32)
+    if (lm_wasapi_has_active_session(eCapture, microphone_active, error_text, error_size) != 0) return -1;
+    if (lm_wasapi_has_active_session(eRender, system_active, error_text, error_size) != 0) return -1;
+    return 0;
+#elif defined(__APPLE__)
+    return lm_macos_audio_activity(microphone_active, system_active, error_text, error_size);
+#else
+    lm_set_error(error_text, error_size, "native activity query is implemented by the Linux host adapter");
+    return -2;
+#endif
 }
 
 const char* lm_audio_backend_name(void)

@@ -54,7 +54,7 @@ func (s *Summarizer) Summarize(ctx context.Context, transcript string) (string, 
 	}
 	prompt := strings.TrimSpace(s.cfg.SystemPrompt)
 	if prompt == "" {
-		prompt = config.DefaultSummaryPrompt
+		prompt = config.EffectiveSummaryPrompt(s.cfg)
 	}
 	// The answer language comes from the «Minutes language» setting, not from the
 	// prompt. A custom prompt describes the structure and wording; the language is

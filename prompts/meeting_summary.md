@@ -10,6 +10,10 @@ Formatting rules:
 
 The section titles below are written in English only to identify them. Translate every title (BRIEF SUMMARY, PARTICIPANTS etc.) into the response language and never print the English wording.
 
+Example:
+
+The essence of the meeting in the title.
+
 BRIEF SUMMARY
 Describe the purpose of the meeting and its main outcomes in 3-7 bullet points.
 

@@ -49,7 +49,7 @@ func (s *Server) recordings(w http.ResponseWriter, r *http.Request) {
 }
 
 // startMeetingRecording creates a meeting and starts native capture. source is
-// the meeting origin ("recorded" or "browser"); extra entries are merged into
+// the meeting origin ("recorded", "browser" or "detected"); extra entries are merged into
 // the meeting metadata.
 func (s *Server) startMeetingRecording(ctx context.Context, req model.RecordingStart, source string, extra map[string]string) (model.Meeting, error) {
 	now := time.Now()

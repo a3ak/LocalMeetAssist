@@ -52,5 +52,27 @@ test('a configuration update refreshes the mode tooltip without waiting for anot
   ctx.socket.message(config({ enabled: false, mode: 'notify' }));
   await settle();
   assert.match(ctx.api.badges.at(-1).title, /Интеграция выключена/);
-  assert.equal(ctx.api.badges.at(-1).text, '');
+  assert.equal(ctx.api.badges.at(-1).text, '!');
+  assert.equal(ctx.api.badges.at(-1).color, '#facc15');
+});
+
+test('disabled integration shows a steady yellow badge instead of a blinking connection error', async () => {
+  const ctx = await setup();
+  ctx.api.tabs = [{ url: 'https://meet.google.com/demo' }];
+  await handshake(ctx, config({ enabled: false }), { state: 'idle', owner: false });
+  let badge = ctx.api.badges.at(-1);
+  assert.equal(badge.text, '!');
+  assert.equal(badge.color, '#facc15');
+  assert.equal(badge.textColor, '#111827');
+  assert.equal(badge.recording, false);
+  assert.match(badge.title, /Интеграция выключена/);
+
+  // Обрыв соединения не должен перекрашивать значок в оранжевый: выключенная
+  // интеграция всегда жёлтая, иначе значок мигает.
+  ctx.socket.close();
+  await settle();
+  badge = ctx.api.badges.at(-1);
+  assert.equal(badge.text, '!');
+  assert.equal(badge.color, '#facc15');
+  assert.match(badge.title, /Интеграция выключена/);
 });

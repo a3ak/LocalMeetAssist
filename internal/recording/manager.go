@@ -299,8 +299,13 @@ func (m *Manager) Stop(uid string) (*Session, error) {
 	if session == nil {
 		return nil, errors.New("recording not found")
 	}
-	if err := session.capture.Stop(); err != nil {
-		return session, err
+	if stopErr := session.capture.Stop(); stopErr != nil {
+		// Поток мог быть уже остановлен системой (например, на длинной записи
+		// ScreenCaptureKit закрывает его сам). Файлы в любом случае закрыты, и
+		// если звук записан, встречу нужно сохранить, а не потерять: раньше
+		// такая ошибка обрывала финализацию, и многочасовая запись оставалась
+		// на диске неоформленной.
+		appLogging.Warnf(m.logger, "native recording stop warning uid=%s error=%v", uid, stopErr)
 	}
 	micInfo, err := validateWAV(session.MicPath, "microphone", true)
 	if err != nil {

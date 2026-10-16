@@ -38,6 +38,8 @@ lm_capture* lm_audio_start(
 );
 
 int lm_audio_stop(lm_capture* capture, char* error_text, size_t error_size);
+int lm_audio_activity(int* microphone_active, int* system_active, char* error_text, size_t error_size);
+int lm_audio_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size);
 const char* lm_audio_backend_name(void);
 
 #ifdef __cplusplus

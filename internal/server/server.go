@@ -25,6 +25,7 @@ import (
 	appLogging "localmeetassist/internal/logging"
 	"localmeetassist/internal/model"
 	"localmeetassist/internal/modelmanager"
+	"localmeetassist/internal/nativeaudio"
 	"localmeetassist/internal/pipeline"
 	"localmeetassist/internal/recording"
 	"localmeetassist/internal/store"
@@ -47,6 +48,8 @@ type Server struct {
 	effectivePort int
 	browser       *browserSession
 	recording     *recordingTracker
+	conference    *conferenceDetectionState
+	activity      conferenceActivityProvider
 	logger        *log.Logger
 	logLevel      *appLogging.Controller
 	eventsMu      sync.Mutex
@@ -97,7 +100,7 @@ func NewWithLogging(cfg config.Config, st *store.Store, logger *log.Logger, leve
 
 // NewWithRecorder creates a Server with an injected recorder (used by tests).
 func NewWithRecorder(cfg config.Config, st *store.Store, logger *log.Logger, recorder *recording.Manager) *Server {
-	s := &Server{cfg: cfg, store: st, recorder: recorder, pipeline: pipeline.NewWithLogger(cfg, st, logger), models: modelmanager.New(cfg, logger), token: randomToken(), nonces: &uiNonceState{}, browser: newBrowserSession(), recording: &recordingTracker{}, logger: logger, events: make(map[chan []byte]struct{})}
+	s := &Server{cfg: cfg, store: st, recorder: recorder, pipeline: pipeline.NewWithLogger(cfg, st, logger), models: modelmanager.New(cfg, logger), token: randomToken(), nonces: &uiNonceState{}, browser: newBrowserSession(), recording: &recordingTracker{}, conference: &conferenceDetectionState{}, activity: nativeaudio.New(), logger: logger, events: make(map[chan []byte]struct{})}
 	// A recording cannot survive a restart, so the persisted revision has to be
 	// reconciled before the first plugin connects.
 	s.normaliseRecordingState()
@@ -173,6 +176,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/meetings/", s.meetingPath)
 	mux.HandleFunc("/api/v1/recordings", s.recordings)
 	mux.HandleFunc("/api/v1/recordings/", s.recordingPath)
+	mux.HandleFunc("/api/v1/conference-detection", s.conferenceDetection)
 	mux.HandleFunc("/api/v1/events", s.eventStream)
 	mux.HandleFunc("/api/v1/integrations/tokens", s.integrationTokens)
 	mux.HandleFunc("/api/v1/integrations/tokens/", s.integrationToken)
@@ -340,6 +344,11 @@ func (s *Server) diagnostics(w http.ResponseWriter, _ *http.Request) {
 			"embedding_model":    fileDiagnostic(cfg.Diarization.EmbeddingModel),
 		},
 		"summary_auto_run": cfg.Summary.AutoRun,
+		"conference_detection": map[string]any{
+			"enabled":        cfg.ConferenceDetection.Enabled,
+			"window_seconds": cfg.ConferenceDetection.WindowSeconds,
+			"state":          s.conferenceSnapshot(),
+		},
 	})
 }
 
