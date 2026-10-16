@@ -20,6 +20,9 @@ func TestModelListMarksRecommended(t *testing.T) {
 		"silero-vad":                      "speech_filter",
 		"diarization-segmentation":        "diarization",
 		"diarization-embedding-wespeaker": "diarization",
+		// Локальная модель протоколов: рекомендуем 4B, она работает от 8 ГБ и
+		// попадает в набор почти на любой машине. 9B скачивается по выбору.
+		"qwen3-5-4b-q4": "summarization",
 	}
 	for id, group := range want {
 		if recommended[id] != group {

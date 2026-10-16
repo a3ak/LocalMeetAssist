@@ -360,5 +360,7 @@
   "models.insufficientResources": "The download was stopped because this computer does not have enough resources to run “{name}”. Recommended system requirements: {required}. Do you still want to download it and try it on your computer?",
   "models.recommendedSkipped": "Skipped for lack of resources: {names}",
   "models.needsResources": "Needs {ram} RAM and {disk} on disk",
-  "models.notEnoughResources": "This computer does not have enough resources to run the model"
+  "models.notEnoughResources": "This computer does not have enough resources to run the model",
+  "models.group.summarization.title": "Local minutes",
+  "models.group.summarization.desc": "Models that build meeting minutes on this computer without sending the transcript to an external service. Qwen3.5-4B is part of the recommended set and needs 8 GB of memory; 9B produces more detailed minutes and needs 16 GB."
 }

@@ -298,6 +298,7 @@ func New(cfg config.Config, logger *log.Logger) *Manager {
 	if cfg.ConfigFile != "" {
 		modelsBase = filepath.Join(filepath.Dir(cfg.ConfigFile), "models", "whisper")
 	}
+	llmBase := filepath.Join(filepath.Dir(modelsBase), "llm")
 	runtimeSpec := onnxRuntimeSpec(cfg)
 	whisperSpec := whisperRuntimeSpec(cfg)
 	llamaSpec := llamaRuntimeSpec(cfg)
@@ -314,6 +315,11 @@ func New(cfg config.Config, logger *log.Logger) *Manager {
 		{ID: "whisper-small-q5", MinRAMBytes: 1610612736, MinDiskBytes: 367001600, Name: "Whisper small Q5_1", Path: filepath.Join(modelsBase, "ggml-small-q5_1.bin"), URL: cfg.Models.WhisperSmallURL, SHA256: cfg.Models.WhisperSmallSHA256, Group: "transcription", Description: "Компактный мультиязычный Whisper: быстрее medium, около 181 МБ. Подходит для быстрых черновиков и слабых CPU.", ApproxBytes: 190_085_487, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-small-q5_1.bin")), License: "MIT"},
 		{ID: "whisper-medium-q5", MinRAMBytes: 2684354560, MinDiskBytes: 838860800, Name: "Whisper medium Q5_0", Path: filepath.Join(modelsBase, "ggml-medium-q5_0.bin"), URL: cfg.Models.WhisperMediumURL, SHA256: cfg.Models.WhisperMediumSHA256, Group: "transcription", Description: "Более точный мультиязычный Whisper, около 514 МБ. Хороший баланс для сложной речи и терминов.", ApproxBytes: 539_212_467, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-medium-q5_0.bin")), License: "MIT"},
 		{ID: "whisper-large-v3-turbo-q5", MinRAMBytes: 3221225472, MinDiskBytes: 943718400, Name: "Whisper large-v3-turbo Q5_0", Path: filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin"), URL: cfg.Models.WhisperTurboURL, SHA256: cfg.Models.WhisperTurboSHA256, Group: "transcription", Description: "Наиболее качественный из предлагаемых Whisper при заметно меньшей цене, чем full large-v3; около 574 МБ.", ApproxBytes: 574_041_195, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin")), License: "MIT"},
+		// Локальные модели саммаризации. Selectable выключен: движок llama.cpp
+		// ещё не подключён к пайплайну, поэтому карточка умеет только скачать и
+		// удалить файл, а не включить модель в работу.
+		{ID: "qwen3-5-9b-q4", MinRAMBytes: 17179869184, MinDiskBytes: 8589934592, Name: "Qwen3.5-9B Q4_K_M", Path: filepath.Join(llmBase, "Qwen3.5-9B-Q4_K_M.gguf"), URL: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf", SHA256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", Group: "summarization", Description: "Основная модель для локальных протоколов: лучший русский среди открытых, контекст 256K, около 5.3 ГБ. Требует 16 ГБ памяти.", ApproxBytes: 5_680_522_464, License: "Apache 2.0"},
+		{ID: "qwen3-5-4b-q4", MinRAMBytes: 8589934592, MinDiskBytes: 4294967296, Name: "Qwen3.5-4B Q4_K_M", Path: filepath.Join(llmBase, "Qwen3.5-4B-Q4_K_M.gguf"), URL: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf", SHA256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", Group: "summarization", Recommended: true, Description: "Облегчённая модель для локальных протоколов: около 2.6 ГБ, хватает 8 ГБ памяти. Качество конспектов скромнее, чем у 9B.", ApproxBytes: 2_740_937_888, License: "Apache 2.0"},
 		{ID: "silero-vad", MinRAMBytes: 536870912, MinDiskBytes: 52428800, Name: "Silero VAD 6.2 ONNX", Path: cfg.Transcription.VADModelPath, URL: cfg.Models.VADURL, SHA256: cfg.Models.VADSHA256, Group: "speech_filter", Recommended: true, Description: "Находит речь и делит длинную встречу на фрагменты до 20 секунд. Снижает повторы и выдуманный текст на тишине.", ApproxBytes: 2_330_000, Selected: true, License: "MIT"},
 		{ID: "diarization-segmentation", MinRAMBytes: 1073741824, MinDiskBytes: 104857600, Name: "PyAnnote Segmentation 3.0 ONNX", Path: cfg.Diarization.SegmentationModel, URL: cfg.Models.SegmentationURL, SHA256: cfg.Models.SegmentationSHA256, Group: "diarization", Recommended: true, Description: "Определяет локальные дорожки речи и перекрытия голосов в окнах по 10 секунд. Работает без Python и Hugging Face token.", ApproxBytes: 5_986_908, Selected: true, License: "MIT"},
 		{ID: "diarization-embedding-wespeaker", MinRAMBytes: 1073741824, MinDiskBytes: 104857600, Name: "WeSpeaker ResNet34-LM VoxCeleb", Path: cfg.Diarization.EmbeddingModel, URL: cfg.Models.EmbeddingURL, SHA256: cfg.Models.EmbeddingSHA256, Group: "diarization", Recommended: true, Description: "Строит 256-мерные признаки голосов для глобальной кластеризации по всей встрече. Количество участников встречи используется как точное ограничение.", ApproxBytes: 26_530_309, SettingKey: "diarization.embedding_model", Selectable: true, Selected: true, License: "CC BY 4.0"},
@@ -854,11 +860,31 @@ func fileSHA256(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// libraryNameWanted reports whether an archive entry is a runtime library the
+// application loads. whisper.cpp and llama.cpp both ship several shared objects
+// (llama.dll needs ggml.dll, ggml-base.dll, ggml-cpu.dll and libomp.dll next to
+// it), so the extractor has to keep the whole set and not just one file. Tool
+// binaries such as llama-cli are not libraries and are skipped.
+func libraryNameWanted(name string) bool {
+	lowered := strings.ToLower(name)
+	if !strings.HasSuffix(lowered, ".dll") && !strings.Contains(lowered, ".so") && !strings.Contains(lowered, ".dylib") {
+		return false
+	}
+	for _, stem := range []string{"ggml", "whisper", "llama", "omp", "mtmd"} {
+		if strings.Contains(lowered, stem) {
+			return true
+		}
+	}
+	return false
+}
+
 func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 	kind, wanted, ok := strings.Cut(descriptor, ":")
-	if !ok || strings.TrimSpace(wanted) == "" {
+	if !ok {
 		return fmt.Errorf("invalid archive descriptor %q", descriptor)
 	}
+	// Пустой префикс — законный случай: часть архивов распаковывается в корень,
+	// без каталога-обёртки. Так устроена сборка llama.cpp под Windows.
 	wanted = filepath.ToSlash(strings.TrimSpace(wanted))
 	kind = strings.ToLower(strings.TrimSpace(kind))
 	librariesOnly := strings.HasSuffix(kind, "libs")
@@ -883,12 +909,8 @@ func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 			if relative == "" || strings.HasPrefix(relative, "../") || filepath.IsAbs(relative) {
 				return os.ErrNotExist
 			}
-			if librariesOnly {
-				baseName := strings.ToLower(filepath.Base(relative))
-				if !strings.HasPrefix(baseName, "libggml") && !strings.HasPrefix(baseName, "libwhisper") &&
-					!strings.HasPrefix(baseName, "ggml") && baseName != "whisper.dll" {
-					return os.ErrNotExist
-				}
+			if librariesOnly && !libraryNameWanted(filepath.Base(relative)) {
+				return os.ErrNotExist
 			}
 			target := filepath.Join(outputPath, filepath.FromSlash(relative))
 			base := filepath.Clean(outputPath) + string(os.PathSeparator)

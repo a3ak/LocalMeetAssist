@@ -1555,6 +1555,7 @@ $$("#modelTabs [data-mgroup]").forEach((button) => {
       { id: "transcription", title: t("models.group.transcription.title"), description: t("models.group.transcription.desc") },
       { id: "speech_filter", title: t("models.group.speech_filter.title"), description: t("models.group.speech_filter.desc") },
       { id: "diarization", title: t("models.group.diarization.title"), description: t("models.group.diarization.desc") },
+      { id: "summarization", title: t("models.group.summarization.title"), description: t("models.group.summarization.desc") },
     ];
     // Вкладка показывает свою часть: VAD относится к транскрибации, как в макете.
     const tabGroups = state.modelTab === "speakers" ? ["diarization"]

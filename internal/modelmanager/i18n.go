@@ -9,6 +9,8 @@ var modelDescriptionsEN = map[string]string{
 	"onnx-runtime":                    "Native ONNX execution environment for this OS and architecture. Downloaded once; no CLI applications are used.",
 	"whisper-runtime":                 "Native whisper.cpp library. LocalMeetAssist calls it directly; whisper-cli is neither installed nor launched.",
 	"llama-runtime":                   "Native llama.cpp library for local summarization. A prebuilt release is downloaded; llama-cli is neither installed nor launched.",
+	"qwen3-5-9b-q4":                   "The main model for local minutes: the best Russian among open models, 256K context, about 5.3 GB. Needs 16 GB of memory.",
+	"qwen3-5-4b-q4":                   "A lighter model for local minutes: about 2.6 GB, fits in 8 GB of memory. Minutes are less detailed than with 9B.",
 	"gigaam-v3-e2e-rnnt-int8":         "Recommended Russian model: punctuation and text normalization, RNNT decoding, about 227 MB. It processes the detected VAD speech fragments directly inside LocalMeetAssist.",
 	"whisper-small-q5":                "Compact multilingual Whisper: faster than medium, about 181 MB. Good for quick drafts and weaker CPUs.",
 	"whisper-medium-q5":               "More accurate multilingual Whisper, about 514 MB. A good balance for difficult speech and terminology.",
