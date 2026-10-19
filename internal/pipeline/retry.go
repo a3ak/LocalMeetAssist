@@ -166,10 +166,13 @@ func (r *Runner) retrySummarization(ctx context.Context, uid string) error {
 	_ = r.store.SaveMeeting(m)
 	r.job(uid, "summarizing", "processing", "")
 	r.jobProgress(uid, "summarizing", 10)
-	summarizer, err := NewSummarizer(resolveSummaryConfig(r.cfg))
+	engine, err := NewSummaryEngine(r.cfg)
+	if local, ok := engine.(*LocalSummarizer); ok {
+		local.Progress = func(fraction float64) { r.jobProgress(uid, "summarizing", 10+int(fraction*80)) }
+	}
 	var candidate string
 	if err == nil {
-		candidate, err = summarizer.Summarize(ctx, m.Transcript)
+		candidate, err = engine.Summarize(ctx, m.Transcript)
 	}
 	if ctx.Err() != nil {
 		return r.fail(&m, "summarizing", ctx.Err())

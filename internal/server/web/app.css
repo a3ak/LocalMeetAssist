@@ -613,6 +613,9 @@ main{grid-template-columns:minmax(0,1fr) minmax(260px,340px)!important}
 .settings-nav-caption:first-child{padding-top:4px;margin-top:0;border-top:0}
 /* Ошибка в карточке встречи — рядом с пилюлей статуса. */
 .status-strip .detail-error{color:var(--danger);font-size:12px;margin-left:8px}
+/* Предупреждение о звуке (потеря или пересоздание системного потока) — мягче
+   ошибки: встреча сохранена, но часть голосов могла не записаться. */
+.status-strip .detail-warning{display:inline-flex;align-items:center;gap:6px;color:var(--warn);font-size:12px;margin-left:8px}
 .status-strip{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 
 /* Токен плагина — строкой внизу карточки «Браузерная интеграция». */
@@ -673,13 +676,14 @@ main{grid-template-columns:minmax(0,1fr) minmax(260px,340px)!important}
 #modelsDialog .models-card{display:flex;flex-direction:column;height:min(86vh,900px);max-height:min(86vh,900px);min-height:0;overflow:hidden;padding-bottom:0}
 #modelsDialog #modelsList{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:22px}
 
-/* Пилюли моделей: переносим строки вместо горизонтальной прокрутки, иначе
-   на узком окне третья пилюля обрезается полосой прокрутки. */
+/* Пилюли моделей: четыре вкладки всегда в одной строке. Раньше ряд переносился
+   на вторую строку, потому что «Локальные протоколы» не влезали в карточку
+   540 px. Равные колонки делят ширину, а ellipsis страхует узкое окно. */
 .pills,.tabs{overflow:visible}
-#modelTabs{display:flex;flex-wrap:wrap;width:100%;max-width:100%;row-gap:6px;border-radius:16px;padding:5px}
-#modelTabs button{flex:0 1 auto;min-width:0;padding:8px 12px}
+#modelTabs{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:4px;width:100%;max-width:100%;border-radius:16px;padding:5px}
+#modelTabs button{display:block;text-align:center;min-width:0;padding:8px 10px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media (max-width:640px){
-  #modelTabs button{padding:7px 9px;font-size:12.5px;gap:5px}
+  #modelTabs button{padding:7px 6px;font-size:12.5px;gap:5px}
   .models-toolbar{gap:6px}
 }
 
@@ -769,3 +773,11 @@ main{grid-template-columns:minmax(0,1fr) minmax(260px,340px)!important}
 .setting-list-row{display:flex;align-items:center;gap:8px}
 .setting-list-row input[type=text]{flex:1;min-width:0}
 .setting-list-actions{display:flex;gap:8px}
+
+/* Класс .hidden обязан побеждать собственные display:!important правила.
+   У строк настроек display задан через !important, поэтому одного .hidden не
+   хватало: переключатель движка саммаризации убирал заголовок раздела, но
+   сами поля оставались на месте. Двойной класс даёт нужную специфичность. */
+.hidden.hidden,
+.setting-field.hidden,
+.settings-section-title.hidden{display:none!important}

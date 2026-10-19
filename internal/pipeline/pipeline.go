@@ -541,10 +541,15 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 		_ = r.store.SaveMeeting(m)
 		r.job(uid, "summarizing", "processing", "")
 		r.jobProgress(uid, "summarizing", 10)
-		s, createErr := NewSummarizer(resolveSummaryConfig(r.cfg))
+		engine, createErr := NewSummaryEngine(r.cfg)
+		// A local model reports the progress of its passes, so a long meeting
+		// shows movement instead of a frozen stage.
+		if local, ok := engine.(*LocalSummarizer); ok {
+			local.Progress = func(fraction float64) { r.jobProgress(uid, "summarizing", 10+int(fraction*80)) }
+		}
 		var summary string
 		if createErr == nil {
-			summary, createErr = s.Summarize(ctx, m.Transcript)
+			summary, createErr = engine.Summarize(ctx, m.Transcript)
 		}
 		if ctx.Err() != nil {
 			return r.fail(&m, "summarizing", ctx.Err())

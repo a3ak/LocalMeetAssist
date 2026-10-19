@@ -955,7 +955,7 @@ async function openDetail(uid, preserveTab = false) {
     const metaParts = [fmtFullDay(meeting.started_at), `${fmtClock(interval.start)}–${fmtClock(interval.end)}`, durationText];
     if (meeting.speaker_count > 0) metaParts.push(participantsLabel(meeting.speaker_count));
     $("#detailMeta").textContent = metaParts.join(" · ");
-    renderStatusStrip(meeting.status, meeting.processing_stage, meeting.last_error);
+    renderStatusStrip(meeting.status, meeting.processing_stage, meeting.last_error, meeting.metadata?.audio_warning);
     // Счётчик спикеров на вкладке: он подсказывает, есть ли что смотреть.
     const speakerCount = Number(meeting.speaker_count || 0);
     const speakersBadge = $("#speakersTabCount");
@@ -981,11 +981,13 @@ async function openDetail(uid, preserveTab = false) {
   }
 }
 
-function renderStatusStrip(status, stage, lastError) {
+function renderStatusStrip(status, stage, lastError, audioWarning) {
   const CHECK = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>`;
+  const WARN = `<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M12 3l9 16H3z"/><path d="M12 9v4"/><path d="M12 16.5v.5"/></svg>`;
   const pill = ["completed", "failed", "processing", "recording", "queued", "starting"].includes(status) ? status : "queued";
   const stageHint = stage && !["completed", "idle", ""].includes(stage) ? ` · ${esc(stageText(stage))}` : "";
-  $("#statusStrip").innerHTML = `<span class="badge ${pill}">${status === "completed" ? CHECK : ""}${esc(statusText(status))}${stageHint}</span>${lastError ? `<span class="detail-error">${esc(lastError)}</span>` : ""}`;
+  const warning = audioWarning ? `<span class="detail-warning">${WARN}${esc(audioWarning)}</span>` : "";
+  $("#statusStrip").innerHTML = `<span class="badge ${pill}">${status === "completed" ? CHECK : ""}${esc(statusText(status))}${stageHint}</span>${lastError ? `<span class="detail-error">${esc(lastError)}</span>` : ""}${warning}`;
 }
 
 function setProcessingControls(active) {
@@ -1064,7 +1066,16 @@ function renderSpeakers(items, artifacts, uid) {
     names: new Map(items.map((speaker) => [speaker.id, speaker.display_name])),
     assignments: new Map(),
     merges: new Map(),
+    // Спикеры, добавленные вручную и ещё не сохранённые: они живут только в
+    // редакторе, пока не нажато «Сохранить все изменения».
+    creates: new Map(),
     selected: new Set(),
+    // Якорь Shift-выделения: фрагмент, от которого считается диапазон.
+    anchor: null,
+    // Shift-клик, после которого браузер может сам переключить флажок: одно
+    // такое переключение гасится, чтобы не выкинуть фрагмент из диапазона.
+    pendingRange: false,
+    draggedAt: 0,
     artifacts,
     dirty: false,
   };
@@ -1072,80 +1083,237 @@ function renderSpeakers(items, artifacts, uid) {
   target.innerHTML = items.map((speaker) => `<option value="${esc(speaker.id)}">${esc(speaker.display_name || speaker.id)}</option>`).join("");
   $("#speakerBulkActions").classList.toggle("hidden", !items.length);
   updateSpeakerEditorStatus();
-  items.forEach((speaker) => {
-    const node = document.createElement("div");
-    node.className = "speaker";
-    node.dataset.speakerId = speaker.id;
-    const source = sampleSource(speaker, artifacts);
-    // Раздел образцов голоса убран: у системных спикеров их всё равно нельзя
-    // переносить, а после объединения встреч их привязка к времени ненадёжна.
-    const fragments = Array.isArray(speaker.fragments) ? speaker.fragments : [];
-    const fragmentHTML = fragments.length
-      ? `<div class="speaker-fragments-head"><span>${t("speakers.fragments", { n: fragments.length })}</span><small>${t("speakers.fragmentsHint")}</small></div><div class="speaker-fragments">${fragments.map((fragment) => {
-          const start = Math.max(0, Number(fragment.start_ms || 0) / 1000 - 0.15);
-          const end = Math.min(start + 20, Math.max(start + 0.5, Number(fragment.end_ms || 0) / 1000 + 0.2));
-          const fragmentSource = fragment.source === "microphone"
-            ? artifacts.find((item) => item.type === "mic_wav")
-            : artifacts.find((item) => item.type === "system_wav") || source;
-          const url = fragmentSource ? audioArtifactURL(uid, fragmentSource) : "";
-          return `<div class="speaker-fragment" draggable="true" data-fragment-id="${esc(fragment.id)}" data-source-speaker="${esc(speaker.id)}"><input class="fragment-select" type="checkbox" aria-label="${t("speakers.fragmentSelect")}"><button type="button" class="ghost play-fragment" data-url="${esc(url)}" data-start="${start}" data-end="${end}" ${url ? "" : "disabled"}>▶</button><div><div class="fragment-time">${clockMS(fragment.start_ms)}–${clockMS(fragment.end_ms)}</div><div class="fragment-text" title="${esc(fragment.text || "")}">${esc(fragment.text || t("speakers.noText"))}</div></div></div>`;
-        }).join("")}</div>`
-      : `<div class="hint speaker-hint">${t("speakers.oldFragments")}</div>`;
-    node.innerHTML = `<div class="speaker-info"><strong class="speaker-card-title" draggable="true" title="${t("speakers.dragTitle")}">${esc(speaker.id)}</strong><div class="meta">${esc(speaker.source)}</div>${fragmentHTML}</div><div class="speaker-name"><input value="${esc(speaker.display_name)}" aria-label="${t("speakers.nameLabel", { id: esc(speaker.id) })}"></div>`;
-    const nameInput = node.querySelector(".speaker-name input");
-    nameInput.addEventListener("input", () => {
-      state.speakerEditor.names.set(speaker.id, nameInput.value);
-      markSpeakerEditorDirty();
-      refreshSpeakerTargetNames();
-    });
-    node.querySelectorAll(".fragment-select").forEach((checkbox) => {
-      checkbox.addEventListener("change", () => {
-        const fragment = checkbox.closest(".speaker-fragment");
-        if (checkbox.checked) state.speakerEditor.selected.add(fragment.dataset.fragmentId);
-        else state.speakerEditor.selected.delete(fragment.dataset.fragmentId);
-        updateSpeakerEditorStatus();
-      });
-    });
-    node.querySelectorAll(".play-fragment").forEach((button) => {
-      button.setAttribute("aria-label", t("speakers.play"));
-      button.onclick = () => playSpeakerFragment(button, button.dataset.url, Number(button.dataset.start), Number(button.dataset.end));
-    });
-    node.querySelectorAll(".speaker-fragment").forEach((fragment) => {
-      fragment.addEventListener("dragstart", (event) => {
-        if (!state.speakerEditor.selected.has(fragment.dataset.fragmentId)) {
-          state.speakerEditor.selected.clear();
-          root.querySelectorAll(".fragment-select").forEach((item) => { item.checked = false; });
-          state.speakerEditor.selected.add(fragment.dataset.fragmentId);
-          fragment.querySelector(".fragment-select").checked = true;
-        }
-        event.dataTransfer.setData("application/x-localmeetassist-fragments", JSON.stringify([...state.speakerEditor.selected]));
-        event.dataTransfer.effectAllowed = "move";
-        fragment.classList.add("dragging");
-      });
-      fragment.addEventListener("dragend", () => fragment.classList.remove("dragging"));
-    });
-    const title = node.querySelector(".speaker-card-title");
-    title.addEventListener("dragstart", (event) => {
-      event.dataTransfer.setData("application/x-localmeetassist-speaker", speaker.id);
-      event.dataTransfer.effectAllowed = "move";
-    });
-    node.addEventListener("dragover", (event) => { event.preventDefault(); node.classList.add("drag-over"); });
-    node.addEventListener("dragleave", () => node.classList.remove("drag-over"));
-    node.addEventListener("drop", (event) => {
-      event.preventDefault();
-      node.classList.remove("drag-over");
-      const fromSpeaker = event.dataTransfer.getData("application/x-localmeetassist-speaker");
-      if (fromSpeaker) {
-        mergeSpeakerDraft(fromSpeaker, speaker.id);
+  items.forEach((speaker) => root.appendChild(speakerCard(speaker)));
+}
+
+// speakerCard строит карточку одного спикера вместе с обработчиками. Тем же
+// строителем пользуется карточка только что добавленного спикера, поэтому она
+// ведёт себя как обычная.
+function speakerCard(speaker) {
+  const editor = state.speakerEditor;
+  const node = document.createElement("div");
+  node.className = "speaker";
+  node.dataset.speakerId = speaker.id;
+  const source = sampleSource(speaker, editor.artifacts);
+  // Раздел образцов голоса убран: у системных спикеров их всё равно нельзя
+  // переносить, а после объединения встреч их привязка к времени ненадёжна.
+  const fragments = Array.isArray(speaker.fragments) ? speaker.fragments : [];
+  // Пустая карточка бывает по двум причинам: её только что добавили вручную
+  // или встреча обработана версией без фрагментов. Подсказки разные.
+  const emptyHint = speaker.draft
+    ? t("speakers.newSpeakerHint")
+    : (editor.items.some((item) => (item.fragments || []).length > 0) ? t("speakers.noFragments") : t("speakers.oldFragments"));
+  // Контейнер фрагментов есть всегда, даже пустой: иначе перетаскивание и
+  // кнопка «Переместить выбранные» не находят, куда положить фрагмент.
+  const fragmentHTML = fragments.length
+    ? `<div class="speaker-fragments-head"><span>${t("speakers.fragments", { n: fragments.length })}</span><small>${t("speakers.fragmentsHint")}</small></div><div class="speaker-fragments">${fragments.map((fragment) => {
+        const start = Math.max(0, Number(fragment.start_ms || 0) / 1000 - 0.15);
+        const end = Math.min(start + 20, Math.max(start + 0.5, Number(fragment.end_ms || 0) / 1000 + 0.2));
+        const fragmentSource = fragment.source === "microphone"
+          ? editor.artifacts.find((item) => item.type === "mic_wav")
+          : editor.artifacts.find((item) => item.type === "system_wav") || source;
+        const url = fragmentSource ? audioArtifactURL(editor.uid, fragmentSource) : "";
+        return `<div class="speaker-fragment" draggable="true" data-fragment-id="${esc(fragment.id)}" data-source-speaker="${esc(speaker.id)}"><input class="fragment-select" type="checkbox" aria-label="${t("speakers.fragmentSelect")}"><button type="button" class="ghost play-fragment" data-url="${esc(url)}" data-start="${start}" data-end="${end}" ${url ? "" : "disabled"}>▶</button><div><div class="fragment-time">${clockMS(fragment.start_ms)}–${clockMS(fragment.end_ms)}</div><div class="fragment-text" title="${esc(fragment.text || "")}">${esc(fragment.text || t("speakers.noText"))}</div></div></div>`;
+      }).join("")}</div>`
+    : `<div class="hint speaker-hint">${emptyHint}</div><div class="speaker-fragments"></div>`;
+  node.innerHTML = `<div class="speaker-info"><strong class="speaker-card-title" draggable="true" title="${t("speakers.dragTitle")}">${esc(speaker.id)}</strong><div class="meta">${esc(speaker.source)}</div>${fragmentHTML}</div><div class="speaker-name"><input value="${esc(speaker.display_name)}" aria-label="${t("speakers.nameLabel", { id: esc(speaker.id) })}"></div>`;
+  const nameInput = node.querySelector(".speaker-name input");
+  nameInput.addEventListener("input", () => {
+    state.speakerEditor.names.set(speaker.id, nameInput.value);
+    markSpeakerEditorDirty();
+    refreshSpeakerTargetNames();
+  });
+  node.querySelectorAll(".speaker-fragment").forEach((fragment) => {
+    const checkbox = fragment.querySelector(".fragment-select");
+    // Shift-клик по флажку выделяет диапазон от якоря до этого фрагмента,
+    // включая обе границы. Обычный клик ставит якорь.
+    checkbox.addEventListener("click", (event) => {
+      const editor = state.speakerEditor;
+      if (!editor) return;
+      if (event.shiftKey && editor.anchor) {
+        event.preventDefault();
+        event.stopPropagation();
+        extendSpeakerSelection(editor.anchor, fragment.dataset.fragmentId);
         return;
       }
-      try {
-        const ids = JSON.parse(event.dataTransfer.getData("application/x-localmeetassist-fragments") || "[]");
-        moveSpeakerFragments(ids, speaker.id);
-      } catch { toast(t("speakers.cantReadDrop")); }
+      editor.anchor = fragment.dataset.fragmentId;
     });
-    root.appendChild(node);
+    checkbox.addEventListener("change", () => {
+      const editor = state.speakerEditor;
+      if (!editor) return;
+      // Переключение, пришедшее от Shift-клика, не должно выкидывать фрагмент
+      // из диапазона: состояние выравнивается по выбору редактора.
+      if (editor.pendingRange) {
+        editor.pendingRange = false;
+        checkbox.checked = editor.selected.has(fragment.dataset.fragmentId);
+        return;
+      }
+      if (checkbox.checked) editor.selected.add(fragment.dataset.fragmentId);
+      else editor.selected.delete(fragment.dataset.fragmentId);
+      editor.anchor = fragment.dataset.fragmentId;
+      updateSpeakerEditorStatus();
+    });
+    // Клик по самой реплике тоже выбирает фрагмент: попасть в маленький флажок
+    // было единственным способом выделить фрагмент.
+    fragment.addEventListener("click", (event) => {
+      if (event.target.closest(".play-fragment") || event.target.closest(".fragment-select")) return;
+      const editor = state.speakerEditor;
+      if (!editor) return;
+      // После перетаскивания клик не должен сбрасывать только что перенесённый
+      // выбор.
+      if (Date.now() - editor.draggedAt < 300) return;
+      toggleSpeakerFragment(fragment, event.shiftKey);
+    });
+    fragment.addEventListener("dragstart", (event) => {
+      if (!state.speakerEditor.selected.has(fragment.dataset.fragmentId)) {
+        state.speakerEditor.selected.clear();
+        node.ownerDocument.querySelectorAll("#speakersList .fragment-select").forEach((item) => { item.checked = false; });
+        state.speakerEditor.selected.add(fragment.dataset.fragmentId);
+        fragment.querySelector(".fragment-select").checked = true;
+      }
+      state.speakerEditor.draggedAt = Date.now();
+      state.speakerEditor.anchor = fragment.dataset.fragmentId;
+      event.dataTransfer.setData("application/x-localmeetassist-fragments", JSON.stringify([...state.speakerEditor.selected]));
+      event.dataTransfer.effectAllowed = "move";
+      fragment.classList.add("dragging");
+    });
+    fragment.addEventListener("dragend", () => fragment.classList.remove("dragging"));
+    const play = fragment.querySelector(".play-fragment");
+    if (play) {
+      play.setAttribute("aria-label", t("speakers.play"));
+      play.onclick = () => playSpeakerFragment(play, play.dataset.url, Number(play.dataset.start), Number(play.dataset.end));
+    }
   });
+  const title = node.querySelector(".speaker-card-title");
+  title.addEventListener("dragstart", (event) => {
+    event.dataTransfer.setData("application/x-localmeetassist-speaker", speaker.id);
+    event.dataTransfer.effectAllowed = "move";
+  });
+  node.addEventListener("dragover", (event) => { event.preventDefault(); node.classList.add("drag-over"); });
+  node.addEventListener("dragleave", () => node.classList.remove("drag-over"));
+  node.addEventListener("drop", (event) => {
+    event.preventDefault();
+    node.classList.remove("drag-over");
+    const fromSpeaker = event.dataTransfer.getData("application/x-localmeetassist-speaker");
+    if (fromSpeaker) {
+      mergeSpeakerDraft(fromSpeaker, speaker.id);
+      return;
+    }
+    try {
+      const ids = JSON.parse(event.dataTransfer.getData("application/x-localmeetassist-fragments") || "[]");
+      moveSpeakerFragments(ids, speaker.id);
+    } catch { toast(t("speakers.cantReadDrop")); }
+  });
+  return node;
+}
+
+// speakerFragmentNodes returns the fragments in the order they are visible.
+function speakerFragmentNodes() {
+  return [...document.querySelectorAll("#speakersList .speaker-fragment")];
+}
+
+// setFragmentSelected marks one fragment and keeps the editor selection in sync.
+function setFragmentSelected(fragment, selected) {
+  const editor = state.speakerEditor;
+  if (!editor) return;
+  const id = fragment.dataset.fragmentId;
+  const checkbox = fragment.querySelector(".fragment-select");
+  if (checkbox) checkbox.checked = selected;
+  if (selected) editor.selected.add(id);
+  else editor.selected.delete(id);
+}
+
+// selectSpeakerFragmentRange selects every fragment between two fragments,
+// including both ends, so a run of consecutive utterances moves to another
+// speaker in one Shift-click. A missing anchor falls back to the clicked
+// fragment alone instead of dropping the range.
+function selectSpeakerFragmentRange(fromID, toID) {
+  const nodes = speakerFragmentNodes();
+  const to = nodes.findIndex((node) => node.dataset.fragmentId === toID);
+  if (to < 0) return false;
+  const from = nodes.findIndex((node) => node.dataset.fragmentId === fromID);
+  const start = from < 0 ? to : Math.min(from, to);
+  const finish = from < 0 ? to : Math.max(from, to);
+  for (let index = start; index <= finish; index += 1) setFragmentSelected(nodes[index], true);
+  updateSpeakerEditorStatus();
+  return true;
+}
+
+// extendSpeakerSelection is Shift-click: the range always contains the anchor
+// and the clicked fragment. Browsers differ in whether the click on a checkbox
+// still toggles it, so the range is applied twice: immediately and again right
+// after the default action of the click.
+function extendSpeakerSelection(anchorID, clickedID) {
+  const editor = state.speakerEditor;
+  if (!editor) return;
+  editor.pendingRange = true;
+  selectSpeakerFragmentRange(anchorID, clickedID);
+  setTimeout(() => {
+    if (state.speakerEditor !== editor) return;
+    selectSpeakerFragmentRange(anchorID, clickedID);
+    editor.pendingRange = false;
+  }, 0);
+}
+
+// toggleSpeakerFragment handles a plain click and a Shift-click on an utterance.
+function toggleSpeakerFragment(fragment, extend) {
+  const editor = state.speakerEditor;
+  if (!editor) return;
+  const id = fragment.dataset.fragmentId;
+  if (extend && editor.anchor) {
+    extendSpeakerSelection(editor.anchor, id);
+    return;
+  }
+  editor.anchor = id;
+  setFragmentSelected(fragment, !editor.selected.has(id));
+  updateSpeakerEditorStatus();
+}
+
+// nextSpeakerID returns the first free SPEAKER_NN, the numbering the diarizer uses.
+function nextSpeakerID() {
+  let max = -1;
+  (state.speakerEditor?.items || []).forEach((speaker) => {
+    const match = /^SPEAKER_(\d+)$/i.exec(speaker.id || "");
+    if (match) max = Math.max(max, Number(match[1]));
+  });
+  return `SPEAKER_${String(max + 1).padStart(2, "0")}`;
+}
+
+// newSpeakerSource keeps a new speaker in the stream its fragments come from:
+// fragments cannot be moved between the microphone and system streams.
+function newSpeakerSource() {
+  const editor = state.speakerEditor;
+  const selectedNode = [...editor.selected]
+    .map((id) => document.querySelector(`.speaker-fragment[data-fragment-id="${CSS.escape(id)}"]`))
+    .find(Boolean);
+  if (selectedNode) {
+    const holder = selectedNode.closest(".speaker")?.dataset.speakerId;
+    const speaker = editor.items.find((item) => item.id === holder);
+    if (speaker?.source) return speaker.source;
+  }
+  const sources = new Set(editor.items.map((item) => item.source).filter(Boolean));
+  if (sources.has("system")) return "system";
+  return [...sources][0] || "system";
+}
+
+// addSpeakerDraft adds a speaker that diarization missed. It is created on the
+// server together with the saved edits, so Cancel leaves no empty cards behind.
+function addSpeakerDraft() {
+  const editor = state.speakerEditor;
+  if (!editor) return;
+  const id = nextSpeakerID();
+  const displayName = t("speakers.newSpeakerName", { n: editor.items.length + 1 });
+  const source = newSpeakerSource();
+  const speaker = { id, display_name: displayName, source, fragments: [], samples: [], draft: true };
+  editor.items.push(speaker);
+  editor.names.set(id, displayName);
+  editor.creates.set(id, { id, display_name: displayName, source });
+  $("#speakersList").appendChild(speakerCard(speaker));
+  refreshSpeakerTargetNames();
+  const selected = [...editor.selected];
+  if (selected.length) moveSpeakerFragments(selected, id);
+  markSpeakerEditorDirty();
+  document.querySelector(`.speaker[data-speaker-id="${CSS.escape(id)}"]`)?.scrollIntoView?.({ block: "nearest" });
 }
 
 function markSpeakerEditorDirty() {
@@ -1157,7 +1325,7 @@ function markSpeakerEditorDirty() {
 function updateSpeakerEditorStatus() {
   const editor = state.speakerEditor;
   if (!editor) return;
-  const changes = editor.assignments.size + editor.merges.size + [...editor.names].filter(([id, name]) => editor.items.find((item) => item.id === id)?.display_name !== name).length;
+  const changes = editor.assignments.size + editor.merges.size + editor.creates.size + [...editor.names].filter(([id, name]) => editor.items.find((item) => item.id === id)?.display_name !== name).length;
   $("#speakerDirtyText").textContent = changes ? t("speakers.dirtyCount", { n: changes }) : t("speakers.selectedCount", { n: editor.selected.size });
   $("#saveSpeakerChanges").disabled = changes === 0;
   $("#discardSpeakerChanges").disabled = changes === 0;
@@ -1193,6 +1361,8 @@ function moveSpeakerFragments(ids, targetID) {
     fragment.dataset.sourceSpeaker = targetID;
     fragment.querySelector(".fragment-select").checked = false;
     targetNode.appendChild(fragment);
+    // Подсказка «новый спикер» или «фрагменты недоступны» больше не нужна.
+    targetNode.closest(".speaker")?.querySelector(".speaker-hint")?.classList.add("hidden");
     editor.selected.delete(id);
   });
   markSpeakerEditorDirty();
@@ -1279,10 +1449,11 @@ async function saveSpeakerChanges() {
   const names = Object.fromEntries(editor.names.entries());
   const assignments = Object.fromEntries(editor.assignments.entries());
   const merges = Object.fromEntries(editor.merges.entries());
+  const create = [...editor.creates.values()];
   const button = $("#saveSpeakerChanges");
   button.disabled = true;
   try {
-    await api(`/api/v1/meetings/${editor.uid}/speakers`, { method: "PATCH", json: { names, assignments, merges } });
+    await api(`/api/v1/meetings/${editor.uid}/speakers`, { method: "PATCH", json: { names, assignments, merges, create } });
     await openDetail(editor.uid, true);
     toast(t("speakers.saved"));
   } catch (error) {
@@ -1558,8 +1729,12 @@ $$("#modelTabs [data-mgroup]").forEach((button) => {
       { id: "summarization", title: t("models.group.summarization.title"), description: t("models.group.summarization.desc") },
     ];
     // Вкладка показывает свою часть: VAD относится к транскрибации, как в макете.
+    // Локальные модели протоколов вынесены на отдельную вкладку: раньше они не
+    // попадали ни в одну из них и раздел оставался пустым.
     const tabGroups = state.modelTab === "speakers" ? ["diarization"]
-      : (state.modelTab === "runtime" ? ["runtime"] : ["transcription", "speech_filter"]);
+      : state.modelTab === "runtime" ? ["runtime"]
+      : state.modelTab === "minutes" ? ["summarization"]
+      : ["transcription", "speech_filter"];
     groups.filter((group) => tabGroups.includes(group.id)).forEach((group) => {
       const entries = models.filter((item) => item.group === group.id);
       if (!entries.length) return;
@@ -1820,6 +1995,30 @@ function buildListSettingEditor(input) {
   return container;
 }
 
+// applySettingsVisibility hides fields whose controlling setting has another
+// value and drops a section heading when nothing under it stays visible.
+function applySettingsVisibility() {
+  const root = $("#settingsFields");
+  if (!root) return;
+  root.querySelectorAll(".setting-field[data-show-key]").forEach((row) => {
+    const control = root.querySelector(`[data-key="${row.dataset.showKey}"]`);
+    const allowed = (row.dataset.showValues || "").split(",");
+    row.classList.toggle("hidden", !control || !allowed.includes(control.value));
+  });
+  root.querySelectorAll(".settings-section-title").forEach((heading) => {
+    let node = heading.nextElementSibling;
+    let visible = false;
+    while (node && !node.classList.contains("settings-section-title")) {
+      if (node.classList.contains("setting-field") && !node.classList.contains("hidden")) {
+        visible = true;
+        break;
+      }
+      node = node.nextElementSibling;
+    }
+    heading.classList.toggle("hidden", !visible);
+  });
+}
+
 function renderSettingsGroup(groupID) {
   state.settingsGroup = groupID;
   const groups = state.settings?.groups || [];
@@ -1827,7 +2026,12 @@ function renderSettingsGroup(groupID) {
   if (!group) return;
   state.settings.active = group.id;
   $$("#settingsNav button").forEach((button) => button.classList.toggle("active", button.dataset.group === group.id));
-  $("#settingsGroupTitle").innerHTML = `<div class="settings-title-line"><div><h3>${esc(group.title)}</h3><p>${esc(group.description)}</p></div>${group.id === "summary" ? `<button id="testSummaryConnection" type="button" class="ghost small">${t("settings.testConnection")}</button>` : ""}</div><div id="settingsTestResult" class="model-test-result hidden"></div>`;
+  // Кнопка проверки проверяет выбранный движок: подключение к эндпоинту или
+  // загрузку локальной модели, поэтому и подпись у неё разная.
+  const summaryEngineField = group.fields.find((field) => field.key === "summary.engine");
+  const localEngine = Boolean(summaryEngineField && summaryEngineField.value === "llama-local");
+  const testLabel = localEngine ? t("settings.testLocalModel") : t("settings.testConnection");
+  $("#settingsGroupTitle").innerHTML = `<div class="settings-title-line"><div><h3>${esc(group.title)}</h3><p>${esc(group.description)}</p></div>${group.id === "summary" ? `<button id="testSummaryConnection" type="button" class="ghost small">${testLabel}</button>` : ""}</div><div id="settingsTestResult" class="model-test-result hidden"></div>`;
   const root = $("#settingsFields");
   root.innerHTML = "";
   let lastSection = "";
@@ -1841,6 +2045,12 @@ function renderSettingsGroup(groupID) {
     }
     const row = document.createElement("label");
     row.className = `setting-field ${field.kind === "checkbox" ? "setting-checkbox" : ""}`;
+    // Условная видимость: поле показывается только для своего значения
+    // управляющей настройки (раздел выбранного движка саммаризации).
+    if (field.show_if) {
+      row.dataset.showKey = field.show_if.key;
+      row.dataset.showValues = (field.show_if.values || []).join(",");
+    }
     const title = document.createElement("span");
     title.className = "setting-label";
     title.textContent = field.label;
@@ -1928,6 +2138,22 @@ function renderSettingsGroup(groupID) {
     }
     root.appendChild(row);
   });
+  // Настройки саммаризации делятся по движку: показываем только раздел
+  // выбранного, чтобы пустые поля эндпоинта не выглядели требованиями
+  // локальной модели. Слушатель вешается на саму управляющую настройку.
+  const controllers = new Set(group.fields.filter((field) => field.show_if).map((field) => field.show_if.key));
+  controllers.forEach((key) => {
+    const control = root.querySelector(`[data-key="${key}"]`);
+    if (control) control.addEventListener("change", applySettingsVisibility);
+  });
+  applySettingsVisibility();
+  const engineControl = root.querySelector("[data-key='summary.engine']");
+  const summaryTest = $("#testSummaryConnection");
+  if (engineControl && summaryTest) {
+    engineControl.addEventListener("change", () => {
+      summaryTest.textContent = t(engineControl.value === "llama-local" ? "settings.testLocalModel" : "settings.testConnection");
+    });
+  }
   // The version is informational, not a setting: it is appended below the last
   // field of the application group and never part of the edited values.
   if (group.id === "app" && state.appVersion) {
@@ -2128,6 +2354,7 @@ $("#discardSpeakerChanges").onclick = () => {
   toast(t("speakers.discarded"));
 };
 $("#moveSelectedSpeakerFragments").onclick = () => moveSpeakerFragments(state.speakerEditor ? [...state.speakerEditor.selected] : [], $("#speakerMoveTarget").value);
+$("#addSpeaker").onclick = () => addSpeakerDraft();
 $("#detailTitle").onchange = async () => {
   if (!state.detail) return;
   try {

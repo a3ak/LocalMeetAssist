@@ -52,6 +52,8 @@ runtime_path = "./runtime/onnxruntime"
 auto_download = true
 runtime_version = "1.23.2"
 whisper_runtime_path = "./runtime/whisper.cpp"
+# Каталог нативных библиотек llama.cpp; Vulkan-сборка ставится рядом, в llama.cpp-vulkan.
+llama_runtime_path = "./runtime/llama.cpp"
 
 [transcription]
 # Только автоматический запуск после остановки записи; ручной запуск доступен всегда.
@@ -121,6 +123,22 @@ whisper_turbo_sha256 = "394221709cd5ad1f40c46e6031ca61bce88931e6e088c188294c6d5a
 [summary]
 # Только автоматический запуск после успешных предыдущих выбранных этапов.
 auto_run = false
+# openai — сетевой эндпоинт; llama-local — модель GGUF на этом компьютере.
+engine = "openai"
+# Файл локальной модели; карточка модели в разделе «Модели» заполняет его сама.
+model_path = "./models/llm/Qwen3.5-4B-Q4_K_M.gguf"
+# Контекстное окно локальной модели: длинная встреча обрабатывается частями.
+context_tokens = 8192
+# Предел длины протокола и промежуточных заметок.
+max_tokens = 2048
+# Потоки CPU для локальной модели; 0 — выбрать автоматически.
+threads = 0
+# Слои на GPU: -1 или 0 — все, что помещаются, например в Vulkan-сборке.
+gpu_layers = -1
+# 0 — детерминированный протокол.
+temperature = 0.0
+# Ограничение на одну генерацию на этом компьютере, сек.
+local_timeout_seconds = 3600
 base_url = "http://127.0.0.1:8080/v1"
 model = ""
 token = ""

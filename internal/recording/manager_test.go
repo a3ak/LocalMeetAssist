@@ -38,6 +38,8 @@ func TestDevicesHonorsContextWhenNativeEnumerationBlocks(t *testing.T) {
 
 type syntheticBackend struct {
 	silentSystem bool
+	// health is the sequence of system stream states the fake session reports.
+	health []nativeaudio.SystemHealth
 }
 
 func (syntheticBackend) Name() string { return "synthetic-native-test" }
@@ -55,7 +57,7 @@ func (backend syntheticBackend) Start(request nativeaudio.StartRequest) (nativea
 		_ = microphone.Close()
 		return nil, err
 	}
-	session := &syntheticSession{microphone: microphone, system: system, silentSystem: backend.silentSystem, done: make(chan struct{})}
+	session := &syntheticSession{microphone: microphone, system: system, silentSystem: backend.silentSystem, health: backend.health, done: make(chan struct{})}
 	session.wait.Add(1)
 	go session.write(request.SampleRate, request.Channels)
 	return session, nil
@@ -65,9 +67,25 @@ type syntheticSession struct {
 	microphone   *audio.WAVWriter
 	system       *audio.WAVWriter
 	silentSystem bool
+	healthMu     sync.Mutex
+	health       []nativeaudio.SystemHealth
 	done         chan struct{}
 	once         sync.Once
 	wait         sync.WaitGroup
+}
+
+// SystemHealth replays the scripted health sequence.
+func (s *syntheticSession) SystemHealth() nativeaudio.SystemHealth {
+	s.healthMu.Lock()
+	defer s.healthMu.Unlock()
+	if len(s.health) == 0 {
+		return nativeaudio.SystemOK
+	}
+	next := s.health[0]
+	if len(s.health) > 1 {
+		s.health = s.health[1:]
+	}
+	return next
 }
 
 func (s *syntheticSession) write(sampleRate, channels int) {
@@ -166,5 +184,50 @@ func TestSyntheticNativeTwoStreamRecording(t *testing.T) {
 		if info.SampleRate != 16000 || info.Channels != 1 || info.DataSize < 3200 {
 			t.Fatalf("unexpected WAV: %+v", info)
 		}
+	}
+}
+
+// TestSystemAudioRecoveryIsRecorded covers the Windows and Linux path where the
+// output device disappears mid-recording: the native layer recreates the stream,
+// and the recorder has to remember the event so the meeting card can show it.
+func TestSystemAudioRecoveryIsRecorded(t *testing.T) {
+	previous := systemWatchInterval
+	systemWatchInterval = 10 * time.Millisecond
+	defer func() { systemWatchInterval = previous }()
+
+	backend := syntheticBackend{health: []nativeaudio.SystemHealth{
+		nativeaudio.SystemOK,
+		nativeaudio.SystemRestored,
+		nativeaudio.SystemOK,
+		nativeaudio.SystemLost,
+	}}
+	manager := newManager(config.Defaults().Audio, log.New(io.Discard, "", 0), backend)
+	session, err := manager.Start(
+		"meeting-device-switch",
+		t.TempDir(),
+		16000,
+		1,
+		model.Device{ID: "mic", Name: "Test microphone"},
+		model.Device{ID: "system", Name: "Test system"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if event, _ := session.SystemIssue(); event == "lost" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	event, at := session.SystemIssue()
+	if event != "lost" {
+		t.Fatalf("system audio loss was not recorded: %q", event)
+	}
+	if at.IsZero() {
+		t.Fatal("system audio event has no timestamp")
+	}
+	if _, err := manager.Stop("meeting-device-switch"); err != nil {
+		t.Fatalf("recording with a restored stream must still save: %v", err)
 	}
 }

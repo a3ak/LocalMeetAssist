@@ -45,12 +45,25 @@ func TestRemoveModelPathIsSafe(t *testing.T) {
 	}
 }
 
-// TestDeleteKeepsAppliedModels refuses to delete the model the pipeline is
-// configured to use: the file under a running configuration must stay.
-func TestDeleteKeepsAppliedModels(t *testing.T) {
+// TestDeleteKeepsAppliedModelFiles refuses to delete the model the pipeline is
+// configured to use: the file under a running configuration must stay. Runtime
+// libraries are the exception: they are re-installable binaries rather than
+// user data, so a runtime card can always be removed to free the disk.
+func TestDeleteKeepsAppliedModelFiles(t *testing.T) {
 	m := New(config.Defaults(), log.New(io.Discard, "", 0))
 	applied := 0
+	runtimeChecked := false
 	for _, status := range m.Statuses() {
+		if status.Group == "runtime" {
+			if status.Selected {
+				// A missing file is not an error, so the delete itself succeeds.
+				if err := m.Delete(status.ID); err != nil {
+					t.Fatalf("runtime %s must be deletable: %v", status.ID, err)
+				}
+				runtimeChecked = true
+			}
+			continue
+		}
 		if !status.Selected {
 			continue
 		}
@@ -61,6 +74,9 @@ func TestDeleteKeepsAppliedModels(t *testing.T) {
 	}
 	if applied == 0 {
 		t.Fatal("the default configuration must have at least one applied model")
+	}
+	if !runtimeChecked {
+		t.Fatal("no selected runtime card was checked")
 	}
 	if err := m.Delete("no-such-model"); err == nil {
 		t.Fatal("an unknown model must not be deleted")

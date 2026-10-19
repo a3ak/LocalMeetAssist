@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LocalMeetAssist
+GenericName=Meeting recorder
+Comment=Record meetings, transcribe them and build the minutes on your own computer
+Comment[ru]=Запись встреч с расшифровкой и протоколом на вашем компьютере
+Exec=localmeetassist
+Icon=localmeetassist
+Terminal=false
+Categories=AudioVideo;Recorder;Utility;
+Keywords=meeting;record;transcribe;minutes;
+StartupNotify=false

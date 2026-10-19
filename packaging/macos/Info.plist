@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+	<key>CFBundleExecutable</key>
+	<string>localmeetassist</string>
+	<key>CFBundleIconFile</key>
+	<string>AppIcon</string>
+	<key>CFBundleIdentifier</key>
+	<string>app.localmeetassist</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleName</key>
+	<string>LocalMeetAssist</string>
+	<key>CFBundleDisplayName</key>
+	<string>LocalMeetAssist</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.2</string>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- Системный звук берётся через CoreAudio process taps и разрешения не требует,
+	     поэтому запрос остаётся один — на микрофон. Без этого ключа macOS
+	     завершает процесс при первом обращении к микрофону. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>LocalMeetAssist records your voice to transcribe the meeting. The audio stays on this computer.</string>
+	<key>NSHumanReadableCopyright</key>
+	<string>LocalMeetAssist</string>
+</dict>
+</plist>

@@ -52,15 +52,7 @@ func (s *Summarizer) Summarize(ctx context.Context, transcript string) (string, 
 	if strings.TrimSpace(s.cfg.BaseURL) == "" || strings.TrimSpace(s.cfg.Model) == "" {
 		return "", errors.New("summary.base_url and summary.model are required")
 	}
-	prompt := strings.TrimSpace(s.cfg.SystemPrompt)
-	if prompt == "" {
-		prompt = config.EffectiveSummaryPrompt(s.cfg)
-	}
-	// The answer language comes from the «Minutes language» setting, not from the
-	// prompt. A custom prompt describes the structure and wording; the language is
-	// prepended here so a template written in English still produces headings in
-	// the language the user picked in the settings.
-	prompt = "Answer language: " + languageName(s.cfg.Language) + ". Write the entire answer — every section title, list label and table column — in that language, regardless of the language of these instructions.\n\n" + prompt
+	prompt := summarySystemPrompt(s.cfg)
 	messages := []map[string]string{{"role": "system", "content": prompt}, {"role": "user", "content": transcript}}
 	return s.complete(ctx, messages, 0)
 }

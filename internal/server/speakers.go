@@ -39,6 +39,17 @@ type speakerBatchRequest struct {
 	Names       map[string]string `json:"names"`
 	Assignments map[string]string `json:"assignments"`
 	Merges      map[string]string `json:"merges"`
+	// Create adds speakers that diarization did not find, for example when two
+	// participants were detected as one voice. Fragments are moved into them in
+	// the same request, so a new card is never created empty by accident.
+	Create []speakerCreate `json:"create"`
+}
+
+// speakerCreate is one speaker to add to a meeting.
+type speakerCreate struct {
+	ID          string `json:"id"`
+	DisplayName string `json:"display_name"`
+	Source      string `json:"source"`
 }
 
 // updateSpeakers applies names, fragment moves and merges atomically.
@@ -71,6 +82,54 @@ func (s *Server) updateSpeakers(w http.ResponseWriter, r *http.Request, uid stri
 	for _, speaker := range existing {
 		byID[speaker.ID] = speaker
 		oldNames[speaker.ID] = speaker.DisplayName
+	}
+	// Источники встречи: новый спикер живёт в том же потоке, что и фрагменты,
+	// которые в него переносят, иначе перенос был бы запрещён.
+	sources := make(map[string]bool, 2)
+	for _, speaker := range existing {
+		if speaker.Source != "" {
+			sources[speaker.Source] = true
+		}
+	}
+	if len(sources) == 0 {
+		sources["system"] = true
+		sources["microphone"] = true
+	}
+	defaultSource := "system"
+	if !sources["system"] {
+		for source := range sources {
+			defaultSource = source
+		}
+	}
+	created := make([]string, 0, len(req.Create))
+	for _, item := range req.Create {
+		if len(created) >= 50 {
+			writeError(w, http.StatusBadRequest, "too many new speakers")
+			return
+		}
+		id := strings.TrimSpace(item.ID)
+		if id == "" || len(id) > 64 || strings.ContainsAny(id, "/\\: \t\n") {
+			writeError(w, http.StatusBadRequest, "invalid new speaker id")
+			return
+		}
+		if _, exists := byID[id]; exists {
+			writeError(w, http.StatusBadRequest, "speaker already exists: "+id)
+			return
+		}
+		source := strings.TrimSpace(item.Source)
+		if source == "" {
+			source = defaultSource
+		}
+		if !sources[source] {
+			writeError(w, http.StatusBadRequest, "unknown speaker source: "+source)
+			return
+		}
+		name := strings.TrimSpace(item.DisplayName)
+		if name == "" {
+			name = id
+		}
+		byID[id] = model.Speaker{MeetingUID: uid, ID: id, DisplayName: name, Source: source}
+		created = append(created, id)
 	}
 	resolveMerge := func(id string) (string, error) {
 		seen := make(map[string]bool)
@@ -154,6 +213,18 @@ func (s *Server) updateSpeakers(w http.ResponseWriter, r *http.Request, uid stri
 		}
 		sort.Slice(speakers, func(i, j int) bool { return speakers[i].ID < speakers[j].ID })
 	}
+	// Новый спикер без фрагментов всё равно должен попасть в список: иначе
+	// карточка исчезнет сразу после сохранения.
+	present := make(map[string]bool, len(speakers))
+	for _, speaker := range speakers {
+		present[speaker.ID] = true
+	}
+	for _, id := range created {
+		if !present[id] {
+			speakers = append(speakers, byID[id])
+		}
+	}
+	sort.Slice(speakers, func(i, j int) bool { return speakers[i].ID < speakers[j].ID })
 	names := make(map[string]string, len(speakers))
 	for _, speaker := range speakers {
 		names[speaker.ID] = speaker.DisplayName
@@ -181,7 +252,7 @@ func (s *Server) updateSpeakers(w http.ResponseWriter, r *http.Request, uid stri
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.logger.Printf("speaker edits saved meeting_uid=%s names=%d assignments=%d merges=%d", uid, len(req.Names), len(req.Assignments), len(req.Merges))
+	s.logger.Printf("speaker edits saved meeting_uid=%s names=%d assignments=%d merges=%d created=%d", uid, len(req.Names), len(req.Assignments), len(req.Merges), len(created))
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "speakers": speakers, "transcript": meeting.Transcript, "summary_stale": meeting.Metadata["summary_stale"] == "true"})
 }
 

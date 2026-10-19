@@ -1,11 +1,14 @@
+#import <AppKit/NSRunningApplication.h>
 #import <Foundation/Foundation.h>
-#import <ScreenCaptureKit/ScreenCaptureKit.h>
-#import <CoreMedia/CoreMedia.h>
 #import <AudioToolbox/AudioToolbox.h>
 #import <CoreAudio/CoreAudio.h>
+#import <CoreAudio/AudioHardwareTapping.h>
+#import <CoreAudio/CATapDescription.h>
 
 #include <math.h>
+#include <pthread.h>
 #include <stdint.h>
+#include <string.h>
 #include <unistd.h>
 #include <libproc.h>
 #include <stdio.h>
@@ -216,23 +219,51 @@ int lm_macos_active_input_app(char* name, size_t name_size, int* found, char* er
     return 0;
 }
 
+/*
+ * Системный звук на macOS берётся через CoreAudio process taps (macOS 14.2+).
+ *
+ * Раньше использовался ScreenCaptureKit: сессия захвата экрана, привязанная к
+ * конкретному дисплею. При отключении монитора macOS инвалидировала её, и дорожка
+ * голосов собеседников обрывалась молча. Тап не зависит от дисплеев вообще: он
+ * собирает вывод процессов, а приватное агрегатное устройство превращает его в
+ * обычный входной поток CoreAudio.
+ */
+
+// Окно фильтра-интерполятора при пересчёте частоты: 16 кГц из 48 или 44,1 кГц.
+#define LM_TAP_TAPS 17
+#define LM_TAP_MAX_CHANNELS 2
+#define LM_TAP_PENDING 8192
+
 typedef struct {
-    SCStream* stream;
-    id output;
+    float pending[LM_TAP_PENDING];
+    int pending_frames;
+    double phase;
+} lm_tap_resampler;
+
+typedef struct {
+    AudioObjectID tap_id;
+    AudioObjectID aggregate_id;
+    AudioDeviceIOProcID proc_id;
+    // UID of the tap: the aggregate device refers to it by this string.
+    NSString* tap_uid;
+    // Set before the teardown so a queued device-change block does not rebuild.
+    int stopping;
+    AudioObjectPropertyListenerBlock device_listener;
     dispatch_queue_t queue;
+    pthread_mutex_t lock;
     void* sink;
     unsigned int channels;
+    unsigned int target_rate;
+    AudioStreamBasicDescription source_format;
+    double step;
+    lm_tap_resampler resamplers[LM_TAP_MAX_CHANNELS];
+    float* channel_scratch[LM_TAP_MAX_CHANNELS];
+    int16_t* output_scratch;
+    size_t output_capacity;
     int failed;
     char failure_reason[512];
     uint64_t frames_written;
 } lm_macos_capture;
-
-@interface LMAudioStreamOutput : NSObject <SCStreamOutput> {
-@public
-    lm_macos_capture* _capture;
-}
-- (instancetype)initWithCapture:(lm_macos_capture*)capture;
-@end
 
 static void lm_macos_capture_fail(lm_macos_capture* capture, const char* message)
 {
@@ -241,6 +272,12 @@ static void lm_macos_capture_fail(lm_macos_capture* capture, const char* message
     if (capture->failure_reason[0] == '\0' && message != NULL) {
         snprintf(capture->failure_reason, sizeof(capture->failure_reason), "%s", message);
     }
+}
+
+static void lm_macos_error(char* target, size_t size, NSString* message)
+{
+    if (target == NULL || size == 0) return;
+    snprintf(target, size, "%s", message != nil ? [message UTF8String] : "неизвестная ошибка CoreAudio");
 }
 
 static int16_t lm_float_to_s16(float value)
@@ -267,281 +304,415 @@ static float lm_read_sample(const AudioBufferList* list, const AudioStreamBasicD
     return 0.0f;
 }
 
-@implementation LMAudioStreamOutput
-- (instancetype)initWithCapture:(lm_macos_capture*)capture
+// lm_tap_sinc returns the normalized interpolation kernel value.
+static double lm_tap_sinc(double value)
 {
-    self = [super init];
-    if (self != nil) {
-        _capture = capture;
-    }
-    return self;
+    if (fabs(value) < 1e-9) return 1.0;
+    double angle = M_PI * value;
+    return sin(angle) / angle;
 }
 
-- (void)stream:(SCStream*)stream didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer ofType:(SCStreamOutputType)type
+// lm_tap_write resamples the pending buffer and writes it to the WAV sink.
+static void lm_tap_flush(lm_macos_capture* capture)
 {
-    (void)stream;
-    if (type != SCStreamOutputTypeAudio || sampleBuffer == NULL || !CMSampleBufferDataIsReady(sampleBuffer)) return;
-    lm_macos_capture* capture = _capture;
-    if (capture == NULL || capture->sink == NULL) return;
-    CMFormatDescriptionRef description = CMSampleBufferGetFormatDescription(sampleBuffer);
-    const AudioStreamBasicDescription* format = CMAudioFormatDescriptionGetStreamBasicDescription(description);
-    if (format == NULL || format->mFormatID != kAudioFormatLinearPCM || format->mChannelsPerFrame == 0) {
-        lm_macos_capture_fail(capture, "ScreenCaptureKit вернул неподдерживаемый формат аудио");
+    if (capture->failed || capture->sink == NULL) return;
+    if (capture->step <= 1.0001) {
+        // Частоты совпадают: пересчёт не нужен, только приведение к PCM16.
+        while (capture->resamplers[0].pending_frames > 0) {
+            int frames = capture->resamplers[0].pending_frames;
+            int room = (int)(capture->output_capacity / capture->channels);
+            if (frames > room) frames = room;
+            for (int frame = 0; frame < frames; frame++) {
+                for (unsigned int channel = 0; channel < capture->channels; channel++) {
+                    capture->output_scratch[(size_t)frame * capture->channels + channel] =
+                        lm_float_to_s16(capture->resamplers[channel].pending[frame]);
+                }
+            }
+            if (lm_platform_wav_write(capture->sink, capture->output_scratch, (size_t)frames * capture->channels * sizeof(int16_t)) != 0) {
+                lm_macos_capture_fail(capture, "Ошибка записи системного аудио в WAV");
+                return;
+            }
+            capture->frames_written += (uint64_t)frames;
+            for (unsigned int channel = 0; channel < capture->channels; channel++) {
+                lm_tap_resampler* resampler = &capture->resamplers[channel];
+                memmove(resampler->pending, resampler->pending + frames, sizeof(float) * (size_t)(resampler->pending_frames - frames));
+                resampler->pending_frames -= frames;
+            }
+        }
         return;
     }
-    int supported = (((format->mFormatFlags & kAudioFormatFlagIsFloat) != 0 && format->mBitsPerChannel == 32) ||
-                     ((format->mFormatFlags & kAudioFormatFlagIsSignedInteger) != 0 &&
-                      (format->mBitsPerChannel == 16 || format->mBitsPerChannel == 32)));
-    if (!supported) {
-        lm_macos_capture_fail(capture, "ScreenCaptureKit вернул неподдерживаемый PCM-формат");
-        return;
+
+    // Общий случай: пересчёт окном sinc. Для каждой выходной точки берём
+    // LM_TAP_TAPS входных отсчётов вокруг дробной позиции.
+    int produced = 0;
+    for (;;) {
+        int ready = 1;
+        for (unsigned int channel = 0; channel < capture->channels; channel++) {
+            lm_tap_resampler* resampler = &capture->resamplers[channel];
+            // Окно должно целиком лежать внутри буфера, иначе крайние отсчёты
+            // теряются и первые сэмплы получаются с неверной громкостью.
+            if (floor(resampler->phase) - LM_TAP_TAPS / 2 + 1 < 0) ready = 0;
+            if (resampler->phase + LM_TAP_TAPS > (double)resampler->pending_frames) ready = 0;
+        }
+        if (!ready) break;
+        for (unsigned int channel = 0; channel < capture->channels; channel++) {
+            lm_tap_resampler* resampler = &capture->resamplers[channel];
+            double position = resampler->phase;
+            int first = (int)floor(position) - LM_TAP_TAPS / 2 + 1;
+            double weights[LM_TAP_TAPS];
+            double total = 0;
+            for (int tap = 0; tap < LM_TAP_TAPS; tap++) {
+                double distance = (first + tap) - position;
+                double t = (double)tap / (double)(LM_TAP_TAPS - 1);
+                double window = 0.42 - 0.5 * cos(2.0 * M_PI * t) + 0.08 * cos(4.0 * M_PI * t);
+                double weight = lm_tap_sinc(distance * capture->step * 0.98) * window;
+                weights[tap] = weight;
+                total += weight;
+            }
+            double mixed = 0;
+            for (int tap = 0; tap < LM_TAP_TAPS; tap++) {
+                int index = first + tap;
+                if (index < 0 || index >= resampler->pending_frames) continue;
+                if (total > 1e-9) {
+                    mixed += resampler->pending[index] * (weights[tap] / total);
+                }
+            }
+            capture->output_scratch[(size_t)produced * capture->channels + channel] = lm_float_to_s16((float)mixed);
+            resampler->phase += capture->step;
+        }
+        produced++;
+        if ((size_t)produced >= capture->output_capacity / capture->channels) break;
     }
-    /* CoreMedia may require more storage than sizeof(AudioBufferList), including
-       alignment padding. Ask for the exact size first instead of guessing a
-       maximum number of AudioBuffer entries. The probe normally returns
-       kCMSampleBufferError_ArrayTooSmall together with the required size. */
-    size_t list_size = 0;
-    CMBlockBufferRef probe_block = NULL;
-    OSStatus probe_status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-        sampleBuffer, &list_size, NULL, 0, kCFAllocatorDefault, kCFAllocatorDefault,
-        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &probe_block);
-    if (probe_block != NULL) CFRelease(probe_block);
-    if (list_size < sizeof(AudioBufferList) ||
-        (probe_status != noErr && probe_status != kCMSampleBufferError_ArrayTooSmall)) {
-        char message[224];
-        snprintf(message, sizeof(message),
-                 "Не удалось определить размер буфера ScreenCaptureKit (OSStatus=%d, size=%zu)",
-                 (int)probe_status, list_size);
-        lm_macos_capture_fail(capture, message);
-        return;
+    if (produced > 0) {
+        if (lm_platform_wav_write(capture->sink, capture->output_scratch, (size_t)produced * capture->channels * sizeof(int16_t)) != 0) {
+            lm_macos_capture_fail(capture, "Ошибка записи системного аудио в WAV");
+        } else {
+            capture->frames_written += (uint64_t)produced;
+        }
     }
-    AudioBufferList* list = (AudioBufferList*)calloc(1, list_size);
-    if (list == NULL) {
-        lm_macos_capture_fail(capture, "Недостаточно памяти для буфера системного аудио");
-        return;
+    // Убираем использованные отсчёты, сохраняя половину окна для следующего раза.
+    for (unsigned int channel = 0; channel < capture->channels; channel++) {
+        lm_tap_resampler* resampler = &capture->resamplers[channel];
+        int consumed = (int)floor(resampler->phase) - LM_TAP_TAPS / 2;
+        if (consumed <= 0) continue;
+        if (consumed > resampler->pending_frames) consumed = resampler->pending_frames;
+        memmove(resampler->pending, resampler->pending + consumed, sizeof(float) * (size_t)(resampler->pending_frames - consumed));
+        resampler->pending_frames -= consumed;
+        resampler->phase -= consumed;
     }
-    CMBlockBufferRef block = NULL;
-    size_t actual_list_size = list_size;
-    OSStatus status = CMSampleBufferGetAudioBufferListWithRetainedBlockBuffer(
-        sampleBuffer, &actual_list_size, list, list_size, kCFAllocatorDefault, kCFAllocatorDefault,
-        kCMSampleBufferFlag_AudioBufferList_Assure16ByteAlignment, &block);
-    if (status != noErr) {
-        free(list);
-        char message[224];
-        snprintf(message, sizeof(message),
-                 "Не удалось получить буфер ScreenCaptureKit (OSStatus=%d, allocated=%zu, required=%zu)",
-                 (int)status, list_size, actual_list_size);
-        lm_macos_capture_fail(capture, message);
-        return;
-    }
-    CMItemCount frames = CMSampleBufferGetNumSamples(sampleBuffer);
-    if (frames <= 0) {
-        if (block != NULL) CFRelease(block);
-        free(list);
-        return;
-    }
+}
+
+// lm_tap_handle_audio converts one IO callback buffer into the WAV sink.
+static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList* input)
+{
+    if (capture->failed || capture->sink == NULL || input == NULL) return;
+    const AudioStreamBasicDescription* format = &capture->source_format;
+    if (format->mChannelsPerFrame == 0) return;
     int non_interleaved = (format->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
     unsigned int needed_buffers = non_interleaved ? format->mChannelsPerFrame : 1;
-    if (list->mNumberBuffers < needed_buffers) {
-        if (block != NULL) CFRelease(block);
-        free(list);
-        lm_macos_capture_fail(capture, "ScreenCaptureKit вернул неполный список аудиобуферов");
+    if (input->mNumberBuffers < needed_buffers) {
+        lm_macos_capture_fail(capture, "CoreAudio вернул неполный список аудиобуферов");
         return;
     }
-    for (unsigned int index = 0; index < needed_buffers; index++) {
-        size_t needed_bytes = (size_t)frames * format->mBytesPerFrame;
-        if (list->mBuffers[index].mData == NULL || list->mBuffers[index].mDataByteSize < needed_bytes) {
-            if (block != NULL) CFRelease(block);
-            free(list);
-            lm_macos_capture_fail(capture, "ScreenCaptureKit вернул повреждённый аудиобуфер");
-            return;
-        }
-    }
-    unsigned int target_channels = capture->channels;
-    int16_t* output = (int16_t*)malloc((size_t)frames * target_channels * sizeof(int16_t));
-    if (output == NULL) {
-        if (block != NULL) CFRelease(block);
-        free(list);
-        lm_macos_capture_fail(capture, "Недостаточно памяти для преобразования системного аудио");
-        return;
-    }
-    for (CMItemCount frame = 0; frame < frames; frame++) {
-        if (target_channels == 1) {
-            float mixed = 0.0f;
-            for (unsigned int channel = 0; channel < format->mChannelsPerFrame; channel++) {
-                mixed += lm_read_sample(list, format, (size_t)frame, channel);
+    size_t frames = input->mBuffers[0].mDataByteSize / format->mBytesPerFrame;
+    if (frames == 0) return;
+    for (unsigned int channel = 0; channel < capture->channels; channel++) {
+        lm_tap_resampler* resampler = &capture->resamplers[channel];
+        float* scratch = capture->channel_scratch[channel];
+        unsigned int source_channel = channel < format->mChannelsPerFrame ? channel : format->mChannelsPerFrame - 1;
+        for (size_t frame = 0; frame < frames; frame++) {
+            float value;
+            if (capture->channels == 1 && format->mChannelsPerFrame > 1) {
+                float mixed = 0.0f;
+                for (unsigned int other = 0; other < format->mChannelsPerFrame; other++) {
+                    mixed += lm_read_sample(input, format, frame, other);
+                }
+                value = mixed / (float)format->mChannelsPerFrame;
+            } else {
+                value = lm_read_sample(input, format, frame, source_channel);
             }
-            output[frame] = lm_float_to_s16(mixed / format->mChannelsPerFrame);
-        } else {
-            for (unsigned int channel = 0; channel < target_channels; channel++) {
-                unsigned int source_channel = channel < format->mChannelsPerFrame ? channel : format->mChannelsPerFrame - 1;
-                output[(size_t)frame * target_channels + channel] = lm_float_to_s16(lm_read_sample(list, format, (size_t)frame, source_channel));
-            }
+            scratch[frame] = value;
         }
+        int space = LM_TAP_PENDING - resampler->pending_frames;
+        if ((int)frames > space) frames = (size_t)space;
+        memcpy(resampler->pending + resampler->pending_frames, scratch, sizeof(float) * frames);
+        resampler->pending_frames += (int)frames;
     }
-    if (lm_platform_wav_write(capture->sink, output, (size_t)frames * target_channels * sizeof(int16_t)) != 0) {
-        lm_macos_capture_fail(capture, "Ошибка записи системного аудио в WAV");
-    } else {
-        capture->frames_written += (uint64_t)frames;
-    }
-    free(output);
-    if (block != NULL) CFRelease(block);
-    free(list);
+    lm_tap_flush(capture);
 }
-@end
 
-static void lm_macos_error(char* target, size_t size, NSString* message)
+// lm_tap_default_output_uid returns the UID of the current default output device.
+static NSString* lm_tap_default_output_uid(void)
 {
-    if (target == NULL || size == 0) return;
-    snprintf(target, size, "%s", message != nil ? [message UTF8String] : "unknown ScreenCaptureKit error");
+    AudioObjectPropertyAddress address = {kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    AudioObjectID device = kAudioObjectUnknown;
+    UInt32 size = sizeof(device);
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, &device) != noErr) return nil;
+    if (device == kAudioObjectUnknown) return nil;
+    AudioObjectPropertyAddress uid_address = {kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    CFStringRef uid = NULL;
+    UInt32 uid_size = sizeof(uid);
+    if (AudioObjectGetPropertyData(device, &uid_address, 0, NULL, &uid_size, &uid) != noErr || uid == NULL) return nil;
+    NSString* result = [(__bridge NSString*)uid copy];
+    CFRelease(uid);
+    return result;
+}
+
+// lm_tap_read_format reads the input format of a device, falling back to the tap.
+static int lm_tap_read_aggregate_format(AudioObjectID aggregate, AudioStreamBasicDescription* format)
+{
+    AudioObjectPropertyAddress address = {kAudioDevicePropertyStreamFormat, kAudioDevicePropertyScopeInput, kAudioObjectPropertyElementMain};
+    UInt32 size = sizeof(*format);
+    if (AudioObjectGetPropertyData(aggregate, &address, 0, NULL, &size, format) != noErr) return -1;
+    return 0;
+}
+
+static void lm_tap_reset_resamplers(lm_macos_capture* capture)
+{
+    for (unsigned int channel = 0; channel < LM_TAP_MAX_CHANNELS; channel++) {
+        capture->resamplers[channel].pending_frames = 0;
+        // Первая выходная точка сдвинута на половину окна: так фильтр всегда
+        // видит полный набор соседних отсчётов.
+        capture->resamplers[channel].phase = LM_TAP_TAPS / 2;
+    }
+}
+
+// lm_tap_create_aggregate builds the private aggregate device that carries the tap.
+static int lm_tap_create_aggregate(lm_macos_capture* capture, char* error_text, size_t error_size)
+{
+    NSString* uid = lm_tap_default_output_uid();
+    if (uid == nil) {
+        lm_macos_error(error_text, error_size, @"Не найдено устройство вывода звука");
+        return -1;
+    }
+    NSString* aggregate_uid = [NSString stringWithFormat:@"localmeetassist.system.%@", [NSUUID UUID].UUIDString];
+    NSDictionary* description = @{
+        @kAudioAggregateDeviceNameKey: @"LocalMeetAssist system audio",
+        @kAudioAggregateDeviceUIDKey: aggregate_uid,
+        @kAudioAggregateDeviceMainSubDeviceKey: uid,
+        @kAudioAggregateDeviceIsPrivateKey: @YES,
+        @kAudioAggregateDeviceIsStackedKey: @NO,
+        @kAudioAggregateDeviceSubDeviceListKey: @[ @{ @kAudioSubDeviceUIDKey: uid } ],
+        @kAudioAggregateDeviceTapListKey: @[ @{ @kAudioSubTapUIDKey: capture->tap_uid, @kAudioSubTapDriftCompensationKey: @YES } ],
+    };
+    AudioObjectID aggregate = kAudioObjectUnknown;
+    OSStatus status = AudioHardwareCreateAggregateDevice((__bridge CFDictionaryRef)description, &aggregate);
+    if (status != noErr || aggregate == kAudioObjectUnknown) {
+        lm_macos_error(error_text, error_size, [NSString stringWithFormat:@"Не удалось создать агрегатное устройство CoreAudio (OSStatus=%d)", (int)status]);
+        return -1;
+    }
+    capture->aggregate_id = aggregate;
+    if (lm_tap_read_aggregate_format(aggregate, &capture->source_format) != 0 || capture->source_format.mSampleRate <= 0) {
+        lm_macos_error(error_text, error_size, @"Не удалось определить формат системного звука");
+        AudioHardwareDestroyAggregateDevice(aggregate);
+        capture->aggregate_id = kAudioObjectUnknown;
+        return -1;
+    }
+    capture->step = capture->source_format.mSampleRate / (double)capture->target_rate;
+    lm_tap_reset_resamplers(capture);
+    return 0;
+}
+
+// lm_tap_start_io starts the IO cycle of the current aggregate device.
+static int lm_tap_start_io(lm_macos_capture* capture, char* error_text, size_t error_size)
+{
+    OSStatus status = AudioDeviceCreateIOProcIDWithBlock(&capture->proc_id, capture->aggregate_id, NULL,
+        ^(const AudioTimeStamp* now, const AudioBufferList* input, const AudioTimeStamp* inputTime, AudioBufferList* outputData, const AudioTimeStamp* outputTime) {
+            (void)now; (void)inputTime; (void)outputData; (void)outputTime;
+            lm_tap_handle_audio(capture, input);
+        });
+    if (status != noErr || capture->proc_id == NULL) {
+        lm_macos_error(error_text, error_size, [NSString stringWithFormat:@"Не удалось создать IOProc системного звука (OSStatus=%d)", (int)status]);
+        return -1;
+    }
+    status = AudioDeviceStart(capture->aggregate_id, capture->proc_id);
+    if (status != noErr) {
+        lm_macos_error(error_text, error_size, [NSString stringWithFormat:@"Не удалось запустить захват системного звука (OSStatus=%d)", (int)status]);
+        AudioDeviceDestroyIOProcID(capture->aggregate_id, capture->proc_id);
+        capture->proc_id = NULL;
+        return -1;
+    }
+    return 0;
+}
+
+// lm_tap_stop_io stops and releases the IO cycle, keeping the aggregate device.
+static void lm_tap_stop_io(lm_macos_capture* capture)
+{
+    if (capture->proc_id != NULL && capture->aggregate_id != kAudioObjectUnknown) {
+        AudioDeviceStop(capture->aggregate_id, capture->proc_id);
+        AudioDeviceDestroyIOProcID(capture->aggregate_id, capture->proc_id);
+        capture->proc_id = NULL;
+    }
+}
+
+// lm_tap_rebuild follows a change of the default output device: the aggregate is
+// rebuilt on the new device while the tap and the WAV sink stay in place.
+static void lm_tap_rebuild(lm_macos_capture* capture)
+{
+    pthread_mutex_lock(&capture->lock);
+    if (!capture->stopping && capture->sink != NULL) {
+        lm_tap_stop_io(capture);
+        if (capture->aggregate_id != kAudioObjectUnknown) {
+            AudioHardwareDestroyAggregateDevice(capture->aggregate_id);
+            capture->aggregate_id = kAudioObjectUnknown;
+        }
+        char error[512] = {0};
+        if (lm_tap_create_aggregate(capture, error, sizeof(error)) != 0) {
+            lm_macos_capture_fail(capture, error);
+        } else if (lm_tap_start_io(capture, error, sizeof(error)) != 0) {
+            lm_macos_capture_fail(capture, error);
+        }
+    }
+    pthread_mutex_unlock(&capture->lock);
+}
+
+static void lm_tap_free(lm_macos_capture* capture)
+{
+    for (unsigned int channel = 0; channel < LM_TAP_MAX_CHANNELS; channel++) {
+        free(capture->channel_scratch[channel]);
+        capture->channel_scratch[channel] = NULL;
+    }
+    free(capture->output_scratch);
+    capture->output_scratch = NULL;
+    if (capture->tap_uid != nil) {
+        [capture->tap_uid release];
+        capture->tap_uid = nil;
+    }
+    if (capture->queue != NULL) {
+        dispatch_release(capture->queue);
+        capture->queue = NULL;
+    }
+    pthread_mutex_destroy(&capture->lock);
+    free(capture);
 }
 
 void* lm_macos_system_start(const char* path, unsigned int sample_rate, unsigned int channels, char* error_text, size_t error_size)
 {
-    if (@available(macOS 13.0, *)) {
+    if (@available(macOS 14.2, *)) {
         @autoreleasepool {
+            if (channels < 1) channels = 1;
+            if (channels > LM_TAP_MAX_CHANNELS) channels = LM_TAP_MAX_CHANNELS;
+            if (sample_rate == 0) {
+                lm_macos_error(error_text, error_size, @"Не задана частота дискретизации системного звука");
+                return NULL;
+            }
             lm_macos_capture* capture = (lm_macos_capture*)calloc(1, sizeof(lm_macos_capture));
             if (capture == NULL) {
-                lm_macos_error(error_text, error_size, @"Недостаточно памяти для ScreenCaptureKit");
+                lm_macos_error(error_text, error_size, @"Недостаточно памяти для захвата системного звука");
+                return NULL;
+            }
+            capture->channels = channels;
+            capture->target_rate = sample_rate;
+            capture->tap_id = kAudioObjectUnknown;
+            capture->aggregate_id = kAudioObjectUnknown;
+            pthread_mutex_init(&capture->lock, NULL);
+            capture->queue = dispatch_queue_create("localmeetassist.system-tap", DISPATCH_QUEUE_SERIAL);
+            capture->output_capacity = 4096;
+            capture->output_scratch = (int16_t*)malloc(capture->output_capacity * sizeof(int16_t));
+            for (unsigned int channel = 0; channel < LM_TAP_MAX_CHANNELS; channel++) {
+                capture->channel_scratch[channel] = (float*)malloc(LM_TAP_PENDING * sizeof(float));
+            }
+            if (capture->output_scratch == NULL || capture->channel_scratch[0] == NULL || capture->channel_scratch[1] == NULL) {
+                lm_macos_error(error_text, error_size, @"Недостаточно памяти для буферов системного звука");
+                lm_tap_free(capture);
                 return NULL;
             }
             capture->sink = lm_platform_wav_open(path, sample_rate, channels);
-            capture->channels = channels;
             if (capture->sink == NULL) {
                 lm_macos_error(error_text, error_size, @"Не удалось создать WAV системного звука");
-                free(capture);
+                lm_tap_free(capture);
                 return NULL;
             }
 
-            dispatch_semaphore_t content_semaphore = dispatch_semaphore_create(0);
-            __block SCShareableContent* content = nil;
-            __block NSError* content_error = nil;
-            [SCShareableContent getShareableContentExcludingDesktopWindows:NO onScreenWindowsOnly:YES completionHandler:^(SCShareableContent* value, NSError* error) {
-                content = [value retain];
-                content_error = [error retain];
-                dispatch_semaphore_signal(content_semaphore);
-            }];
-            if (dispatch_semaphore_wait(content_semaphore, dispatch_time(DISPATCH_TIME_NOW, 15LL * NSEC_PER_SEC)) != 0) {
-                lm_macos_error(error_text, error_size, @"Истекло время ожидания разрешения ScreenCaptureKit");
+            CATapDescription* description = [[CATapDescription alloc] initStereoGlobalTapButExcludeProcesses:@[]];
+            description.name = @"LocalMeetAssist system audio";
+            description.UUID = [NSUUID UUID];
+            description.privateTap = YES;
+            description.muteBehavior = CATapUnmuted;
+            capture->tap_uid = [description.UUID.UUIDString copy];
+            OSStatus status = AudioHardwareCreateProcessTap(description, &capture->tap_id);
+            [description release];
+            if (status != noErr || capture->tap_id == kAudioObjectUnknown) {
+                lm_macos_error(error_text, error_size, [NSString stringWithFormat:@"Не удалось создать тап системного звука (OSStatus=%d)", (int)status]);
                 lm_platform_wav_close(capture->sink);
-                free(capture);
-                return NULL;
-            }
-            if (content_error != nil || content.displays.count == 0) {
-                NSString* message = content_error != nil ? content_error.localizedDescription : @"ScreenCaptureKit не вернул доступный экран";
-                lm_macos_error(error_text, error_size, message);
-                [content_error release];
-                [content release];
-                lm_platform_wav_close(capture->sink);
-                free(capture);
+                capture->sink = NULL;
+                lm_tap_free(capture);
                 return NULL;
             }
 
-            SCDisplay* display = [content.displays objectAtIndex:0];
-            SCContentFilter* filter = [[SCContentFilter alloc] initWithDisplay:display excludingWindows:@[]];
-            SCStreamConfiguration* configuration = [[SCStreamConfiguration alloc] init];
-            configuration.width = 2;
-            configuration.height = 2;
-            configuration.minimumFrameInterval = CMTimeMake(1, 1);
-            configuration.queueDepth = 3;
-            configuration.showsCursor = NO;
-            configuration.capturesAudio = YES;
-            configuration.sampleRate = (NSInteger)sample_rate;
-            configuration.channelCount = (NSInteger)channels;
-            if (@available(macOS 13.0, *)) configuration.excludesCurrentProcessAudio = NO;
-
-            capture->queue = dispatch_queue_create("localmeetassist.system-audio", DISPATCH_QUEUE_SERIAL);
-            LMAudioStreamOutput* output = [[LMAudioStreamOutput alloc] initWithCapture:capture];
-            SCStream* stream = [[SCStream alloc] initWithFilter:filter configuration:configuration delegate:nil];
-            NSError* add_error = nil;
-            BOOL added = [stream addStreamOutput:output type:SCStreamOutputTypeAudio sampleHandlerQueue:capture->queue error:&add_error];
-            [configuration release];
-            [filter release];
-            [content_error release];
-            [content release];
-            if (!added) {
-                lm_macos_error(error_text, error_size, add_error.localizedDescription);
-                [stream release];
-                [output release];
+            char aggregate_error[512] = {0};
+            if (lm_tap_create_aggregate(capture, aggregate_error, sizeof(aggregate_error)) != 0) {
+                lm_macos_error(error_text, error_size, [NSString stringWithUTF8String:aggregate_error]);
+                AudioHardwareDestroyProcessTap(capture->tap_id);
                 lm_platform_wav_close(capture->sink);
-                free(capture);
+                capture->sink = NULL;
+                lm_tap_free(capture);
+                return NULL;
+            }
+            if (lm_tap_start_io(capture, aggregate_error, sizeof(aggregate_error)) != 0) {
+                lm_macos_error(error_text, error_size, [NSString stringWithUTF8String:aggregate_error]);
+                AudioHardwareDestroyAggregateDevice(capture->aggregate_id);
+                AudioHardwareDestroyProcessTap(capture->tap_id);
+                lm_platform_wav_close(capture->sink);
+                capture->sink = NULL;
+                lm_tap_free(capture);
                 return NULL;
             }
 
-            dispatch_semaphore_t start_semaphore = dispatch_semaphore_create(0);
-            __block NSError* start_error = nil;
-            [stream startCaptureWithCompletionHandler:^(NSError* error) {
-                start_error = [error retain];
-                dispatch_semaphore_signal(start_semaphore);
-            }];
-            if (dispatch_semaphore_wait(start_semaphore, dispatch_time(DISPATCH_TIME_NOW, 15LL * NSEC_PER_SEC)) != 0 || start_error != nil) {
-                lm_macos_error(error_text, error_size, start_error != nil ? start_error.localizedDescription : @"Истекло время запуска ScreenCaptureKit");
-                [start_error release];
-                [stream release];
-                [output release];
-                lm_platform_wav_close(capture->sink);
-                free(capture);
-                return NULL;
-            }
-            [start_error release];
-            capture->stream = stream;
-            capture->output = output;
+            // Смена устройства вывода не должна обрывать запись: пересобираем
+            // агрегатное устройство на новом устройстве, тап и WAV остаются.
+            AudioObjectPropertyAddress device_address = {kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+            capture->device_listener = [^(UInt32 count, const AudioObjectPropertyAddress* addresses) {
+                (void)count; (void)addresses;
+                lm_tap_rebuild(capture);
+            } copy];
+            AudioObjectAddPropertyListenerBlock(kAudioObjectSystemObject, &device_address, capture->queue, capture->device_listener);
             return capture;
         }
     }
-    lm_macos_error(error_text, error_size, @"Для системного звука требуется macOS 13 или новее");
+    lm_macos_error(error_text, error_size, @"Для системного звука требуется macOS 14.2 или новее");
     return NULL;
 }
 
 int lm_macos_system_stop(void* opaque, char* error_text, size_t error_size)
 {
     if (opaque == NULL) return 0;
-    if (@available(macOS 13.0, *)) {
-        @autoreleasepool {
-            lm_macos_capture* capture = (lm_macos_capture*)opaque;
-            dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-            __block NSError* stop_error = nil;
-            [capture->stream stopCaptureWithCompletionHandler:^(NSError* error) {
-                stop_error = [error retain];
-                dispatch_semaphore_signal(semaphore);
-            }];
-            int timeout = dispatch_semaphore_wait(semaphore, dispatch_time(DISPATCH_TIME_NOW, 15LL * NSEC_PER_SEC)) != 0;
-            if (timeout) lm_macos_error(error_text, error_size, @"Истекло время остановки ScreenCaptureKit");
-            if (stop_error != nil) lm_macos_error(error_text, error_size, stop_error.localizedDescription);
-            NSError* remove_error = nil;
-            [capture->stream removeStreamOutput:capture->output type:SCStreamOutputTypeAudio error:&remove_error];
-            /* stopCapture completion does not guarantee that every callback already
-               queued on sampleHandlerQueue has returned. Drain the serial queue
-               before closing/freeing the WAV sink. */
-            dispatch_sync(capture->queue, ^{});
-            int callback_failed = capture->failed;
-            char callback_reason[sizeof(capture->failure_reason)];
-            snprintf(callback_reason, sizeof(callback_reason), "%s", capture->failure_reason);
-            [stop_error release];
-            [capture->stream release];
-            [capture->output release];
-            int wav_error = lm_platform_wav_close(capture->sink);
-            /* Ошибка самого stopCapture не делает остановку неудачной: система
-               могла уже закрыть поток сама (например, на длинной записи или при
-               смене разрешений на захват), и localizedDescription тогда говорит,
-               что трансляция уже остановлена. Объекты освобождаются ниже, а
-               очередь дренируется выше, поэтому захват прекращается в любом
-               случае. Фатальны только таймаут, сбой колбэков и ошибка WAV:
-               именно они означают потерю записанного звука. */
-            int failed = timeout || callback_failed || wav_error != 0;
-            free(capture);
-            if (failed && error_text != NULL && error_text[0] == '\0') {
-                if (callback_failed && callback_reason[0] != '\0') {
-                    snprintf(error_text, error_size, "%s", callback_reason);
-                } else if (wav_error != 0) {
-                    lm_macos_error(error_text, error_size, @"Не удалось закрыть WAV системного аудио macOS");
-                } else {
-                    lm_macos_error(error_text, error_size, @"Ошибка остановки системного аудио macOS");
-                }
-            }
-            return failed ? -1 : 0;
+    lm_macos_capture* capture = (lm_macos_capture*)opaque;
+    pthread_mutex_lock(&capture->lock);
+    // Сначала запрещаем пересборку: слушатель мог уже поставить блок в очередь.
+    capture->stopping = 1;
+    if (capture->device_listener != nil) {
+        AudioObjectPropertyAddress device_address = {kAudioHardwarePropertyDefaultOutputDevice, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+        AudioObjectRemovePropertyListenerBlock(kAudioObjectSystemObject, &device_address, capture->queue, capture->device_listener);
+        Block_release(capture->device_listener);
+        capture->device_listener = nil;
+    }
+    lm_tap_stop_io(capture);
+    if (capture->aggregate_id != kAudioObjectUnknown) {
+        AudioHardwareDestroyAggregateDevice(capture->aggregate_id);
+        capture->aggregate_id = kAudioObjectUnknown;
+    }
+    if (capture->tap_id != kAudioObjectUnknown) {
+        AudioHardwareDestroyProcessTap(capture->tap_id);
+        capture->tap_id = kAudioObjectUnknown;
+    }
+    pthread_mutex_unlock(&capture->lock);
+    // Дренируем очередь: блок смены устройства мог быть уже запущен, и он не
+    // должен работать с освобождённой памятью.
+    dispatch_sync(capture->queue, ^{});
+    int callback_failed = capture->failed;
+    char callback_reason[sizeof(capture->failure_reason)];
+    snprintf(callback_reason, sizeof(callback_reason), "%s", capture->failure_reason);
+    int wav_error = lm_platform_wav_close(capture->sink);
+    capture->sink = NULL;
+    lm_tap_free(capture);
+    int failed = callback_failed || wav_error != 0;
+    if (failed && error_text != NULL && error_text[0] == '\0') {
+        if (callback_failed && callback_reason[0] != '\0') {
+            snprintf(error_text, error_size, "%s", callback_reason);
+        } else {
+            lm_macos_error(error_text, error_size, @"Не удалось закрыть WAV системного аудио macOS");
         }
     }
-    lm_macos_error(error_text, error_size, @"Для системного звука требуется macOS 13 или новее");
-    return -1;
+    return failed ? -1 : 0;
 }

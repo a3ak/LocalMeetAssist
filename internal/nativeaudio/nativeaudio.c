@@ -209,6 +209,12 @@ struct lm_capture {
     ma_device system;
     int system_initialized;
     int system_started;
+    // Настройки потока нужны, чтобы пересоздать его после смены устройства.
+    char system_device_id[1024];
+    unsigned int system_sample_rate;
+    unsigned int system_channels;
+    int system_restored;
+    int system_lost;
 #else
     void* macos_system;
 #endif
@@ -325,7 +331,7 @@ static int lm_wav_close(lm_wav_sink* sink)
     return result;
 }
 
-/* Used by the ScreenCaptureKit translation unit. */
+/* Used by the macOS tap translation unit. */
 void* lm_platform_wav_open(const char* path, unsigned int sample_rate, unsigned int channels)
 {
     lm_wav_sink* sink = (lm_wav_sink*)calloc(1, sizeof(lm_wav_sink));
@@ -457,8 +463,8 @@ int lm_audio_list_devices(int kind, lm_device_info** devices, size_t* count, cha
             lm_set_error(error_text, error_size, "out of memory");
             return -1;
         }
-        snprintf(result[0].id, sizeof(result[0].id), "%s", "screencapturekit:system");
-        snprintf(result[0].name, sizeof(result[0].name), "%s", "Системный звук macOS (ScreenCaptureKit)");
+        snprintf(result[0].id, sizeof(result[0].id), "%s", "coreaudio:tap");
+        snprintf(result[0].name, sizeof(result[0].name), "%s", "Системный звук macOS (CoreAudio tap)");
         result[0].is_default = 1;
         *devices = result;
         *count = 1;
@@ -561,7 +567,9 @@ static int lm_init_microphone(lm_capture* capture, const char* device_id, unsign
 }
 
 #if !defined(__APPLE__)
-static int lm_init_system(lm_capture* capture, const char* device_id, unsigned int sample_rate, unsigned int channels, char* error_text, size_t error_size)
+// lm_system_open opens the system stream on the given device. An empty device id
+// means the current default output device.
+static int lm_system_open(lm_capture* capture, const char* device_id, char* error_text, size_t error_size)
 {
     ma_device_id id;
     ma_device_id* selected_id = NULL;
@@ -579,8 +587,8 @@ static int lm_init_system(lm_capture* capture, const char* device_id, unsigned i
 #endif
     config.capture.pDeviceID = selected_id;
     config.capture.format = ma_format_s16;
-    config.capture.channels = channels;
-    config.sampleRate = sample_rate;
+    config.capture.channels = capture->system_channels;
+    config.sampleRate = capture->system_sample_rate;
     config.periodSizeInMilliseconds = 100;
     config.dataCallback = lm_data_callback;
     config.pUserData = &capture->system_sink;
@@ -592,7 +600,70 @@ static int lm_init_system(lm_capture* capture, const char* device_id, unsigned i
     capture->system_initialized = 1;
     return 0;
 }
+
+static int lm_init_system(lm_capture* capture, const char* device_id, unsigned int sample_rate, unsigned int channels, char* error_text, size_t error_size)
+{
+    capture->system_sample_rate = sample_rate;
+    capture->system_channels = channels;
+    if (device_id != NULL) {
+        snprintf(capture->system_device_id, sizeof(capture->system_device_id), "%s", device_id);
+    }
+    return lm_system_open(capture, device_id, error_text, error_size);
+}
+
+// lm_system_restart closes the current system stream and opens it again on the
+// given device, keeping the WAV sink untouched.
+static int lm_system_restart(lm_capture* capture, const char* device_id)
+{
+    if (capture->system_started) {
+        ma_device_stop(&capture->system);
+        capture->system_started = 0;
+    }
+    if (capture->system_initialized) {
+        ma_device_uninit(&capture->system);
+        capture->system_initialized = 0;
+    }
+    char error[256] = {0};
+    if (lm_system_open(capture, device_id, error, sizeof(error)) != 0) return -1;
+    if (ma_device_start(&capture->system) != MA_SUCCESS) {
+        ma_device_uninit(&capture->system);
+        capture->system_initialized = 0;
+        return -1;
+    }
+    capture->system_started = 1;
+    return 0;
+}
 #endif
+
+// lm_audio_system_health checks that the system stream is still running and
+// recreates it when the output device has gone away: a disconnected monitor with
+// speakers, unplugged USB audio or a switched output device otherwise leave the
+// recording without the remote participants. Returns 0 while the stream is
+// running, 1 when it was just restored, 2 when it is lost for good.
+int lm_audio_system_health(lm_capture* capture)
+{
+    if (capture == NULL) return 0;
+#if defined(__APPLE__)
+    // На macOS агрегатное устройство пересобирает слушатель CoreAudio.
+    return 0;
+#else
+    if (!capture->system_initialized) return 0;
+    if (capture->system_lost) return 2;
+    if (capture->system_started && ma_device_get_state(&capture->system) == ma_device_state_started) return 0;
+    // Сначала пробуем настроенное устройство: оно могло вернуться. Если его нет,
+    // переходим на текущее устройство вывода по умолчанию.
+    if (lm_system_restart(capture, capture->system_device_id) == 0) {
+        capture->system_restored++;
+        return 1;
+    }
+    if (lm_system_restart(capture, NULL) == 0) {
+        capture->system_restored++;
+        return 1;
+    }
+    capture->system_lost = 1;
+    return 2;
+#endif
+}
 
 static void lm_cleanup_capture(lm_capture* capture)
 {
@@ -658,8 +729,10 @@ lm_capture* lm_audio_start(
     }
 
 #if defined(__APPLE__)
-    if (system_id == NULL || strcmp(system_id, "screencapturekit:system") != 0) {
-        lm_set_error(error_text, error_size, "invalid ScreenCaptureKit system source");
+    // coreaudio:tap — текущий источник; старое имя принимается, чтобы уже
+    // сохранённые настройки продолжили работать.
+    if (system_id == NULL || (strcmp(system_id, "coreaudio:tap") != 0 && strcmp(system_id, "screencapturekit:system") != 0)) {
+        lm_set_error(error_text, error_size, "invalid system audio source");
         lm_cleanup_capture(capture);
         free(capture);
         return NULL;
@@ -785,7 +858,7 @@ const char* lm_audio_backend_name(void)
 #if defined(_WIN32)
     return "WASAPI";
 #elif defined(__APPLE__)
-    return "CoreAudio + ScreenCaptureKit";
+    return "CoreAudio + process taps";
 #elif defined(__linux__)
     return "PulseAudio/PipeWire + ALSA";
 #else

@@ -929,3 +929,5 @@ func (serverSyntheticBackend) Start(request nativeaudio.StartRequest) (nativeaud
 type noopNativeSession struct{}
 
 func (noopNativeSession) Stop() error { return nil }
+
+func (noopNativeSession) SystemHealth() nativeaudio.SystemHealth { return nativeaudio.SystemOK }

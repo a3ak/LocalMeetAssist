@@ -180,10 +180,13 @@ type ConferenceDetection struct {
 // enabled, the model manager downloads the matching official CPU runtime when
 // the file is absent.
 type Inference struct {
-	RuntimePath        string
-	AutoDownload       bool
-	RuntimeVersion     string
+	RuntimePath    string
+	AutoDownload   bool
+	RuntimeVersion string
+	// WhisperRuntimePath and LlamaRuntimePath are the directories that hold the
+	// native runtimes; each keeps one subdirectory per OS and architecture.
 	WhisperRuntimePath string
+	LlamaRuntimePath   string
 }
 
 // Transcription configures the ASR engine, VAD and echo handling.
@@ -269,16 +272,37 @@ type Models struct {
 	EmbeddingSHA256        string
 }
 
-// Summary configures the OpenAI-compatible minutes endpoint.
+// Summary configures the minutes engine: either an OpenAI-compatible endpoint
+// or a local GGUF model executed by the bundled llama.cpp runtime.
 type Summary struct {
-	AutoRun        bool
-	BaseURL        string
-	Model          string
-	Token          string
-	TokenEnv       string
-	TimeoutSeconds int
-	MaxRetries     int
-	SystemPrompt   string
+	AutoRun bool
+	// Engine is "openai" for the network endpoint and "llama-local" for a model
+	// that runs on this machine. Selecting a local model card sets it.
+	Engine string
+	// ModelPath is the GGUF file used by Engine=llama-local.
+	ModelPath string
+	// ContextTokens is the llama.cpp context window. The window has to hold the
+	// whole transcript, but every token of it costs memory, so it is much
+	// smaller than the 256K the model could address.
+	ContextTokens int
+	// Threads limits the CPU threads used by llama.cpp. Zero selects a default.
+	Threads int
+	// GPULayers is the number of layers offloaded to the accelerator on a
+	// Vulkan or Metal build; -1 offloads as many as fit.
+	GPULayers int
+	// MaxTokens limits the length of the generated minutes.
+	MaxTokens   int
+	Temperature float64
+	// LocalTimeoutSeconds bounds one local generation; a long transcript on a
+	// slow CPU can take minutes.
+	LocalTimeoutSeconds int
+	BaseURL             string
+	Model               string
+	Token               string
+	TokenEnv            string
+	TimeoutSeconds      int
+	MaxRetries          int
+	SystemPrompt        string
 	// DefaultPrompt is the template read from prompts/meeting_summary.md next to
 	// the configuration file, or the built-in template when that file is
 	// missing. It is not a TOML setting: it is resolved while loading.
@@ -287,6 +311,19 @@ type Summary struct {
 	TLSVerify     bool
 	TLSCAFile     string
 	TLSServerName string
+}
+
+// EngineLocalLlama is the summary.engine value that runs a GGUF model on this
+// machine through the bundled llama.cpp runtime.
+const EngineLocalLlama = "llama-local"
+
+// EngineOpenAI is the summary.engine value that calls an OpenAI-compatible
+// endpoint. It is the default so an existing configuration keeps working.
+const EngineOpenAI = "openai"
+
+// LocalSummary reports whether minutes are built by a local llama.cpp model.
+func (s Summary) LocalSummary() bool {
+	return strings.EqualFold(strings.TrimSpace(s.Engine), EngineLocalLlama)
 }
 
 // EffectiveSummaryPrompt returns the template the summarizer must use: the
@@ -318,7 +355,7 @@ The section titles below are written in English only to identify them. Translate
 
 Example:
 
-The essence of the meeting in the title.
+Title.
 
 BRIEF SUMMARY
 Describe the purpose of the meeting and its main outcomes in 3-7 bullet points.
@@ -404,7 +441,7 @@ func Defaults() Config {
 		Audio:               Audio{Backend: "native", SampleRate: 16000, Channels: 1, BlockMS: 250, InputMode: "auto", OutputMode: "native", MicrophoneGain: 1, SystemGain: 1, Normalize: true, EchoCancellation: "auto", EchoDelayMS: 100},
 		Desktop:             Desktop{TrayEnabled: true},
 		ConferenceDetection: ConferenceDetection{Enabled: true, WindowSeconds: 10},
-		Inference:           Inference{RuntimePath: "./runtime/onnxruntime", AutoDownload: true, RuntimeVersion: "1.23.2", WhisperRuntimePath: "./runtime/whisper.cpp"},
+		Inference:           Inference{RuntimePath: "./runtime/onnxruntime", AutoDownload: true, RuntimeVersion: "1.23.2", WhisperRuntimePath: "./runtime/whisper.cpp", LlamaRuntimePath: "./runtime/llama.cpp"},
 		Transcription:       Transcription{AutoRun: false, Engine: "gigaam-onnx", ModelPath: "./models/asr/gigaam-v3-e2e-rnnt-int8", Language: "ru", TimeoutSeconds: 3600, ChunkSeconds: 20, SourceMode: "auto", EchoDedupEnabled: true, EchoTimeToleranceMS: 1500, EchoTextSimilarity: 0.72, VADEnabled: true, VADModelPath: "./models/vad/silero-v6.2/silero_vad.onnx", VADThreshold: 0.5, VADMinSpeechMS: 250, VADMinSilenceMS: 300, SuppressNonSpeech: true, NoFallback: true, SilenceFilter: true, MinSegmentRMS: 0.0015, MixedFallbackEnabled: true, GigaAMModel: "v3_e2e_rnnt_int8", GigaAMBackend: "onnx", GigaAMONNXProvider: "cpu"},
 		Diarization: Diarization{
 			AutoRun: false, Engine: "pyannote-wespeaker-onnx",
@@ -433,11 +470,39 @@ func Defaults() Config {
 			SegmentationSHA256:  "057ee564753071c0b09b5b611648b50ac188d50846bff5f01e9f7bbf1591ea25",
 			EmbeddingURL:        "https://huggingface.co/Wespeaker/wespeaker-voxceleb-resnet34-LM/resolve/main/voxceleb_resnet34_LM.onnx",
 			EmbeddingSHA256:     "7bb2f06e9df17cdf1ef14ee8a15ab08ed28e8d0ef5054ee135741560df2ec068"},
-		Summary:      Summary{AutoRun: false, DefaultPrompt: DefaultSummaryPrompt, TimeoutSeconds: 300, MaxRetries: 2, TokenEnv: "MEETING_LLM_TOKEN", TLSVerify: true},
+		Summary: Summary{AutoRun: false, Engine: EngineOpenAI, ModelPath: "./models/llm/Qwen3.5-4B-Q4_K_M.gguf",
+			ContextTokens: 8192, MaxTokens: 2048, GPULayers: -1, LocalTimeoutSeconds: 3600,
+			DefaultPrompt: DefaultSummaryPrompt, TimeoutSeconds: 300, MaxRetries: 2, TokenEnv: "MEETING_LLM_TOKEN", TLSVerify: true},
 		Storage:      Storage{FileNameTemplate: "{{date}}_{{time}}_{{title_slug}}_{{uid_short}}_{{artifact_type}}", DateFormat: "2006-01-02", TimeFormat: "15-04-05", AudioAfterProcessing: "wav", MP3BitrateKbps: 96, OpusBitrateKbps: 32, KeepSourceOnFailure: true, DatabasePath: "./data/database/meetings.db", BackupCount: 3},
 		Logging:      Logging{Level: "info", Directory: "./data/logs", MaxFileMB: 20, MaxFiles: 5},
 		Integrations: Integrations{AuditEnabled: false, Browser: BrowserIntegration{Mode: "auto", TitleTemplate: "{{title}} — {{date}} {{time}}", StopAfterMissedPolls: 4, PollIntervalSeconds: 20}},
 	}
+}
+
+// DefaultPath is the per-user configuration file used when the application is
+// started without an explicit path and without config.toml in the working
+// directory. It is where a double-clicked macOS bundle ends up: the working
+// directory of a Finder launch is "/", which is not writable and is not where a
+// user would look for their meetings.
+func DefaultPath() string {
+	dir, err := os.UserConfigDir()
+	if err != nil || strings.TrimSpace(dir) == "" {
+		return "config.toml"
+	}
+	return filepath.Join(dir, "LocalMeetAssist", "config.toml")
+}
+
+// ResolvePath picks the configuration file to load: an explicit flag wins, then
+// config.toml in the working directory (go run and the portable archive), then
+// the per-user file from DefaultPath.
+func ResolvePath(explicit string) string {
+	if value := strings.TrimSpace(explicit); value != "" {
+		return value
+	}
+	if info, err := os.Stat("config.toml"); err == nil && info.Mode().IsRegular() {
+		return "config.toml"
+	}
+	return DefaultPath()
 }
 
 // Load reads and validates the TOML file at path.
@@ -590,6 +655,47 @@ func Load(path string) (Config, error) {
 	if cfg.Diarization.NumThreads < 0 || cfg.Diarization.NumThreads > 128 {
 		return cfg, errors.New("diarization.num_threads must be between 0 and 128")
 	}
+	if strings.TrimSpace(cfg.Inference.LlamaRuntimePath) == "" {
+		// A configuration written before the local summarization runtime existed
+		// keeps the library next to whisper.cpp, which is where the runtime card
+		// installs it.
+		cfg.Inference.LlamaRuntimePath = filepath.Join(cfg.Inference.WhisperRuntimePath, "..", "llama.cpp")
+	}
+	switch strings.ToLower(strings.TrimSpace(cfg.Summary.Engine)) {
+	case "", EngineOpenAI:
+		cfg.Summary.Engine = EngineOpenAI
+	case EngineLocalLlama:
+		cfg.Summary.Engine = EngineLocalLlama
+		if strings.TrimSpace(cfg.Summary.ModelPath) == "" {
+			return cfg, errors.New("summary.model_path is required when summary.engine is " + EngineLocalLlama)
+		}
+	default:
+		return cfg, fmt.Errorf("summary.engine must be %s or %s", EngineOpenAI, EngineLocalLlama)
+	}
+	if cfg.Summary.ContextTokens <= 0 {
+		cfg.Summary.ContextTokens = 8192
+	}
+	if cfg.Summary.ContextTokens < 512 || cfg.Summary.ContextTokens > 1_048_576 {
+		return cfg, errors.New("summary.context_tokens must be between 512 and 1048576")
+	}
+	if cfg.Summary.MaxTokens < 0 {
+		return cfg, errors.New("summary.max_tokens must not be negative")
+	}
+	if cfg.Summary.MaxTokens == 0 {
+		cfg.Summary.MaxTokens = 2048
+	}
+	if cfg.Summary.Threads < 0 || cfg.Summary.Threads > 128 {
+		return cfg, errors.New("summary.threads must be between 0 and 128")
+	}
+	if cfg.Summary.GPULayers < -1 {
+		return cfg, errors.New("summary.gpu_layers must be -1 or greater")
+	}
+	if cfg.Summary.Temperature < 0 || cfg.Summary.Temperature > 2 {
+		return cfg, errors.New("summary.temperature must be between 0 and 2")
+	}
+	if cfg.Summary.LocalTimeoutSeconds <= 0 {
+		cfg.Summary.LocalTimeoutSeconds = 3600
+	}
 	switch strings.ToLower(strings.TrimSpace(cfg.Storage.AudioAfterProcessing)) {
 	case "wav", "delete", "mp3", "opus":
 	default:
@@ -623,11 +729,13 @@ func ResolvePaths(cfg *Config, configPath string) {
 	cfg.Logging.Directory = resolve(cfg.Logging.Directory)
 	cfg.Inference.RuntimePath = resolve(cfg.Inference.RuntimePath)
 	cfg.Inference.WhisperRuntimePath = resolve(cfg.Inference.WhisperRuntimePath)
+	cfg.Inference.LlamaRuntimePath = resolve(cfg.Inference.LlamaRuntimePath)
 	cfg.Transcription.ModelPath = resolve(cfg.Transcription.ModelPath)
 	cfg.Transcription.VADModelPath = resolve(cfg.Transcription.VADModelPath)
 	cfg.Diarization.SegmentationModel = resolve(cfg.Diarization.SegmentationModel)
 	cfg.Diarization.EmbeddingModel = resolve(cfg.Diarization.EmbeddingModel)
 	cfg.Summary.TLSCAFile = resolve(cfg.Summary.TLSCAFile)
+	cfg.Summary.ModelPath = resolve(cfg.Summary.ModelPath)
 	// Шаблон протокола можно править в prompts/meeting_summary.md: файл
 	// читается при каждой загрузке, поэтому правки применяются без правки кода.
 	cfg.Summary.DefaultPrompt = DefaultSummaryPrompt
@@ -814,6 +922,8 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Inference.RuntimeVersion = s
 	case "inference.whisper_runtime_path":
 		c.Inference.WhisperRuntimePath = s
+	case "inference.llama_runtime_path":
+		c.Inference.LlamaRuntimePath = s
 	case "transcription.auto_run":
 		c.Transcription.AutoRun, _ = boolean(raw)
 	case "transcription.engine":
@@ -950,6 +1060,22 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Models.EmbeddingSHA256 = s
 	case "summary.auto_run":
 		c.Summary.AutoRun, _ = boolean(raw)
+	case "summary.engine":
+		c.Summary.Engine = s
+	case "summary.model_path":
+		c.Summary.ModelPath = s
+	case "summary.context_tokens":
+		c.Summary.ContextTokens, _ = integer(raw)
+	case "summary.threads":
+		c.Summary.Threads, _ = integer(raw)
+	case "summary.gpu_layers":
+		c.Summary.GPULayers, _ = integer(raw)
+	case "summary.max_tokens":
+		c.Summary.MaxTokens, _ = integer(raw)
+	case "summary.temperature":
+		c.Summary.Temperature, _ = decimal(raw)
+	case "summary.local_timeout_seconds":
+		c.Summary.LocalTimeoutSeconds, _ = integer(raw)
 	case "summary.base_url":
 		c.Summary.BaseURL = s
 	case "summary.model":

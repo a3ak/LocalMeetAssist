@@ -18,7 +18,7 @@ var settingGroupsEN = map[string]settingTextEN{
 	"inference":            {"ONNX Runtime", "Native neural inference library. LocalMeetAssist loads it directly; no CLI or Python needed."},
 	"transcription":        {"Transcription", "GigaAM v3 or Whisper run directly inside LocalMeetAssist, without launching a CLI."},
 	"diarization":          {"Diarization", "PyAnnote Segmentation 3 + WeSpeaker with voice clustering in Go."},
-	"summary":              {"Summarization", "OpenAI-compatible minutes model."},
+	"summary":              {"Summarization", "A network endpoint or a GGUF model that runs on this computer."},
 	"storage":              {"Storage", "File names, Ogg/Opus and source WAV policy."},
 	"models":               {"Model files", "Direct ONNX model sources and checksums. The bundle can be downloaded and applied in the “Models” section."},
 	"logging":              {"Logging", "Level and rotation of the local log."},
@@ -30,6 +30,9 @@ var settingSectionsEN = map[string]string{
 	"Перевод речи в текст": "Speech-to-text",
 	"Фильтрация речи":      "Speech filtering",
 	"Определение спикеров": "Speaker identification",
+	// Настройки саммаризации делятся по движку: показывается один раздел.
+	"Сетевой эндпоинт": "Network endpoint",
+	"Локальная модель": "Local model",
 }
 
 // settingOptionsEN translates select option labels, keyed by "<field key>.<value>".
@@ -58,9 +61,11 @@ var settingOptionsEN = map[string]string{
 
 	"diarization.engine.pyannote-wespeaker-onnx": "PyAnnote + WeSpeaker ONNX",
 
-	"summary.language.":   "Same as interface",
-	"summary.language.ru": "Russian",
-	"summary.language.en": "English",
+	"summary.engine.openai":      "Network endpoint",
+	"summary.engine.llama-local": "Local model",
+	"summary.language.":          "Same as interface",
+	"summary.language.ru":        "Russian",
+	"summary.language.en":        "English",
 
 	"storage.audio_after_processing.wav":    "All WAV (default)",
 	"storage.audio_after_processing.opus":   "Ogg/Opus",
@@ -125,6 +130,7 @@ var settingFieldsEN = map[string]settingTextEN{
 	"inference.auto_download":        {"Download automatically", "Download the official CPU runtime at startup when the library is missing."},
 	"inference.runtime_version":      {"Version", "Pinned ONNX Runtime version; 1.23.2 is supported for automatic download."},
 	"inference.whisper_runtime_path": {"Whisper runtime", "Directory of whisper.cpp native libraries; installed from the “Models” section without a CLI."},
+	"inference.llama_runtime_path":   {"Llama.cpp runtime", "Directory of the llama.cpp libraries for local minutes. The regular and the Vulkan build are installed into separate directories; choose the one to use here."},
 
 	// Transcription
 	"transcription.auto_run":               {"Run automatically", "Recognize the meeting automatically after it stops. Manual start is available regardless of this setting."},
@@ -161,18 +167,26 @@ var settingFieldsEN = map[string]settingTextEN{
 	"diarization.num_threads":        {"CPU threads", "ONNX Runtime threads for segmentation and embedding extraction; 0 — engine default."},
 
 	// Summarization
-	"summary.auto_run":        {"Run automatically", "Create the minutes automatically after the transcript is ready. Manual start is always available."},
-	"summary.language":        {"Minutes language", "Language of the whole response: headings, labels and text. Default — same as the interface language. The prompt defines the structure; the language comes from here."},
-	"summary.base_url":        {"API URL", "For example http://127.0.0.1:8080/v1."},
-	"summary.model":           {"Model", "Model name in the OpenAI-compatible API."},
-	"summary.token":           {"Token", "Leave empty to keep the saved token unchanged."},
-	"summary.token_env":       {"Token environment variable", "Environment variable that holds the token."},
-	"summary.timeout_seconds": {"Timeout, sec", "Request timeout for the model."},
-	"summary.max_retries":     {"Retries", "Number of retries on a temporary error."},
-	"summary.system_prompt":   {"System prompt", "Instruction for the model that builds the minutes. The result is plain text without markup, ready to paste into an email. The reset button restores the built-in safe template."},
-	"summary.tls_verify":      {"Verify TLS", "Verify the server certificate."},
-	"summary.tls_ca_file":     {"CA file", "Additional trusted CA PEM."},
-	"summary.tls_server_name": {"TLS server name", "Certificate name override."},
+	"summary.auto_run":              {"Run automatically", "Create the minutes automatically after the transcript is ready. Manual start is always available."},
+	"summary.engine":                {"Engine", "The network endpoint sends the transcript over HTTP. The local model builds the minutes on this computer through llama.cpp, and the text never leaves it."},
+	"summary.model_path":            {"Local model file", "Path to the GGUF file. The model card in the “Models” section fills it in."},
+	"summary.language":              {"Minutes language", "Language of the whole response: headings, labels and text. Default — same as the interface language. The prompt defines the structure; the language comes from here."},
+	"summary.base_url":              {"API URL", "For example http://127.0.0.1:8080/v1."},
+	"summary.model":                 {"Model", "Model name in the OpenAI-compatible API."},
+	"summary.token":                 {"Token", "Leave empty to keep the saved token unchanged."},
+	"summary.token_env":             {"Token environment variable", "Environment variable that holds the token."},
+	"summary.timeout_seconds":       {"Timeout, sec", "Request timeout for the model."},
+	"summary.max_retries":           {"Retries", "Number of retries on a temporary error."},
+	"summary.context_tokens":        {"Local context, tokens", "How much text the model sees in one pass. A longer meeting is processed in parts: notes first, then the minutes built from them."},
+	"summary.max_tokens":            {"Answer length, tokens", "Upper bound for the minutes and for the intermediate notes."},
+	"summary.threads":               {"CPU threads", "Threads for the local model; 0 — choose automatically."},
+	"summary.gpu_layers":            {"Layers on GPU", "-1 or 0 — every layer that fits in video memory; above zero — an exact layer count."},
+	"summary.temperature":           {"Temperature", "0 gives deterministic minutes, a higher value adds variation."},
+	"summary.local_timeout_seconds": {"Local model timeout, sec", "Limit for one generation on this computer."},
+	"summary.system_prompt":         {"System prompt", "Instruction for the model that builds the minutes. The result is plain text without markup, ready to paste into an email. The reset button restores the built-in safe template."},
+	"summary.tls_verify":            {"Verify TLS", "Verify the server certificate."},
+	"summary.tls_ca_file":           {"CA file", "Additional trusted CA PEM."},
+	"summary.tls_server_name":       {"TLS server name", "Certificate name override."},
 
 	// Storage
 	"storage.file_name_template":     {"Name template", "Supports date, time, title_slug, uid_short and artifact_type in double curly braces."},

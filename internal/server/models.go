@@ -98,10 +98,16 @@ func (s *Server) applyModel(w http.ResponseWriter, id string) {
 		return
 	}
 	current := s.config()
-	value := portableConfigPath(current.ConfigFile, spec.Path)
+	// A runtime card stores its base directory; the platform library below it is
+	// chosen at load time.
+	settingPath := spec.Path
+	if strings.TrimSpace(spec.SettingValue) != "" {
+		settingPath = spec.SettingValue
+	}
+	value := portableConfigPath(current.ConfigFile, settingPath)
 	updates := map[string]string{spec.SettingKey: strconv.Quote(value)}
 	if strings.TrimSpace(spec.Engine) != "" {
-		updates["transcription.engine"] = strconv.Quote(spec.Engine)
+		updates[engineSettingKey(spec.Group)] = strconv.Quote(spec.Engine)
 	}
 	if err := s.persistSettings(updates); err != nil {
 		writeError(w, http.StatusConflict, err.Error())
@@ -109,6 +115,15 @@ func (s *Server) applyModel(w http.ResponseWriter, id string) {
 	}
 	s.logger.Printf("model applied id=%s setting=%s path=%q", id, spec.SettingKey, value)
 	writeJSON(w, http.StatusOK, map[string]string{"status": "applied", "setting": spec.SettingKey, "path": value})
+}
+
+// engineSettingKey returns the configuration key that selects the engine of a
+// model group, so applying a model switches its engine together with its file.
+func engineSettingKey(group string) string {
+	if group == "summarization" {
+		return "summary.engine"
+	}
+	return "transcription.engine"
 }
 
 // downloadRecommended starts downloads for every recommended model that is not
@@ -231,6 +246,7 @@ func (s *Server) deleteAllModels(w http.ResponseWriter) {
 // enableStepsForModels turns on the pipeline step a model group belongs to:
 // installing models for a feature also switches the feature on.
 func (s *Server) enableStepsForModels(ids ...string) error {
+	current := s.config()
 	updates := map[string]string{}
 	for _, status := range s.models.Statuses() {
 		if !slices.Contains(ids, status.ID) {
@@ -241,14 +257,28 @@ func (s *Server) enableStepsForModels(ids ...string) error {
 			updates["transcription.auto_run"] = "true"
 		case "diarization":
 			updates["diarization.auto_run"] = "true"
-		case "summary":
+		case "summarization":
 			updates["summary.auto_run"] = "true"
+			// A local minutes model is activated when no network endpoint is
+			// configured, otherwise automatic minutes would fail on the first
+			// meeting with an empty URL. A configured endpoint keeps working and
+			// the local model waits for the Apply button.
+			if endpointIncomplete(current.Summary) && !current.Summary.LocalSummary() {
+				updates["summary.engine"] = strconv.Quote(config.EngineLocalLlama)
+				updates["summary.model_path"] = strconv.Quote(portableConfigPath(current.ConfigFile, status.Path))
+			}
 		}
 	}
 	if len(updates) == 0 {
 		return nil
 	}
 	return s.persistSettings(updates)
+}
+
+// endpointIncomplete reports whether the network endpoint still misses a URL or
+// a model name, which makes it unusable for automatic minutes.
+func endpointIncomplete(summary config.Summary) bool {
+	return strings.TrimSpace(summary.BaseURL) == "" || strings.TrimSpace(summary.Model) == ""
 }
 
 // persistSettings writes config keys and reloads the running configuration.

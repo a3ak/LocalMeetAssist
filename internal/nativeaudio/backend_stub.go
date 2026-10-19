@@ -35,10 +35,25 @@ type StartRequest struct {
 type Backend struct{}
 
 // Session is a running capture that can be stopped.
-type Session interface{ Stop() error }
+type Session interface {
+	Stop() error
+	SystemHealth() SystemHealth
+}
+
+// SystemHealth is the state of the system capture stream.
+type SystemHealth int
+
+const (
+	SystemOK       SystemHealth = 0
+	SystemRestored SystemHealth = 1
+	SystemLost     SystemHealth = 2
+)
 
 // Capture wraps one native capture handle.
 type Capture struct{}
+
+// SystemHealth reports the system stream state; the stub has no capture.
+func (capture *Capture) SystemHealth() SystemHealth { return SystemOK }
 
 // New creates a native audio backend.
 func New() *Backend { return &Backend{} }

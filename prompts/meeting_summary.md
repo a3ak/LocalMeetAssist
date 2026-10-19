@@ -12,7 +12,7 @@ The section titles below are written in English only to identify them. Translate
 
 Example:
 
-The essence of the meeting in the title.
+Title.
 
 BRIEF SUMMARY
 Describe the purpose of the meeting and its main outcomes in 3-7 bullet points.

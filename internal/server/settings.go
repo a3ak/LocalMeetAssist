@@ -31,6 +31,17 @@ type settingField struct {
 	SecretSet    bool            `json:"secret_set,omitempty"`
 	DefaultValue string          `json:"default_value,omitempty"`
 	Resettable   bool            `json:"resettable,omitempty"`
+	// ShowIf hides the field unless another setting has one of the listed
+	// values. It is how the network and the local minutes settings stay apart:
+	// only the section of the selected engine is shown.
+	ShowIf *settingCondition `json:"show_if,omitempty"`
+}
+
+// settingCondition is the visibility rule of a field: the field is shown when
+// the setting named by Key equals one of Values.
+type settingCondition struct {
+	Key    string   `json:"key"`
+	Values []string `json:"values"`
 }
 
 type settingGroup struct {
@@ -91,6 +102,17 @@ func inSection(section string, fields ...settingField) []settingField {
 		fields[index].Section = section
 	}
 	return fields
+}
+
+// sectionWhen starts a section that is visible only for certain values of a
+// controlling setting. The heading disappears together with its fields.
+func sectionWhen(section, key string, values []string, fields ...settingField) []settingField {
+	out := inSection(section, fields...)
+	condition := &settingCondition{Key: key, Values: values}
+	for index := range out {
+		out[index].ShowIf = condition
+	}
+	return out
 }
 
 func sectionSetting(section string, field settingField) settingField {
@@ -181,6 +203,7 @@ func settingsSchema(cfg config.Config) []settingGroup {
 			boolSetting("inference.auto_download", "Скачивать автоматически", "При отсутствии библиотеки скачать официальный CPU runtime при запуске приложения.", cfg.Inference.AutoDownload),
 			textSetting("inference.runtime_version", "Версия", "Зафиксированная версия ONNX Runtime; для автоматической загрузки поддерживается 1.23.2.", cfg.Inference.RuntimeVersion),
 			textSetting("inference.whisper_runtime_path", "Whisper runtime", "Каталог нативных библиотек whisper.cpp; устанавливается из раздела «Модели» без CLI.", cfg.Inference.WhisperRuntimePath),
+			textSetting("inference.llama_runtime_path", "Llama.cpp runtime", "Каталог нативных библиотек llama.cpp для локальных протоколов. Обычная и Vulkan-сборка ставятся в разные каталоги, здесь выбирается нужная.", cfg.Inference.LlamaRuntimePath),
 		}},
 		{ID: "transcription", Title: "Транскрибация", Description: "GigaAM v3 или Whisper выполняются непосредственно в LocalMeetAssist, без запуска CLI.", Fields: []settingField{
 			boolSetting("transcription.auto_run", "Выполнять автоматически", "Автоматически распознавать встречу после остановки. Ручной запуск доступен независимо от этой настройки.", cfg.Transcription.AutoRun),
@@ -216,20 +239,37 @@ func settingsSchema(cfg config.Config) []settingGroup {
 			intSetting("diarization.timeout_seconds", "Таймаут, сек", "Максимальное время диаризации.", cfg.Diarization.TimeoutSeconds),
 			intSetting("diarization.num_threads", "Потоки CPU", "Потоки ONNX Runtime для сегментации и извлечения голосовых признаков; 0 — значение движка.", cfg.Diarization.NumThreads),
 		}},
-		{ID: "summary", Title: "Саммаризация", Description: "OpenAI-совместимая модель протоколирования.", Fields: []settingField{
-			boolSetting("summary.auto_run", "Выполнять автоматически", "Автоматически создавать протокол после готового транскрипта. Ручной запуск доступен всегда.", cfg.Summary.AutoRun),
-			selectSetting("summary.language", "Язык протокола", "Язык всего ответа: заголовков, подписей и текста. По умолчанию — как язык интерфейса. Промт задаёт структуру, а язык берётся отсюда.", cfg.Summary.Language, option("", "Как язык интерфейса"), option("ru", "Русский"), option("en", "English")),
-			textSetting("summary.base_url", "URL API", "Например http://127.0.0.1:8080/v1.", cfg.Summary.BaseURL),
-			textSetting("summary.model", "Модель", "Имя модели в OpenAI-совместимом API.", cfg.Summary.Model),
-			secretSetting("summary.token", "Токен", "Оставьте пустым, чтобы не изменять сохранённый токен.", cfg.Summary.Token != ""),
-			textSetting("summary.token_env", "Переменная токена", "Переменная окружения с токеном.", cfg.Summary.TokenEnv),
-			intSetting("summary.timeout_seconds", "Таймаут, сек", "Таймаут запроса к модели.", cfg.Summary.TimeoutSeconds),
-			intSetting("summary.max_retries", "Повторы", "Количество повторных запросов при временной ошибке.", cfg.Summary.MaxRetries),
-			textareaSetting("summary.system_prompt", "Системный промт", "Инструкция модели для формирования протокола. Результат — простой текст без разметки, готовый для вставки в письмо. Кнопка сброса возвращает встроенный безопасный шаблон.", summaryPromptValue(cfg), defaultPrompt, true),
-			boolSetting("summary.tls_verify", "Проверять TLS", "Проверять сертификат сервера.", cfg.Summary.TLSVerify),
-			textSetting("summary.tls_ca_file", "CA-файл", "Дополнительный доверенный CA PEM.", cfg.Summary.TLSCAFile),
-			textSetting("summary.tls_server_name", "TLS server name", "Переопределение имени сертификата.", cfg.Summary.TLSServerName),
-		}},
+		{ID: "summary", Title: "Саммаризация", Description: "Сетевой эндпоинт или модель GGUF, которая работает на этом компьютере.", Fields: joinFields(
+			inSection("Общие параметры",
+				boolSetting("summary.auto_run", "Выполнять автоматически", "Автоматически создавать протокол после готового транскрипта. Ручной запуск доступен всегда.", cfg.Summary.AutoRun),
+				selectSetting("summary.engine", "Движок", "Сетевой эндпоинт отправляет транскрипт по HTTP. Локальная модель считает протокол на этом компьютере через llama.cpp, текст никуда не уходит.", cfg.Summary.Engine, option(config.EngineOpenAI, "Сетевой эндпоинт"), option(config.EngineLocalLlama, "Локальная модель")),
+				selectSetting("summary.language", "Язык протокола", "Язык всего ответа: заголовков, подписей и текста. По умолчанию — как язык интерфейса. Промт задаёт структуру, а язык берётся отсюда.", cfg.Summary.Language, option("", "Как язык интерфейса"), option("ru", "Русский"), option("en", "English")),
+				textareaSetting("summary.system_prompt", "Системный промт", "Инструкция модели для формирования протокола. Результат — простой текст без разметки, готовый для вставки в письмо. Кнопка сброса возвращает встроенный безопасный шаблон.", summaryPromptValue(cfg), defaultPrompt, true),
+			),
+			// Ниже — настройки конкретного движка. Показывается только раздел
+			// выбранного: иначе пустые поля эндпоинта выглядят так, будто
+			// локальная модель их требует.
+			sectionWhen("Сетевой эндпоинт", "summary.engine", []string{config.EngineOpenAI},
+				textSetting("summary.base_url", "URL API", "Например http://127.0.0.1:8080/v1.", cfg.Summary.BaseURL),
+				textSetting("summary.model", "Модель", "Имя модели в OpenAI-совместимом API.", cfg.Summary.Model),
+				secretSetting("summary.token", "Токен", "Оставьте пустым, чтобы не изменять сохранённый токен.", cfg.Summary.Token != ""),
+				textSetting("summary.token_env", "Переменная токена", "Переменная окружения с токеном.", cfg.Summary.TokenEnv),
+				intSetting("summary.timeout_seconds", "Таймаут, сек", "Таймаут запроса к модели.", cfg.Summary.TimeoutSeconds),
+				intSetting("summary.max_retries", "Повторы", "Количество повторных запросов при временной ошибке.", cfg.Summary.MaxRetries),
+				boolSetting("summary.tls_verify", "Проверять TLS", "Проверять сертификат сервера.", cfg.Summary.TLSVerify),
+				textSetting("summary.tls_ca_file", "CA-файл", "Дополнительный доверенный CA PEM.", cfg.Summary.TLSCAFile),
+				textSetting("summary.tls_server_name", "TLS server name", "Переопределение имени сертификата.", cfg.Summary.TLSServerName),
+			),
+			sectionWhen("Локальная модель", "summary.engine", []string{config.EngineLocalLlama},
+				textSetting("summary.model_path", "Файл локальной модели", "Путь к файлу GGUF. Карточка модели в разделе «Модели» заполняет его сама.", cfg.Summary.ModelPath),
+				intSetting("summary.context_tokens", "Контекст локальной модели, токенов", "Сколько текста модель видит за один проход. Встреча длиннее окна обрабатывается частями: сначала заметки, затем протокол из них.", cfg.Summary.ContextTokens),
+				intSetting("summary.max_tokens", "Длина ответа, токенов", "Предел длины протокола и промежуточных заметок.", cfg.Summary.MaxTokens),
+				intSetting("summary.threads", "Потоки CPU", "Потоки локальной модели; 0 — выбрать автоматически.", cfg.Summary.Threads),
+				intSetting("summary.gpu_layers", "Слоёв на GPU", "-1 или 0 — все слои, которые помещаются в видеопамять; больше нуля — точное число слоёв.", cfg.Summary.GPULayers),
+				floatSetting("summary.temperature", "Температура", "0 — детерминированный протокол, выше — больше вариативности.", cfg.Summary.Temperature),
+				intSetting("summary.local_timeout_seconds", "Таймаут локальной модели, сек", "Ограничение на одну генерацию на этом компьютере.", cfg.Summary.LocalTimeoutSeconds),
+			),
+		)},
 		{ID: "storage", Title: "Хранение", Description: "Имена файлов, Ogg/Opus и политика исходных WAV.", Fields: []settingField{
 			textSetting("storage.file_name_template", "Шаблон имени", "Поддерживает date, time, title_slug, uid_short и artifact_type в двойных фигурных скобках.", cfg.Storage.FileNameTemplate),
 			textSetting("storage.date_format", "Формат даты", "Формат Go time, например 2006-01-02.", cfg.Storage.DateFormat),
@@ -498,7 +538,33 @@ func (s *Server) testSettings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "testing this settings group is not supported")
 		return
 	}
-	cfg := s.config().Summary
+	full := s.config()
+	cfg := full.Summary
+	// The engine decides below which fields matter: the network endpoint or the
+	// local model file.
+	if value, ok := request.Values["summary.engine"]; ok {
+		cfg.Engine = strings.TrimSpace(value)
+	}
+	if value, ok := request.Values["summary.model_path"]; ok {
+		cfg.ModelPath = strings.TrimSpace(value)
+	}
+	applyInt := func(key string, target *int) {
+		if value, ok := request.Values[key]; ok {
+			if parsed, err := strconv.Atoi(strings.TrimSpace(value)); err == nil {
+				*target = parsed
+			}
+		}
+	}
+	applyInt("summary.context_tokens", &cfg.ContextTokens)
+	applyInt("summary.max_tokens", &cfg.MaxTokens)
+	applyInt("summary.threads", &cfg.Threads)
+	applyInt("summary.gpu_layers", &cfg.GPULayers)
+	applyInt("summary.local_timeout_seconds", &cfg.LocalTimeoutSeconds)
+	if value, ok := request.Values["summary.temperature"]; ok {
+		if parsed, err := strconv.ParseFloat(strings.TrimSpace(value), 64); err == nil {
+			cfg.Temperature = parsed
+		}
+	}
 	if value, ok := request.Values["summary.base_url"]; ok {
 		cfg.BaseURL = strings.TrimSpace(value)
 	}
@@ -530,22 +596,33 @@ func (s *Server) testSettings(w http.ResponseWriter, r *http.Request) {
 			cfg.TimeoutSeconds = parsed
 		}
 	}
-	if cfg.TimeoutSeconds <= 0 || cfg.TimeoutSeconds > 20 {
-		cfg.TimeoutSeconds = 20
-	}
 	// A connection test should be fast and deterministic, independent from the
 	// retry policy used for a real meeting summary.
 	cfg.MaxRetries = 0
-	started := time.Now()
-	summarizer, err := pipeline.NewSummarizer(cfg)
-	if err == nil {
-		ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
-		defer cancel()
-		_, err = summarizer.Test(ctx)
+	full.Summary = cfg
+	timeout := 20 * time.Second
+	model := cfg.Model
+	if cfg.LocalSummary() {
+		// Loading a multi-gigabyte model and creating a context takes longer
+		// than a network round trip.
+		timeout = 120 * time.Second
+		model = filepath.Base(cfg.ModelPath)
+	} else if cfg.TimeoutSeconds <= 0 || cfg.TimeoutSeconds > 20 {
+		cfg.TimeoutSeconds = 20
+		full.Summary = cfg
 	}
-	result := map[string]any{"ok": err == nil, "duration_ms": time.Since(started).Milliseconds(), "model": cfg.Model}
+	started := time.Now()
+	engine, err := pipeline.NewSummaryEngine(full)
+	if err == nil {
+		ctx, cancel := context.WithTimeout(r.Context(), timeout)
+		defer cancel()
+		_, err = engine.Test(ctx)
+	}
+	result := map[string]any{"ok": err == nil, "duration_ms": time.Since(started).Milliseconds(), "model": model}
 	if err != nil {
 		result["message"] = err.Error()
+	} else if cfg.LocalSummary() {
+		result["message"] = "The runtime loads the local model and generates an answer"
 	} else {
 		result["message"] = "URL, TLS, authorization and test generation work"
 	}

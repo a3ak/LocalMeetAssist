@@ -19,6 +19,47 @@ permissions:
   contents: read
 
 jobs:
+  # Универсальный .app + .dmg: один файл на Intel и Apple Silicon, установка
+  # перетаскиванием, разрешение на микрофон запрашивается один раз.
+  macos-app:
+    name: macOS app и dmg
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Собрать .app и .dmg
+        shell: bash
+        env:
+          CGO_ENABLED: '1'
+          # Подпись Developer ID включается секретом; без него скрипт делает
+          # ad-hoc подпись и не нотаризует.
+          SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          NOTARY_APPLE_ID: ${{ secrets.MACOS_NOTARY_APPLE_ID }}
+          NOTARY_TEAM_ID: ${{ secrets.MACOS_NOTARY_TEAM_ID }}
+          NOTARY_PASSWORD: ${{ secrets.MACOS_NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            tag="${{ inputs.tag }}"
+          else
+            tag="${GITHUB_REF_NAME}"
+          fi
+          version="${tag#v}"
+          ./scripts/make-app.sh "$version" dist
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: localmeetassist-macos-app
+          path: |
+            dist/*.dmg
+            dist/*.app
+          if-no-files-found: error
+
   build:
     name: ${{ matrix.goos }}/${{ matrix.goarch }}
     runs-on: ${{ matrix.runner }}
@@ -26,10 +67,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { runner: macos-15, goos: darwin, goarch: arm64, ext: tar.gz }
-          # Без Apple Silicon runner'а: SDK macOS универсален, поэтому x86_64
-          # собирается на arm64-машине той же командой.
-          - { runner: macos-15, goos: darwin, goarch: amd64, ext: tar.gz }
+          # macOS не в матрице: там собирается универсальный .app и .dmg
+          # отдельной задачей ниже.
           - { runner: ubuntu-24.04, goos: linux, goarch: amd64, ext: tar.gz }
           # Ubuntu 24.04, а не 26.04: чем старше glibc при сборке, тем на
           # большем числе дистрибутивов запустится бинарник.
@@ -43,11 +82,12 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      - name: Установить заголовки для Linux
+      - name: Установить заголовки и пакетные инструменты для Linux
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libayatana-appindicator3-dev libx11-dev pkg-config
+          # rpm нужен только ради rpmbuild: .deb собирается dpkg-deb.
+          sudo apt-get install -y libayatana-appindicator3-dev libx11-dev pkg-config rpm
 
       - name: Найти C-компилятор в Windows
         if: runner.os == 'Windows'
@@ -77,8 +117,13 @@ jobs:
           binary="localmeetassist"
           [ "${GOOS}" = "windows" ] && binary="localmeetassist.exe"
           # Версия попадает в бинарник из тега: -version и /api/v1/health.
-          go build -trimpath \
-            -ldflags "-s -w -X localmeetassist/internal/version.Version=${version}" \
+          ldflags="-s -w -X localmeetassist/internal/version.Version=${version}"
+          if [ "${GOOS}" = "windows" ]; then
+            # GUI-подсистема: при двойном клике не открывается консольное окно.
+            # Ранние ошибки показывает MessageBox, см. cmd/localmeetassist.
+            ldflags="${ldflags} -H=windowsgui"
+          fi
+          go build -trimpath -ldflags "${ldflags}" \
             -o "dist/${binary}" ./cmd/localmeetassist
           "./dist/${binary}" -version
 
@@ -92,6 +137,11 @@ jobs:
           else
             tar -czf "dist/localmeetassist_${version}_${GOOS}_${GOARCH}.tar.gz" -C stage "localmeetassist_${version}_${GOOS}_${GOARCH}"
           fi
+          if [ "${GOOS}" = "linux" ]; then
+            # Пакеты для локальной установки: apt/dnf подтянут зависимости из
+            # репозиториев дистрибутива, свой репозиторий не нужен.
+            ./scripts/make-linux-package.sh "${version}" "${GOARCH}" "dist/${binary}" dist
+          fi
 
       - uses: actions/upload-artifact@v7
         with:
@@ -99,10 +149,12 @@ jobs:
           path: |
             dist/*.tar.gz
             dist/*.zip
+            dist/*.deb
+            dist/*.rpm
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [build, macos-app]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -151,5 +203,5 @@ jobs:
           gh release create "$tag" \
             --title "LocalMeetAssist ${version}" \
             --generate-notes \
-            dist/*.tar.gz dist/*.zip \
-          || gh release upload "$tag" dist/*.tar.gz dist/*.zip --clobber
+            dist/*.tar.gz dist/*.zip dist/*.dmg dist/*.deb dist/*.rpm \
+          || gh release upload "$tag" dist/*.tar.gz dist/*.zip dist/*.dmg dist/*.deb dist/*.rpm --clobber

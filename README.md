@@ -25,6 +25,7 @@ LocalMeetAssist записывает встречу с микрофона и с�
 **Запись**
 
 - пишет микрофон и системный звук отдельными дорожками, поэтому ваш голос и голоса собеседников не смешиваются;
+- переживает смену устройства вывода во время встречи: если пропало устройство по умолчанию (отключили монитор с колонками, переключились на наушники или Bluetooth), захват системного звука пересоздаётся на текущем устройстве, а в карточке встречи появляется предупреждение;
 - делает общий смешанный поток для удобства прослушивания встречи и подавляет эхо и повторяющиеся реплики;
 - запуск записи встречи можно выполнить кнопкой в интерфейсе, с помощью горячей клавиши или автоматически из браузера при использовании плагина, который обнаруживает заранее заданные комнаты конференций;
 
@@ -33,7 +34,7 @@ LocalMeetAssist записывает встречу с микрофона и с�
 - распознаёт речь локально: GigaAM v3 для русского или Whisper для многоязычных встреч;
 - отделяет речь от тишины (Silero VAD) — обработка идёт быстрее, а повторов меньше;
 - разделяет удалённых участников по голосам (PyAnnote + WeSpeaker);
-- позволяет указать число участников, переименовывать спикеров, объединять их и переносить отдельные реплики;
+- позволяет указать число участников, переименовывать спикеров, объединять их и переносить реплики — по одной или пачкой: Shift-клик выделяет диапазон подряд идущих фрагментов, а «Новый спикер» добавляет участника, которого система не нашла;
 - показывает прогресс по каждому этапу и даёт повторить или отменить любой из них.
 
 **Архив и поиск**
@@ -47,7 +48,7 @@ LocalMeetAssist записывает встречу с микрофона и с�
 
 **Ещё**
 
-- саммари через любой сервер с OpenAI-совместимым API: локальный llama.cpp, Ollama, LM Studio или внешний сервис;
+- саммари двумя способами на выбор: локальная модель GGUF на этом компьютере через встроенный llama.cpp (текст никуда не уходит) или любой сервер с OpenAI-совместимым API — Ollama, LM Studio, vLLM, внешний сервис;
 - менеджер моделей: скачивание, проверка и переключение;
 - значок в системном трее, глобальные горячие клавиши и индикация идущей записи;
 - включённое по умолчанию определение конференции по одновременной активности микрофона и системного звука с подтверждением перед записью; окно ожидания настраивается и по умолчанию равно 10 секундам;
@@ -80,7 +81,67 @@ LocalMeetAssist записывает встречу с микрофона и с�
 
 ### Установка и запуск
 
-Для сбора из исходников. Нужны **Go 1.24+**, C-компилятор и включённый CGO.
+#### macOS: готовый .app
+
+В релизе лежит `localmeetassist_<версия>_macos_universal.dmg` — один образ для
+Intel и Apple Silicon.
+
+1. Откройте образ и перетащите **LocalMeetAssist** в «Программы».
+2. Запустите приложение. macOS один раз спросит доступ к микрофону — это
+   единственное разрешение, которое нужно: системный звук берётся через CoreAudio
+   и разрешения на запись экрана не требует.
+3. Интерфейс откроется в браузере, иконка приложения появится в меню-баре.
+
+Сборка пока подписана ad-hoc, без нотаризации Apple. Если macOS отказывается
+открыть скачанный файл («не удалось проверить разработчика»), нажмите по
+приложению правой кнопкой → «Открыть» → «Открыть» либо выполните один раз:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/LocalMeetAssist.app
+```
+
+Настройки, база встреч, модели и рантаймы хранятся в
+`~/Library/Application Support/LocalMeetAssist/`; рядом с ними можно положить
+`prompts/meeting_summary.md`, чтобы переопределить шаблон протокола.
+
+После обновления приложения macOS может ещё раз спросить доступ к микрофону:
+ad-hoc подпись меняется от сборки к сборке. С подписью Developer ID разрешение
+переживает обновления.
+
+#### Windows
+
+В релизе — архив `.zip`. Распакуйте в любую папку и запустите
+`localmeetassist.exe`: приложение свернётся в трей и откроет интерфейс в браузере,
+консольного окна нет. Прав администратора не требуется, настройки, база и модели
+хранятся в `%AppData%\LocalMeetAssist\`.
+
+Если Windows покажет предупреждение SmartScreen (сборка не подписана), нажмите
+«Подробнее» → «Выполнить в любом случае».
+
+#### Linux
+
+В релизе — пакеты `.deb` и `.rpm` для локальной установки и архив `.tar.gz`.
+Пакеты ставятся штатным менеджером, зависимости (`libayatana-appindicator3`,
+X11, PulseAudio) подтягиваются из репозиториев дистрибутива — свой репозиторий не
+нужен:
+
+```bash
+sudo apt install ./localmeetassist_<версия>_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./localmeetassist-<версия>-1.x86_64.rpm  # Fedora
+```
+
+После установки приложение появляется в меню; запускается `localmeetassist`.
+Настройки, база и модели — в `~/.config/LocalMeetAssist/`. Удаление:
+`sudo apt remove localmeetassist` или `sudo dnf remove localmeetassist`, данные
+при этом остаются.
+
+Архив `.tar.gz` — для систем без пакетного менеджера: бинарник и README, но
+библиотеки `libayatana-appindicator3-1` и `libx11-6` должны быть установлены
+заранее, иначе приложение не запустится.
+
+#### Из исходников
+
+Нужны **Go 1.24+**, C-компилятор и включённый CGO.
 
 ```bash
 cd meeting-assistant
@@ -92,13 +153,19 @@ CGO_ENABLED=1 go run ./cmd/localmeetassist -config ./config.toml
 
 #### macOS
 
-Установите Command Line Tools:
+Нужна **macOS 14.2 или новее**: системный звук берётся через CoreAudio process taps, поэтому разрешение на запись экрана не требуется — только доступ к микрофону. Собрать .app и .dmg локально можно так:
+
+```bash
+./scripts/make-app.sh 0.2.0 dist
+```
+
+Для сборки нужны Command Line Tools:
 
 ```bash
 xcode-select --install
 ```
 
-При первом запуске система запросит доступ к микрофону и к записи системного звука. Браузер при этом ничего спрашивать не будет.
+При первом запуске система запросит доступ к микрофону. Браузер при этом ничего спрашивать не будет. Захват системного звука не зависит от дисплеев: отключение монитора или смена устройства вывода больше не обрывают дорожку собеседников.
 
 #### Windows
 
@@ -122,7 +189,7 @@ sudo apt install build-essential pkg-config libx11-dev libayatana-appindicator3-
 4. Загляните в **«Диагностику»**: там должно быть написано, что аудио готово. Если нет — проверьте разрешения и выбранные устройства.
 5. В **«Настройках»** включите только те этапы, которые должны запускаться сами после записи: расшифровку, разделение спикеров, саммари.
 6. Сделайте пробную запись: **«● Начать запись»**, пара минут разговора, **«■ Завершить»**. Через несколько секунд встреча появится в календаре.
-7. Откройте её и проверьте результат: текст с таймкодами, список спикеров, саммари. Спикеров можно переименовать, а ошибочные реплики — перенести.
+7. Откройте её и проверьте результат: текст с таймкодами, список спикеров, саммари. Спикеров можно переименовать, ошибочные реплики — перенести (Shift-клик выделяет диапазон), а если система не разделила двух участников, добавьте спикера кнопкой «Новый спикер».
 
 Отключённый автоматический этап не пропадает: его всегда можно запустить вручную из карточки встречи.
 
@@ -183,14 +250,28 @@ npm run package
 | Детектор речи | Silero VAD 6.2 ONNX | ~2,3 МБ | Убирает тишину из обработки и помогает против повторов |
 | Сегментация спикеров | PyAnnote Segmentation 3.0 ONNX | ~6 МБ | Определяет интервалы активности голосов |
 | Голосовые признаки | WeSpeaker ResNet34-LM VoxCeleb | ~27 МБ | Сравнивает голосовые фрагменты перед кластеризацией |
+| Голосовые признаки (альтернатива) | WeSpeaker CAM++ VoxCeleb | ~29 МБ | Лучше разделяет короткие реплики и похожие голоса; ставится отдельной карточкой и применяется в настройках диаризации |
 | Выполнение ONNX | ONNX Runtime 1.23.2 | зависит от ОС | Нужен для GigaAM, VAD и диаризации |
 | Выполнение Whisper | whisper.cpp runtime | зависит от ОС | Загружается только при выборе Whisper |
+| Выполнение LLM | llama.cpp runtime | 12–20 МБ архив | Нужен для локальных протоколов; на Linux и Windows есть отдельная Vulkan-сборка |
 
-Полный каталог занимает около **1,6 ГБ** плюс нативные runtime.
+Каталог моделей распознавания и диаризации занимает около **1,6 ГБ** плюс нативные runtime. Локальная модель протоколов добавляет **~2,6 ГБ** (4B) или **~5,3 ГБ** (9B); кнопка рекомендуемого набора предлагает 4B и пропускает её, если памяти не хватает.
 
-### Сервер для саммари
+### Саммаризация
 
-LocalMeetAssist не запускает LLM сам. Он обращается к любому серверу с OpenAI-совместимым `/v1/chat/completions`: llama.cpp, Ollama, LM Studio, vLLM или удалённому API. Память указана ориентировочно и включает запас под контекст — длинный транскрипт увеличивает KV-кэш.
+Протокол собирается одним из двух движков, переключатель — в настройках, раздел «Саммаризация»:
+
+- **Локальная модель.** Qwen3.5-4B или 9B в формате GGUF скачивается из раздела «Модели» и выполняется встроенным llama.cpp прямо в процессе приложения. Транскрипт не покидает компьютер. Встреча длиннее контекстного окна обрабатывается частями: сначала заметки по фрагментам, затем протокол из заметок.
+- **Сетевой эндпоинт.** Любой сервер с OpenAI-совместимым `/v1/chat/completions`: llama.cpp, Ollama, LM Studio, vLLM или удалённый API.
+
+Память указана ориентировочно и включает запас под контекст — длинный транскрипт увеличивает KV-кэш.
+
+| Локальная модель | Память | Размер | Когда выбирать |
+| --- | ---: | ---: | --- |
+| Qwen3.5-4B Q4_K_M | от 8 ГБ | ~2,6 ГБ | Обычный ноутбук; протокол короче и проще |
+| Qwen3.5-9B Q4_K_M | от 16 ГБ | ~5,3 ГБ | Подробные протоколы, лучший русский среди открытых моделей |
+
+Ниже — варианты для сетевого движка, если локальной памяти не хватает.
 
 | Модель | Подходящая конфигурация | Ориентир по памяти | Когда выбирать |
 | --- | --- | ---: | --- |
@@ -209,10 +290,13 @@ llama-server -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL \
 В настройках LocalMeetAssist укажите:
 
 ```text
+Движок: Сетевой эндпоинт
 URL API: http://127.0.0.1:8080/v1
 Модель: unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL
 Токен: пусто, если локальный сервер не требует авторизации
 ```
+
+Для локального движка ничего указывать не нужно: карточка модели в разделе «Модели» сама заполняет путь к файлу и включает движок. На Linux и Windows рядом с обычным рантаймом лежит Vulkan-сборка — она ставится отдельной карточкой и ускоряет генерацию на видеокарте.
 
 Для часовой встречи 32K контекста может не хватить: увеличьте `--ctx-size` в пределах доступной памяти либо используйте сервер с большим контекстом.
 
@@ -252,7 +336,11 @@ npm run check
 npm test
 ```
 
-> На macOS линковщик может напечатать `ld: warning: ignoring duplicate libraries: '-lc++', '-lobjc'`. Предупреждение безвредно: `ld` отбрасывает повторяющиеся флаги, бинарник собирается корректно. Погасить его можно переменной окружения — `CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go build ./...`.
+Автотесты, ручная приёмка и чек-лист для Windows и Linux — в [docs/TESTING.md](docs/TESTING.md).
+
+> Минимальную версию macOS задаёт тот, кто собирает распространяемый бинарник: `scripts/make-app.sh` экспортирует `MACOSX_DEPLOYMENT_TARGET=14.2` и проверяет `minos` у результата. В cgo-флагах эта версия не зашита намеренно — иначе линковщик предупреждает о каждом объекте стандартной библиотеки Go, собранном под более новую систему. Если собираете бинарник для раздачи вручную, задайте переменную сами, иначе он потребует систему сборки.
+>
+> Остаётся одно безвредное предупреждение `ld: warning: ignoring duplicate libraries: '-lc++', '-lobjc'`: фреймворки Apple тянут эти библиотеки повторно, `ld` отбрасывает дубликаты. Спрятать его можно через `go build -ldflags "-extldflags=-Wl,-w"` или `-Wl,-no_warn_duplicate_libraries`.
 
 Дополнительная документация: [архитектура](docs/ARCHITECTURE.md), [API](docs/API.md), [браузерное расширение](docs/BROWSER_PLUGIN.md), [тестирование](docs/TESTING.md).
 
@@ -274,6 +362,7 @@ The application captures audio itself, while the control interface opens in a br
 **Recording**
 
 - captures the microphone and system audio as separate tracks, so your voice and your guests' voices never blend;
+- survives an output device change mid-meeting: if the default device disappears (a monitor with speakers is disconnected, audio switches to headphones or Bluetooth), system capture is recreated on the current device and the meeting card shows a warning;
 - produces a mixed track for convenient listening and suppresses echo and duplicated lines;
 - recording can be started from a button in the interface, with a hotkey, or automatically from the browser by the plugin that detects preconfigured conference rooms;
 
@@ -282,7 +371,7 @@ The application captures audio itself, while the control interface opens in a br
 - recognises speech locally: GigaAM v3 for Russian or Whisper for multilingual meetings;
 - separates speech from silence (Silero VAD), which speeds up processing and reduces repetitions;
 - separates remote participants by voice (PyAnnote + WeSpeaker);
-- lets you set the participant count, rename speakers, merge them, and move individual lines;
+- lets you set the participant count, rename speakers, merge them, and move lines — one by one or in bulk: Shift-click selects a range of consecutive fragments, and “New speaker” adds a participant the system missed;
 - reports progress for every stage and lets you retry or cancel any of them.
 
 **Archive and search**
@@ -296,7 +385,7 @@ The application captures audio itself, while the control interface opens in a br
 
 **Also**
 
-- summaries through any server with an OpenAI-compatible API: local llama.cpp, Ollama, LM Studio, or a remote service;
+- summaries in two ways: a local GGUF model on this computer through the built-in llama.cpp (the text never leaves it) or any server with an OpenAI-compatible API — Ollama, LM Studio, vLLM, a remote service;
 - a model manager for downloading, validating, and switching models;
 - a system tray icon, global hotkeys, and a recording indicator;
 - conference detection enabled by default from simultaneous microphone capture and system playback, always asking before recording; the configurable confirmation window defaults to 10 seconds;
@@ -328,7 +417,67 @@ One hour of a single source track takes about **115 MB** in its original quality
 
 ### Install and run
 
-Building from source. You need **Go 1.24+**, a C compiler, and CGO enabled.
+#### macOS: the ready-made .app
+
+Every release ships `localmeetassist_<version>_macos_universal.dmg` — one image for
+Intel and Apple Silicon.
+
+1. Open the image and drag **LocalMeetAssist** into Applications.
+2. Launch it. macOS asks for microphone access once — that is the only permission
+   needed: system audio comes from CoreAudio process taps, so screen recording is
+   never requested.
+3. The interface opens in your browser and the menu bar shows the application icon.
+
+The build is ad-hoc signed, not notarized by Apple. If macOS refuses to open the
+downloaded file (“cannot verify the developer”), right-click the application →
+Open → Open, or run once:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/LocalMeetAssist.app
+```
+
+Settings, the meeting database, models and runtimes live in
+`~/Library/Application Support/LocalMeetAssist/`; a `prompts/meeting_summary.md`
+next to them overrides the minutes template.
+
+After an update macOS may ask for microphone access again: the ad-hoc signature
+changes with every build. With a Developer ID signature the permission survives
+updates.
+
+#### Windows
+
+Releases ship a `.zip`. Unpack it anywhere and run `localmeetassist.exe`: the
+application moves to the tray and opens the interface in your browser, with no
+console window. No administrator rights are needed; settings, database and
+models live in `%AppData%\LocalMeetAssist\`.
+
+If SmartScreen warns about the unsigned build, choose “More info” → “Run
+anyway”.
+
+#### Linux
+
+Releases ship `.deb` and `.rpm` packages for local installation plus a `.tar.gz`
+archive. The packages use the distribution package manager, so dependencies
+(`libayatana-appindicator3`, X11, PulseAudio) come from the distribution
+repositories — no repository of our own is needed:
+
+```bash
+sudo apt install ./localmeetassist_<version>_amd64.deb     # Debian, Ubuntu
+sudo dnf install ./localmeetassist-<version>-1.x86_64.rpm  # Fedora
+```
+
+After installation the application appears in the menu; the command is
+`localmeetassist`. Settings, database and models live in
+`~/.config/LocalMeetAssist/`. Remove it with `sudo apt remove localmeetassist`
+or `sudo dnf remove localmeetassist`; user data stays.
+
+The `.tar.gz` archive is for systems without a package manager: the binary and
+the README, but `libayatana-appindicator3-1` and `libx11-6` must be installed
+beforehand, otherwise the application does not start.
+
+#### Building from source
+
+You need **Go 1.24+**, a C compiler, and CGO enabled.
 
 ```bash
 cd meeting-assistant
@@ -340,13 +489,19 @@ The interface address is printed to the console, and the application opens it in
 
 #### macOS
 
-Install the Command Line Tools:
+Building the .app and .dmg locally:
+
+```bash
+./scripts/make-app.sh 0.2.0 dist
+```
+
+You need the Command Line Tools:
 
 ```bash
 xcode-select --install
 ```
 
-On the first run macOS asks for microphone and system-audio recording access. The browser is not asked for anything.
+**macOS 14.2 or newer** is required: system audio is captured through CoreAudio process taps, so no screen-recording permission is needed — only microphone access. On the first run macOS asks for the microphone; the browser is not asked for anything. System capture does not depend on displays: disconnecting a monitor or switching the output device no longer cuts the remote participants.
 
 #### Windows
 
@@ -370,7 +525,7 @@ PipeWire needs a PulseAudio-compatible monitor source (`pipewire-pulse`). Exact 
 4. Check **Diagnostics**: it should say that audio is ready. If not, review permissions and the selected devices.
 5. In **Settings**, enable only the stages that should run automatically after a recording: transcription, speaker separation, summarization.
 6. Make a test recording: **Start recording**, talk for a couple of minutes, then **Finish**. The meeting appears in the calendar within seconds.
-7. Open it and check the result: text with timecodes, the speaker list, the summary. Speakers can be renamed and misplaced lines moved.
+7. Open it and check the result: text with timecodes, the speaker list, the summary. Speakers can be renamed and misplaced lines moved (Shift-click selects a range); if the system did not separate two participants, add a speaker with “New speaker”.
 
 A disabled automatic stage is not lost — you can always run it manually from the meeting card.
 
@@ -431,14 +586,28 @@ Models and native runtimes are not committed to the repository. Only what you ch
 | Voice activity detection | Silero VAD 6.2 ONNX | ~2.3 MB | Removes silence from processing and helps reduce repetitions |
 | Speaker segmentation | PyAnnote Segmentation 3.0 ONNX | ~6 MB | Detects voice activity intervals |
 | Speaker embeddings | WeSpeaker ResNet34-LM VoxCeleb | ~27 MB | Compares voice fragments before clustering |
+| Speaker embeddings (alternative) | WeSpeaker CAM++ VoxCeleb | ~29 MB | Separates short remarks and similar voices better; installed as a separate card and applied in the diarization settings |
 | ONNX execution | ONNX Runtime 1.23.2 | platform-dependent | Required for GigaAM, VAD, and diarization |
 | Whisper execution | whisper.cpp runtime | platform-dependent | Only downloaded when Whisper is selected |
+| LLM execution | llama.cpp runtime | 12–20 MB archive | Needed for local minutes; Linux and Windows have a separate Vulkan build |
 
-The full catalogue takes about **1.6 GB** plus the native runtimes.
+The recognition and diarization catalogue takes about **1.6 GB** plus the native runtimes. The local minutes model adds **~2.6 GB** (4B) or **~5.3 GB** (9B); the recommended set offers 4B and skips it when memory is not enough.
 
-### Summarization server
+### Summarization
 
-LocalMeetAssist does not run an LLM itself. It calls any OpenAI-compatible `/v1/chat/completions` server: llama.cpp, Ollama, LM Studio, vLLM, or a remote API. Memory figures are approximate and include headroom for the context — a long transcript grows the KV cache.
+The minutes are built by one of two engines; the switch lives in the “Summarization” settings group:
+
+- **Local model.** Qwen3.5-4B or 9B in GGUF format is downloaded from the “Models” window and executed by the built-in llama.cpp inside the application process. The transcript never leaves the computer. A meeting longer than the context window is processed in parts: notes per fragment first, then the minutes from the notes.
+- **Network endpoint.** Any server with an OpenAI-compatible `/v1/chat/completions`: llama.cpp, Ollama, LM Studio, vLLM, or a remote API.
+
+Memory figures are approximate and include headroom for the context — a long transcript grows the KV cache.
+
+| Local model | Memory | Size | Best fit |
+| --- | ---: | ---: | --- |
+| Qwen3.5-4B Q4_K_M | from 8 GB | ~2.6 GB | An ordinary laptop; shorter, simpler minutes |
+| Qwen3.5-9B Q4_K_M | from 16 GB | ~5.3 GB | Detailed minutes, the best Russian among open models |
+
+Below are the options for the network engine when local memory is not enough.
 
 | Model | Suggested machine | Memory guidance | Best fit |
 | --- | --- | ---: | --- |
@@ -457,6 +626,7 @@ llama-server -hf unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL \
 Then set in LocalMeetAssist:
 
 ```text
+Engine: Network endpoint
 API URL: http://127.0.0.1:8080/v1
 Model: unsloth/Qwen3.5-9B-GGUF:UD-Q4_K_XL
 Token: empty if the local server needs no authorization
@@ -500,7 +670,11 @@ npm run check
 npm test
 ```
 
-> On macOS the linker may print `ld: warning: ignoring duplicate libraries: '-lc++', '-lobjc'`. It is harmless: `ld` drops the repeated flags and the binary is correct. To silence it, set `CGO_LDFLAGS="-Wl,-no_warn_duplicate_libraries" go build ./...`.
+Autotests, manual acceptance and the Windows/Linux checklist live in [docs/TESTING.md](docs/TESTING.md).
+
+> The minimum supported macOS version is set by whoever builds the distributed binary: `scripts/make-app.sh` exports `MACOSX_DEPLOYMENT_TARGET=14.2` and verifies `minos` on the result. It is deliberately not hardcoded in the cgo flags, because that makes the linker warn about every standard library object built for a newer system. If you build a binary for distribution by hand, set the variable yourself, otherwise it will require the build host's version.
+>
+> One harmless warning remains: `ld: warning: ignoring duplicate libraries: '-lc++', '-lobjc'`. Apple frameworks link those libraries twice and `ld` drops the duplicates. Hide it with `go build -ldflags "-extldflags=-Wl,-w"` or `-Wl,-no_warn_duplicate_libraries`.
 
 Additional documentation: [architecture](docs/ARCHITECTURE.md), [API](docs/API.md), [browser extension](docs/BROWSER_PLUGIN.md), and [testing](docs/TESTING.md).
 

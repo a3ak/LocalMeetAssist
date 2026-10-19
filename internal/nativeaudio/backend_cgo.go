@@ -6,8 +6,17 @@ package nativeaudio
 #cgo CFLAGS: -std=c11
 #cgo linux LDFLAGS: -ldl -lpthread -lm
 #cgo windows LDFLAGS: -lole32 -luuid -lksuser -lwinmm -lavrt
+// Системный звук на macOS берётся через CoreAudio process taps, поэтому
+// ScreenCaptureKit больше не нужен, а минимальная версия — macOS 14.2.
+//
+// Целевую версию здесь не задаём: жёсткий -mmacosx-version-min в cgo-флагах
+// заставляет линковщик ругаться на каждый объект стандартной библиотеки,
+// собранный под более новую систему (сотни предупреждений на каждый go build).
+// Вместо этого её выставляет тот, кто собирает распространяемый бинарник:
+// scripts/make-app.sh экспортирует MACOSX_DEPLOYMENT_TARGET=14.2 и глушит
+// предупреждения через -extldflags=-Wl,-w.
 #cgo darwin CFLAGS: -fblocks
-#cgo darwin LDFLAGS: -framework AppKit -framework Foundation -framework CoreAudio -framework AudioToolbox -framework ScreenCaptureKit -framework CoreMedia -framework CoreVideo
+#cgo darwin LDFLAGS: -framework AppKit -framework Foundation -framework CoreAudio -framework AudioToolbox
 #include <stdlib.h>
 #include "nativeaudio.h"
 // Declared here as well, so the cgo binding does not depend on the header
@@ -62,7 +71,22 @@ type Backend struct{}
 // Session is a running capture that can be stopped.
 type Session interface {
 	Stop() error
+	// SystemHealth reports whether system audio capture is still alive and
+	// recreates the stream after the output device disappeared.
+	SystemHealth() SystemHealth
 }
+
+// SystemHealth is the state of the system capture stream.
+type SystemHealth int
+
+const (
+	// SystemOK means the stream is running.
+	SystemOK SystemHealth = 0
+	// SystemRestored means the stream was just recreated on another device.
+	SystemRestored SystemHealth = 1
+	// SystemLost means the stream is gone and could not be restored.
+	SystemLost SystemHealth = 2
+)
 
 // Capture wraps one native capture handle.
 type Capture struct {
@@ -191,6 +215,16 @@ func (b *Backend) Start(request StartRequest) (Session, error) {
 		return nil, errors.New(message)
 	}
 	return &Capture{handle: handle}, nil
+}
+
+// SystemHealth checks the system stream and restores it after a device change.
+func (capture *Capture) SystemHealth() SystemHealth {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.handle == nil || capture.stopped {
+		return SystemOK
+	}
+	return SystemHealth(C.lm_audio_system_health(capture.handle))
 }
 
 // Stop finalizes the capture and releases the native handle.

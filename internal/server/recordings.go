@@ -157,12 +157,39 @@ func (s *Server) stopMeetingRecording(uid string) (model.Meeting, error) {
 	m.Status = "processing"
 	m.ProcessingStage = "queued"
 	m.UpdatedAt = now
+	// Потеря системного звука — предупреждение, а не конец встречи: запись
+	// микрофона целая, а собеседники могли пропасть только с какого-то момента.
+	if event, at := session.SystemIssue(); event != "" {
+		if m.Metadata == nil {
+			m.Metadata = make(map[string]string)
+		}
+		m.Metadata["audio_warning"] = audioWarningText(s.config().App.Language, event, at)
+		appLogging.Warnf(s.logger, "meeting audio warning uid=%s event=%s at=%s", uid, event, at.Format(time.RFC3339))
+	}
 	if err := s.store.SaveMeeting(m); err != nil {
 		return m, err
 	}
 	s.publishEvent("recording", recordingState(nil))
 	s.syncRecording()
 	return m, s.pipeline.Start(uid)
+}
+
+// audioWarningText renders the system audio event for the meeting card. The
+// native layer reports a code, so the text follows the interface language.
+func audioWarningText(language, event string, at time.Time) string {
+	stamp := at.Format("15:04")
+	switch event {
+	case "lost":
+		return config.Localized(language,
+			"Системный звук потерян в "+stamp+": устройство вывода недоступно, голоса собеседников могли не записаться.",
+			"System audio was lost at "+stamp+": the output device became unavailable, so remote voices may be missing.")
+	case "restored":
+		return config.Localized(language,
+			"Системный звук пересоздан в "+stamp+" после смены устройства вывода — в записи возможен короткий провал.",
+			"System audio was recreated at "+stamp+" after the output device changed — a short gap in the recording is possible.")
+	default:
+		return ""
+	}
 }
 
 // StopActiveRecording finalizes WAV headers during a controlled application
@@ -192,6 +219,14 @@ func (s *Server) StopActiveRecording(ctx context.Context) error {
 	}
 	meeting.Status = "processing"
 	meeting.ProcessingStage = "shutdown_finalization"
+	// Приложение закрывают во время записи: предупреждение о потере системного
+	// звука тоже нужно сохранить.
+	if event, at := session.SystemIssue(); event != "" {
+		if meeting.Metadata == nil {
+			meeting.Metadata = make(map[string]string)
+		}
+		meeting.Metadata["audio_warning"] = audioWarningText(s.config().App.Language, event, at)
+	}
 	if saveErr := s.store.SaveMeeting(meeting); saveErr != nil {
 		return saveErr
 	}

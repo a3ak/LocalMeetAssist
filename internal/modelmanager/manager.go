@@ -24,6 +24,7 @@ import (
 
 	"localmeetassist/internal/config"
 	"localmeetassist/internal/inference"
+	"localmeetassist/internal/llamacpp"
 	appLogging "localmeetassist/internal/logging"
 	"localmeetassist/internal/whispercpp"
 )
@@ -57,9 +58,14 @@ type Spec struct {
 	ApproxBytes int64  `json:"approx_bytes,omitempty"`
 	// MinRAMBytes and MinDiskBytes are what the machine needs to actually run
 	// the model. Zero means there is no meaningful requirement.
-	MinRAMBytes  int64       `json:"min_ram_bytes,omitempty"`
-	MinDiskBytes int64       `json:"min_disk_bytes,omitempty"`
-	SettingKey   string      `json:"-"`
+	MinRAMBytes  int64  `json:"min_ram_bytes,omitempty"`
+	MinDiskBytes int64  `json:"min_disk_bytes,omitempty"`
+	SettingKey   string `json:"-"`
+	// SettingValue is what an Apply action writes into SettingKey. It is empty
+	// for most models, where the file itself is the setting value. A runtime
+	// card stores its base directory instead, because the platform library is
+	// chosen below it.
+	SettingValue string      `json:"-"`
 	Engine       string      `json:"-"`
 	Selectable   bool        `json:"selectable,omitempty"`
 	Selected     bool        `json:"selected,omitempty"`
@@ -155,6 +161,16 @@ func ResolveRuntimeLibrary(configured, version string) string {
 	return expected
 }
 
+// sameRuntimePath compares the configured runtime directory with the directory
+// a runtime card installs into.
+func sameRuntimePath(configured, wanted string) bool {
+	clean := strings.TrimSpace(configured)
+	if clean == "" {
+		return false
+	}
+	return filepath.Clean(clean) == filepath.Clean(wanted)
+}
+
 func regularFile(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.Mode().IsRegular() && info.Size() > 0
@@ -223,14 +239,40 @@ func LlamaRuntimeLibraryPath(configured string) string {
 	}
 }
 
+// LlamaRuntimeBase is the directory that holds the llama.cpp runtime. Like the
+// whisper.cpp runtime it keeps one subdirectory per OS and architecture.
+func LlamaRuntimeBase(cfg config.Config) string {
+	if configured := strings.TrimSpace(cfg.Inference.LlamaRuntimePath); configured != "" {
+		return filepath.Clean(configured)
+	}
+	return filepath.Clean(filepath.Join(filepath.Clean(cfg.Inference.WhisperRuntimePath), "..", "llama.cpp"))
+}
+
+// LlamaVulkanRuntimeBase is the directory of the GPU build for the platforms
+// that ship one. macOS has no Vulkan build: Metal is part of the regular
+// runtime there.
+func LlamaVulkanRuntimeBase(cfg config.Config) string {
+	base := LlamaRuntimeBase(cfg)
+	return filepath.Join(filepath.Dir(base), filepath.Base(base)+"-vulkan")
+}
+
+// LlamaRuntimePath resolves the platform path of the llama.cpp library for a
+// configuration. The summarizer and the model test both load this file, so the
+// path is derived in one place.
+func LlamaRuntimePath(cfg config.Config) string {
+	return LlamaRuntimeLibraryPath(LlamaRuntimeBase(cfg))
+}
+
 // llamaRuntimeSpec describes the llama.cpp runtime used by local summarization.
 // Like whisper.cpp it downloads the official prebuilt release, so no compiler is
 // needed on any supported platform. Sizes, checksums, archive prefixes and the
 // library file name were taken from release b11696.
 func llamaRuntimeSpec(cfg config.Config) Spec {
 	const tag = "b11696"
-	base := filepath.Join(filepath.Clean(cfg.Inference.WhisperRuntimePath), "..", "llama.cpp", runtime.GOOS+"-"+runtime.GOARCH)
-	base = filepath.Clean(base)
+	// root is the directory the card applies and base is the platform
+	// subdirectory the archive is extracted into.
+	root := LlamaRuntimeBase(cfg)
+	base := filepath.Join(root, runtime.GOOS+"-"+runtime.GOARCH)
 	type asset struct {
 		name, archive, prefix, runtimeFile, sha string
 		size                                    int64
@@ -246,7 +288,7 @@ func llamaRuntimeSpec(cfg config.Config) Spec {
 		"windows/arm64": {"llama-b11696-bin-win-cpu-arm64.zip", "ziplibs", "", "llama.dll", "6a5eed00283fdf2c343b4659018408c9e84f2932cddb133c92a0966146911ca8", 12_469_399},
 	}
 	a, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
-	spec := Spec{ID: "llama-runtime", MinRAMBytes: 536870912, MinDiskBytes: 314572800, Name: "llama.cpp native runtime", Path: base, Group: "runtime", Description: "Нативная библиотека llama.cpp для локальной саммаризации. Скачивается готовая сборка; llama-cli не устанавливается и не запускается.", License: "MIT"}
+	spec := Spec{ID: "llama-runtime", MinRAMBytes: 536870912, MinDiskBytes: 314572800, Name: "llama.cpp native runtime", Path: base, Group: "runtime", Description: "Нативная библиотека llama.cpp для локальной саммаризации. Скачивается готовая сборка; llama-cli не устанавливается и не запускается.", SettingKey: "inference.llama_runtime_path", SettingValue: root, Selectable: true, Selected: sameRuntimePath(cfg.Inference.LlamaRuntimePath, root), License: "MIT"}
 	if !ok {
 		return spec
 	}
@@ -256,6 +298,36 @@ func llamaRuntimeSpec(cfg config.Config) Spec {
 	spec.RequiredFiles = []string{a.runtimeFile}
 	spec.ApproxBytes = a.size
 	return spec
+}
+
+// llamaVulkanRuntimeSpec describes the GPU build of llama.cpp for the
+// platforms that ship one. macOS has no Vulkan build: Metal is part of the
+// regular runtime there, which is why the card is absent on that platform.
+func llamaVulkanRuntimeSpec(cfg config.Config) (Spec, bool) {
+	const tag = "b11696"
+	root := LlamaVulkanRuntimeBase(cfg)
+	base := filepath.Join(root, runtime.GOOS+"-"+runtime.GOARCH)
+	type asset struct {
+		name, archive, prefix, runtimeFile, sha string
+		size                                    int64
+	}
+	assets := map[string]asset{
+		"linux/amd64":   {"llama-b11696-bin-ubuntu-vulkan-x64.tar.gz", "tgzlibs", "llama-b11696/", "libllama.so.0", "eac48cc39b960deabe8345f16fc3a27f09317cddeb072b666b967bc13ea60c03", 30_528_842},
+		"linux/arm64":   {"llama-b11696-bin-ubuntu-vulkan-arm64.tar.gz", "tgzlibs", "llama-b11696/", "libllama.so.0", "9e751e8e4d2d97ecbaff84ca0b9cdfc0059650db3cbf2887ca2e7037ab7afcc2", 24_223_177},
+		"windows/amd64": {"llama-b11696-bin-win-vulkan-x64.zip", "ziplibs", "", "llama.dll", "f62bbf1ce154911ce37a381b9b308893b064301ecb7512f30c7c2abf7f812e75", 32_220_792},
+		"windows/arm64": {"llama-b11696-bin-win-vulkan-arm64.zip", "ziplibs", "", "llama.dll", "fbd0525cd9f6ec86be8c74d3b63d8cc2c999c87329d14cf042c2b05ecc1c14ec", 24_847_712},
+	}
+	a, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
+	if !ok {
+		return Spec{}, false
+	}
+	spec := Spec{ID: "llama-vulkan-runtime", MinRAMBytes: 536870912, MinDiskBytes: 314572800, Name: "llama.cpp Vulkan runtime", Path: base, Group: "runtime", Description: "Сборка llama.cpp с поддержкой видеокарт через Vulkan: заметно быстрее процессора на подходящем железе. Обычный рантайм при этом остаётся на диске.", SettingKey: "inference.llama_runtime_path", SettingValue: root, Selectable: true, Selected: sameRuntimePath(cfg.Inference.LlamaRuntimePath, root), License: "MIT"}
+	spec.URL = "https://github.com/ggml-org/llama.cpp/releases/download/" + tag + "/" + a.name
+	spec.DownloadSHA256 = a.sha
+	spec.Archive = a.archive + ":" + a.prefix
+	spec.RequiredFiles = []string{a.runtimeFile}
+	spec.ApproxBytes = a.size
+	return spec, true
 }
 
 func whisperRuntimeSpec(cfg config.Config) Spec {
@@ -299,6 +371,14 @@ func New(cfg config.Config, logger *log.Logger) *Manager {
 		modelsBase = filepath.Join(filepath.Dir(cfg.ConfigFile), "models", "whisper")
 	}
 	llmBase := filepath.Join(filepath.Dir(modelsBase), "llm")
+	diarBase := filepath.Join(filepath.Dir(modelsBase), "diarization")
+	// Путь по умолчанию для модели голосовых признаков: по нему видно, какая из
+	// двух карточек сейчас применена.
+	resnetEmbedding := filepath.Join(diarBase, "wespeaker-resnet34-lm", "voxceleb_resnet34_LM.onnx")
+	campplusEmbedding := filepath.Join(diarBase, "wespeaker-campplus", "voxceleb_campplus.onnx")
+	// The summarization cards apply themselves only when the local engine is
+	// selected, exactly like the transcription cards follow their engine.
+	localSummary := cfg.Summary.LocalSummary()
 	runtimeSpec := onnxRuntimeSpec(cfg)
 	whisperSpec := whisperRuntimeSpec(cfg)
 	llamaSpec := llamaRuntimeSpec(cfg)
@@ -306,6 +386,12 @@ func New(cfg config.Config, logger *log.Logger) *Manager {
 		runtimeSpec,
 		whisperSpec,
 		llamaSpec,
+	}
+	if vulkanSpec, ok := llamaVulkanRuntimeSpec(cfg); ok {
+		specs = append(specs, vulkanSpec)
+	}
+	// The remaining cards are the transcription and diarization models.
+	rest := []Spec{
 		{ID: "gigaam-v3-e2e-rnnt-int8", MinRAMBytes: 1610612736, MinDiskBytes: 419430400, Name: "GigaAM v3 E2E RNNT INT8", Path: gigaDir, Group: "transcription", Recommended: true, Description: "Рекомендуемая русскоязычная модель: пунктуация и нормализация текста, RNNT-декодирование, около 227 МБ. Обрабатывает найденные VAD речевые фрагменты непосредственно в LocalMeetAssist.", ApproxBytes: 226_500_000, SettingKey: "transcription.model_path", Engine: "gigaam-onnx", Selectable: true, Selected: samePath(cfg.Transcription.ModelPath, gigaDir) && strings.EqualFold(cfg.Transcription.Engine, "gigaam-onnx"), License: "MIT", Components: []Component{
 			{Name: "encoder", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_encoder.int8.onnx"), URL: cfg.Models.GigaAMEncoderURL, SHA256: cfg.Models.GigaAMEncoderSHA256, ApproxBytes: 224_570_477},
 			{Name: "decoder", Path: filepath.Join(gigaDir, "v3_e2e_rnnt_decoder.int8.onnx"), URL: cfg.Models.GigaAMDecoderURL, SHA256: cfg.Models.GigaAMDecoderSHA256, ApproxBytes: 1_159_170},
@@ -315,15 +401,19 @@ func New(cfg config.Config, logger *log.Logger) *Manager {
 		{ID: "whisper-small-q5", MinRAMBytes: 1610612736, MinDiskBytes: 367001600, Name: "Whisper small Q5_1", Path: filepath.Join(modelsBase, "ggml-small-q5_1.bin"), URL: cfg.Models.WhisperSmallURL, SHA256: cfg.Models.WhisperSmallSHA256, Group: "transcription", Description: "Компактный мультиязычный Whisper: быстрее medium, около 181 МБ. Подходит для быстрых черновиков и слабых CPU.", ApproxBytes: 190_085_487, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-small-q5_1.bin")), License: "MIT"},
 		{ID: "whisper-medium-q5", MinRAMBytes: 2684354560, MinDiskBytes: 838860800, Name: "Whisper medium Q5_0", Path: filepath.Join(modelsBase, "ggml-medium-q5_0.bin"), URL: cfg.Models.WhisperMediumURL, SHA256: cfg.Models.WhisperMediumSHA256, Group: "transcription", Description: "Более точный мультиязычный Whisper, около 514 МБ. Хороший баланс для сложной речи и терминов.", ApproxBytes: 539_212_467, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-medium-q5_0.bin")), License: "MIT"},
 		{ID: "whisper-large-v3-turbo-q5", MinRAMBytes: 3221225472, MinDiskBytes: 943718400, Name: "Whisper large-v3-turbo Q5_0", Path: filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin"), URL: cfg.Models.WhisperTurboURL, SHA256: cfg.Models.WhisperTurboSHA256, Group: "transcription", Description: "Наиболее качественный из предлагаемых Whisper при заметно меньшей цене, чем full large-v3; около 574 МБ.", ApproxBytes: 574_041_195, SettingKey: "transcription.model_path", Engine: "whispercpp-native", Selectable: true, Selected: strings.EqualFold(cfg.Transcription.Engine, "whispercpp-native") && samePath(cfg.Transcription.ModelPath, filepath.Join(modelsBase, "ggml-large-v3-turbo-q5_0.bin")), License: "MIT"},
-		// Локальные модели саммаризации. Selectable выключен: движок llama.cpp
-		// ещё не подключён к пайплайну, поэтому карточка умеет только скачать и
-		// удалить файл, а не включить модель в работу.
-		{ID: "qwen3-5-9b-q4", MinRAMBytes: 17179869184, MinDiskBytes: 8589934592, Name: "Qwen3.5-9B Q4_K_M", Path: filepath.Join(llmBase, "Qwen3.5-9B-Q4_K_M.gguf"), URL: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf", SHA256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", Group: "summarization", Description: "Основная модель для локальных протоколов: лучший русский среди открытых, контекст 256K, около 5.3 ГБ. Требует 16 ГБ памяти.", ApproxBytes: 5_680_522_464, License: "Apache 2.0"},
-		{ID: "qwen3-5-4b-q4", MinRAMBytes: 8589934592, MinDiskBytes: 4294967296, Name: "Qwen3.5-4B Q4_K_M", Path: filepath.Join(llmBase, "Qwen3.5-4B-Q4_K_M.gguf"), URL: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf", SHA256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", Group: "summarization", Recommended: true, Description: "Облегчённая модель для локальных протоколов: около 2.6 ГБ, хватает 8 ГБ памяти. Качество конспектов скромнее, чем у 9B.", ApproxBytes: 2_740_937_888, License: "Apache 2.0"},
+		// Локальные модели саммаризации: файл GGUF, который выполняет движок
+		// llama.cpp. Карточка применяется в summary.model_path и включает
+		// summary.engine, а файл рантайма скачивается отдельной карточкой.
+		{ID: "qwen3-5-9b-q4", MinRAMBytes: 17179869184, MinDiskBytes: 8589934592, Name: "Qwen3.5-9B Q4_K_M", Path: filepath.Join(llmBase, "Qwen3.5-9B-Q4_K_M.gguf"), URL: "https://huggingface.co/unsloth/Qwen3.5-9B-GGUF/resolve/main/Qwen3.5-9B-Q4_K_M.gguf", SHA256: "03b74727a860a56338e042c4420bb3f04b2fec5734175f4cb9fa853daf52b7e8", Group: "summarization", Description: "Основная модель для локальных протоколов: лучший русский среди открытых, контекст 256K, около 5.3 ГБ. Требует 16 ГБ памяти.", ApproxBytes: 5_680_522_464, SettingKey: "summary.model_path", Engine: config.EngineLocalLlama, Selectable: true, Selected: localSummary && samePath(cfg.Summary.ModelPath, filepath.Join(llmBase, "Qwen3.5-9B-Q4_K_M.gguf")), License: "Apache 2.0"},
+		{ID: "qwen3-5-4b-q4", MinRAMBytes: 8589934592, MinDiskBytes: 4294967296, Name: "Qwen3.5-4B Q4_K_M", Path: filepath.Join(llmBase, "Qwen3.5-4B-Q4_K_M.gguf"), URL: "https://huggingface.co/unsloth/Qwen3.5-4B-GGUF/resolve/main/Qwen3.5-4B-Q4_K_M.gguf", SHA256: "00fe7986ff5f6b463e62455821146049db6f9313603938a70800d1fb69ef11a4", Group: "summarization", Recommended: true, Description: "Облегчённая модель для локальных протоколов: около 2.6 ГБ, хватает 8 ГБ памяти. Качество конспектов скромнее, чем у 9B.", ApproxBytes: 2_740_937_888, SettingKey: "summary.model_path", Engine: config.EngineLocalLlama, Selectable: true, Selected: localSummary && samePath(cfg.Summary.ModelPath, filepath.Join(llmBase, "Qwen3.5-4B-Q4_K_M.gguf")), License: "Apache 2.0"},
 		{ID: "silero-vad", MinRAMBytes: 536870912, MinDiskBytes: 52428800, Name: "Silero VAD 6.2 ONNX", Path: cfg.Transcription.VADModelPath, URL: cfg.Models.VADURL, SHA256: cfg.Models.VADSHA256, Group: "speech_filter", Recommended: true, Description: "Находит речь и делит длинную встречу на фрагменты до 20 секунд. Снижает повторы и выдуманный текст на тишине.", ApproxBytes: 2_330_000, Selected: true, License: "MIT"},
 		{ID: "diarization-segmentation", MinRAMBytes: 1073741824, MinDiskBytes: 104857600, Name: "PyAnnote Segmentation 3.0 ONNX", Path: cfg.Diarization.SegmentationModel, URL: cfg.Models.SegmentationURL, SHA256: cfg.Models.SegmentationSHA256, Group: "diarization", Recommended: true, Description: "Определяет локальные дорожки речи и перекрытия голосов в окнах по 10 секунд. Работает без Python и Hugging Face token.", ApproxBytes: 5_986_908, Selected: true, License: "MIT"},
-		{ID: "diarization-embedding-wespeaker", MinRAMBytes: 1073741824, MinDiskBytes: 104857600, Name: "WeSpeaker ResNet34-LM VoxCeleb", Path: cfg.Diarization.EmbeddingModel, URL: cfg.Models.EmbeddingURL, SHA256: cfg.Models.EmbeddingSHA256, Group: "diarization", Recommended: true, Description: "Строит 256-мерные признаки голосов для глобальной кластеризации по всей встрече. Количество участников встречи используется как точное ограничение.", ApproxBytes: 26_530_309, SettingKey: "diarization.embedding_model", Selectable: true, Selected: true, License: "CC BY 4.0"},
+		{ID: "diarization-embedding-wespeaker", MinRAMBytes: 1073741824, MinDiskBytes: 104857600, Name: "WeSpeaker ResNet34-LM VoxCeleb", Path: cfg.Diarization.EmbeddingModel, URL: cfg.Models.EmbeddingURL, SHA256: cfg.Models.EmbeddingSHA256, Group: "diarization", Recommended: true, Description: "Строит 256-мерные признаки голосов для глобальной кластеризации по всей встрече. Количество участников встречи используется как точное ограничение.", ApproxBytes: 26_530_309, SettingKey: "diarization.embedding_model", Selectable: true, Selected: samePath(cfg.Diarization.EmbeddingModel, resnetEmbedding), License: "CC BY 4.0"},
+		// CAM++ заметно лучше держит короткие реплики: на реальных встречах, где
+		// ResNet34 сливал трёх участников в одного, эта модель разделяет их.
+		{ID: "diarization-embedding-campplus", MinRAMBytes: 1073741824, MinDiskBytes: 104857600, Name: "WeSpeaker CAM++ VoxCeleb", Path: campplusEmbedding, URL: "https://huggingface.co/Wespeaker/wespeaker-voxceleb-campplus/resolve/main/voxceleb_CAM%2B%2B.onnx", SHA256: "b50810498b5bcf5773d086f6993d344476bd0c88b566a41e8d801aaf8461efad", Group: "diarization", Description: "Альтернативная модель голосовых признаков: увереннее разделяет короткие реплики и голоса с похожим тембром, поэтому меньше риск, что несколько участников окажутся одним спикером. Заменяет WeSpeaker ResNet34-LM.", ApproxBytes: 29_292_449, SettingKey: "diarization.embedding_model", Selectable: true, Selected: samePath(cfg.Diarization.EmbeddingModel, campplusEmbedding), License: "CC BY 4.0"},
 	}
+	specs = append(specs, rest...)
 	m := &Manager{client: &http.Client{Timeout: timeout}, logger: logger, language: cfg.App.Language, specs: make(map[string]Spec), state: make(map[string]*Status)}
 	for _, spec := range specs {
 		if english(m.language) {
@@ -420,7 +510,11 @@ func (m *Manager) Delete(id string) error {
 		m.mu.Unlock()
 		return errors.New("wait for the model download to finish")
 	}
-	if status.Selected {
+	// A runtime that the application points at can still be removed: it is not
+	// user data, it is restored with one download, and the summarizer reports a
+	// missing runtime instead of failing silently. Model files keep the guard so
+	// a working pipeline is not broken by a stray click.
+	if status.Selected && status.Group != "runtime" {
 		m.mu.Unlock()
 		return errors.New("the model is applied; choose another one first")
 	}
@@ -522,6 +616,44 @@ func (m *Manager) Test(id string) TestResult {
 			return finish(err)
 		}
 		result.Checks = append(result.Checks, "Native library loads")
+		return finish(nil)
+	}
+	if id == "llama-runtime" {
+		if len(spec.RequiredFiles) == 0 {
+			return finish(errors.New("this platform has no prebuilt llama.cpp runtime"))
+		}
+		result.Path = filepath.Join(spec.Path, spec.RequiredFiles[0])
+		if err := llamacpp.Probe(result.Path); err != nil {
+			return finish(err)
+		}
+		result.Checks = append(result.Checks, "Native library loads")
+		return finish(nil)
+	}
+	if spec.Group == "summarization" {
+		// A GGUF model is only useful together with the native runtime, so the
+		// test loads both and generates a few tokens.
+		llamaRuntime := m.specs["llama-runtime"]
+		if ok, _ := installed(llamaRuntime); !ok {
+			return finish(errors.New("install the llama.cpp native runtime first"))
+		}
+		runtimePath := filepath.Join(llamaRuntime.Path, llamaRuntime.RequiredFiles[0])
+		params := llamacpp.DefaultParameters()
+		params.ContextTokens = 2048
+		params.MaxTokens = 8
+		runtime, err := llamacpp.Open(runtimePath, spec.Path, params)
+		if err != nil {
+			return finish(err)
+		}
+		defer runtime.Close()
+		result.Checks = append(result.Checks, "llama.cpp loaded the model")
+		prompt, err := runtime.Chat("Answer with a single word.", "Are you ready? Answer with one word.")
+		if err != nil {
+			return finish(err)
+		}
+		if _, err := runtime.Generate(context.Background(), prompt, params); err != nil {
+			return finish(err)
+		}
+		result.Checks = append(result.Checks, "Generation works")
 		return finish(nil)
 	}
 	if strings.HasPrefix(id, "whisper-") {
@@ -878,6 +1010,105 @@ func libraryNameWanted(name string) bool {
 	return false
 }
 
+// archiveLink is a symbolic link entry of an archive.
+//
+// The libraries of the official llama.cpp and whisper.cpp releases are
+// versioned and linked through symlinks: libllama.0.dylib points to
+// libllama.0.7.0.dylib and libggml.0.dylib to libggml.0.27.0.dylib. The dynamic
+// loader asks for the versioned name, so dropping the links leaves the runtime
+// without the file it looks for. Links are therefore materialized after the
+// regular files have been extracted.
+type archiveLink struct {
+	path   string // relative to the extraction root, OS separators
+	target string // as written in the archive, usually relative
+}
+
+// withinExtractionRoot reports whether an absolute path stays inside root.
+func withinExtractionRoot(root, target string) bool {
+	base := filepath.Clean(root) + string(os.PathSeparator)
+	return strings.HasPrefix(filepath.Clean(target)+string(os.PathSeparator), base)
+}
+
+// copyFile copies one regular file, used where a symlink cannot be created.
+func copyFile(source, target string) error {
+	in, err := os.Open(source)
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+	if err != nil {
+		return err
+	}
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
+}
+
+// materializeArchiveLinks creates the links of an archive and returns how many
+// were created. A chain such as libggml.dylib -> libggml.0.dylib ->
+// libggml.0.27.0.dylib is resolved to the regular file it ends at.
+func materializeArchiveLinks(root string, links []archiveLink) (int, error) {
+	if len(links) == 0 {
+		return 0, nil
+	}
+	byPath := make(map[string]string, len(links))
+	for _, link := range links {
+		byPath[filepath.Join(root, link.path)] = link.target
+	}
+	created := 0
+	for _, link := range links {
+		linkPath := filepath.Join(root, link.path)
+		if _, err := os.Lstat(linkPath); err == nil {
+			continue
+		}
+		current, target := linkPath, link.target
+		resolved := ""
+		for hop := 0; hop < 8; hop++ {
+			next := target
+			if !filepath.IsAbs(next) {
+				next = filepath.Join(filepath.Dir(current), filepath.FromSlash(next))
+			}
+			next = filepath.Clean(next)
+			if !withinExtractionRoot(root, next) {
+				break
+			}
+			follow, ok := byPath[next]
+			if !ok {
+				resolved = next
+				break
+			}
+			current, target = next, follow
+		}
+		// A link to a file that was filtered out or is missing stays absent:
+		// the archive is trusted, but a broken link must not fail the install.
+		if resolved == "" || !regularFile(resolved) {
+			continue
+		}
+		if err := os.MkdirAll(filepath.Dir(linkPath), 0o700); err != nil {
+			return created, err
+		}
+		relative, err := filepath.Rel(filepath.Dir(linkPath), resolved)
+		if err != nil {
+			relative = resolved
+		}
+		if err := os.Symlink(relative, linkPath); err == nil {
+			created++
+			continue
+		}
+		// Windows may not allow symlinks without developer mode; a copy of the
+		// target has the same effect for the loader.
+		if err := copyFile(resolved, linkPath); err != nil {
+			return created, err
+		}
+		created++
+	}
+	return created, nil
+}
+
 func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 	kind, wanted, ok := strings.Cut(descriptor, ":")
 	if !ok {
@@ -899,42 +1130,46 @@ func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 			return err
 		}
 	}
-	copyEntry := func(name string, r io.Reader) error {
+	// accept reports whether an archive entry belongs to this extraction and
+	// returns its path relative to the output directory.
+	accept := func(name string) (string, bool) {
 		clean := filepath.ToSlash(filepath.Clean(name))
+		if !directoryMode {
+			if clean != wanted && filepath.Base(clean) != filepath.Base(wanted) {
+				return "", false
+			}
+			return "", true
+		}
+		if !strings.HasPrefix(clean, wanted) {
+			return "", false
+		}
+		relative := strings.TrimPrefix(clean, wanted)
+		if relative == "" || strings.HasPrefix(relative, "../") || filepath.IsAbs(relative) {
+			return "", false
+		}
+		if librariesOnly && !libraryNameWanted(filepath.Base(relative)) {
+			return "", false
+		}
+		// An entry that would escape the output directory is ignored rather
+		// than failing the whole installation.
+		if !withinExtractionRoot(outputPath, filepath.Join(outputPath, filepath.FromSlash(relative))) {
+			return "", false
+		}
+		return filepath.FromSlash(relative), true
+	}
+	copyEntry := func(name string, r io.Reader) error {
+		relative, accepted := accept(name)
+		if !accepted {
+			return os.ErrNotExist
+		}
+		target := outputPath
 		if directoryMode {
-			if !strings.HasPrefix(clean, wanted) {
-				return os.ErrNotExist
-			}
-			relative := strings.TrimPrefix(clean, wanted)
-			if relative == "" || strings.HasPrefix(relative, "../") || filepath.IsAbs(relative) {
-				return os.ErrNotExist
-			}
-			if librariesOnly && !libraryNameWanted(filepath.Base(relative)) {
-				return os.ErrNotExist
-			}
-			target := filepath.Join(outputPath, filepath.FromSlash(relative))
-			base := filepath.Clean(outputPath) + string(os.PathSeparator)
-			if !strings.HasPrefix(filepath.Clean(target)+string(os.PathSeparator), base) {
-				return errors.New("unsafe archive path")
-			}
+			target = filepath.Join(outputPath, relative)
 			if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
 				return err
 			}
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
-			if err != nil {
-				return err
-			}
-			_, copyErr := io.Copy(out, r)
-			closeErr := out.Close()
-			if copyErr != nil {
-				return copyErr
-			}
-			return closeErr
 		}
-		if clean != wanted && filepath.Base(clean) != filepath.Base(wanted) {
-			return os.ErrNotExist
-		}
-		out, err := os.OpenFile(outputPath, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
+		out, err := os.OpenFile(target, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0o700)
 		if err != nil {
 			return err
 		}
@@ -945,6 +1180,7 @@ func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 		}
 		return closeErr
 	}
+	var links []archiveLink
 	found := false
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "zip":
@@ -955,6 +1191,21 @@ func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 		defer zr.Close()
 		for _, entry := range zr.File {
 			if entry.FileInfo().IsDir() {
+				continue
+			}
+			if entry.Mode()&os.ModeSymlink != 0 {
+				r, openErr := entry.Open()
+				if openErr != nil {
+					return openErr
+				}
+				content, readErr := io.ReadAll(io.LimitReader(r, 4096))
+				_ = r.Close()
+				if readErr != nil {
+					return readErr
+				}
+				if relative, accepted := accept(entry.Name); accepted && directoryMode {
+					links = append(links, archiveLink{path: relative, target: strings.TrimSpace(string(content))})
+				}
 				continue
 			}
 			r, openErr := entry.Open()
@@ -1000,6 +1251,12 @@ func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 			if nextErr != nil {
 				return nextErr
 			}
+			if header.Typeflag == tar.TypeSymlink {
+				if relative, accepted := accept(header.Name); accepted && directoryMode {
+					links = append(links, archiveLink{path: relative, target: header.Linkname})
+				}
+				continue
+			}
 			if header.Typeflag != tar.TypeReg {
 				continue
 			}
@@ -1017,6 +1274,11 @@ func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 		}
 	default:
 		return fmt.Errorf("unsupported archive type %q", kind)
+	}
+	if created, err := materializeArchiveLinks(outputPath, links); err != nil {
+		return err
+	} else if created > 0 {
+		found = true
 	}
 	if found {
 		return nil

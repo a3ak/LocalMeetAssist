@@ -1,0 +1,2 @@
+/* Показывается в системном запросе доступа к микрофону. */
+NSMicrophoneUsageDescription = "LocalMeetAssist records your voice to transcribe the meeting. The audio stays on this computer.";
