@@ -252,7 +252,7 @@
   "diag.noDevice": "Устройство не найдено",
   "models.file": "Файл модели",
   "models.downloadingShort": "Загружается",
-  "models.tabTranscription": "Транскрит",
+  "models.tabTranscription": "Транскрибация",
   "models.tabSpeakers": "Спикеры",
   "models.tabMinutes": "Протоколы",
   "models.tabRuntime": "Runtime",
