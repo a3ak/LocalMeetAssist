@@ -7,6 +7,17 @@
 #define MA_NO_NODE_GRAPH
 #define MA_NO_ENGINE
 #define MINIAUDIO_IMPLEMENTATION
+#if defined(_WIN32)
+// MinGW-w64 не экспортирует из uuid.a часть COM-интерфейсов аудиосессий
+// (IAudioSessionManager2, IAudioSessionControl2, MMDeviceEnumerator), поэтому
+// линковка падала с undefined reference to IID_IAudioSessionManager2 и т.п.
+// initguid.h объявляет эти GUID определениями в этой единице трансляции, а не
+// extern-ссылками, и значения берутся из системных заголовков — вручную их
+// переписывать не нужно. Заголовок обязан идти до windows.h/miniaudio.h,
+// иначе guiddef.h уже будет обработан без INITGUID.
+#include <initguid.h>
+#endif
+
 #include "miniaudio.h"
 #include "nativeaudio.h"
 
