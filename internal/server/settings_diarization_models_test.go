@@ -58,6 +58,26 @@ func TestDiarizationModelChoices(t *testing.T) {
 		t.Fatalf("unexpected embedding field: %+v", field)
 	}
 
+	// Конфиг хранит относительный путь: список обязан узнавать в нём обычную
+	// модель, а не показывать лишний «Свой путь».
+	cfg.Diarization.EmbeddingModel = "./models/diarization/wespeaker-resnet34-lm/voxceleb_resnet34_LM.onnx"
+	relative := server.diarizationModelChoices(cfg)
+	matched := false
+	for _, option := range relative["embedding"] {
+		if strings.HasPrefix(option.Label, "Свой путь") {
+			t.Fatalf("a relative path to a known model produced a custom option: %+v", option)
+		}
+		if strings.Contains(option.Label, "ResNet34") {
+			matched = true
+			if option.Value != cfg.Diarization.EmbeddingModel {
+				t.Fatalf("the option value must match the stored path: %q != %q", option.Value, cfg.Diarization.EmbeddingModel)
+			}
+		}
+	}
+	if !matched {
+		t.Fatalf("the ResNet34 option is missing for a relative path: %+v", relative["embedding"])
+	}
+
 	// Произвольный путь не теряется при сохранении формы.
 	custom := filepath.Join(dir, "custom.onnx")
 	cfg.Diarization.EmbeddingModel = custom

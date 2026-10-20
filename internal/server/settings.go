@@ -651,8 +651,31 @@ func (s *Server) testSettings(w http.ResponseWriter, r *http.Request) {
 // never silently replaces it.
 func (s *Server) diarizationModelChoices(cfg config.Config) map[string][]settingOption {
 	statuses := s.models.Statuses()
+	// Настройки показывают пути так, как они записаны в конфиге: обычно это
+	// относительные пути вида ./models/... . Сравнивать их с абсолютными путями
+	// карточек нельзя, иначе для обычной модели появлялся лишний «Свой путь».
+	canonical := func(path string) string {
+		if strings.TrimSpace(path) == "" {
+			return ""
+		}
+		if filepath.IsAbs(path) {
+			return filepath.Clean(path)
+		}
+		if cfg.ConfigFile == "" {
+			return filepath.Clean(path)
+		}
+		return filepath.Clean(filepath.Join(filepath.Dir(cfg.ConfigFile), path))
+	}
+	notDownloaded := config.Localized(cfg.App.Language, " — не скачана", " — not downloaded")
 	build := func(ids []string, current, customPrefix string) []settingOption {
 		options := make([]settingOption, 0, len(ids)+1)
+		relative := strings.TrimSpace(current) != "" && !filepath.IsAbs(current)
+		optionValue := func(path string) string {
+			if relative && cfg.ConfigFile != "" {
+				return portableConfigPath(cfg.ConfigFile, path)
+			}
+			return path
+		}
 		matched := false
 		for _, id := range ids {
 			for _, status := range statuses {
@@ -661,12 +684,13 @@ func (s *Server) diarizationModelChoices(cfg config.Config) map[string][]setting
 				}
 				label := status.Name
 				if !status.Exists {
-					label += " — не скачана"
+					label += notDownloaded
 				}
-				if filepath.Clean(status.Path) == filepath.Clean(current) {
+				value := optionValue(status.Path)
+				if canonical(value) == canonical(current) {
 					matched = true
 				}
-				options = append(options, settingOption{Value: status.Path, Label: label, Disabled: !status.Exists})
+				options = append(options, settingOption{Value: value, Label: label, Disabled: !status.Exists})
 			}
 		}
 		if !matched && strings.TrimSpace(current) != "" {
@@ -674,8 +698,9 @@ func (s *Server) diarizationModelChoices(cfg config.Config) map[string][]setting
 		}
 		return options
 	}
+	customPrefix := config.Localized(cfg.App.Language, "Свой путь: ", "Custom path: ")
 	return map[string][]settingOption{
-		"segmentation": build([]string{"diarization-segmentation"}, cfg.Diarization.SegmentationModel, "Свой путь: "),
-		"embedding":    build([]string{"diarization-embedding-wespeaker", "diarization-embedding-campplus"}, cfg.Diarization.EmbeddingModel, "Свой путь: "),
+		"segmentation": build([]string{"diarization-segmentation"}, cfg.Diarization.SegmentationModel, customPrefix),
+		"embedding":    build([]string{"diarization-embedding-wespeaker", "diarization-embedding-campplus"}, cfg.Diarization.EmbeddingModel, customPrefix),
 	}
 }
