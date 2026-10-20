@@ -25,7 +25,7 @@ LocalMeetAssist записывает встречу с микрофона и с�
 **Запись**
 
 - пишет микрофон и системный звук отдельными дорожками, поэтому ваш голос и голоса собеседников не смешиваются;
-- переживает смену устройства вывода во время встречи: если пропало устройство по умолчанию (отключили монитор с колонками, переключились на наушники или Bluetooth), захват системного звука пересоздаётся на текущем устройстве, а в карточке встречи появляется предупреждение;
+- переживает смену устройств во время встречи: если пропало устройство вывода (отключили монитор с колонками, переключились на наушники или Bluetooth) или входное устройство микрофона, захват пересоздаётся на текущем устройстве, пауза дописывается тишиной, а в карточке встречи появляется предупреждение;
 - делает общий смешанный поток для удобства прослушивания встречи и подавляет эхо и повторяющиеся реплики;
 - запуск записи встречи можно выполнить кнопкой в интерфейсе, с помощью горячей клавиши или автоматически из браузера при использовании плагина, который обнаруживает заранее заданные комнаты конференций;
 
@@ -368,7 +368,7 @@ The application captures audio itself, while the control interface opens in a br
 **Recording**
 
 - captures the microphone and system audio as separate tracks, so your voice and your guests' voices never blend;
-- survives an output device change mid-meeting: if the default device disappears (a monitor with speakers is disconnected, audio switches to headphones or Bluetooth), system capture is recreated on the current device and the meeting card shows a warning;
+- survives device changes mid-meeting: if the output device disappears (a monitor with speakers is disconnected, audio switches to headphones or Bluetooth) or the microphone input changes, capture is recreated on the current device, the gap is padded with silence, and the meeting card shows a warning;
 - produces a mixed track for convenient listening and suppresses echo and duplicated lines;
 - recording can be started from a button in the interface, with a hotkey, or automatically from the browser by the plugin that detects preconfigured conference rooms;
 
