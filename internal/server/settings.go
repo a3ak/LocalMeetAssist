@@ -224,7 +224,7 @@ func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) 
 		{ID: "transcription", Title: "Транскрибация", Description: "GigaAM v3 или Whisper выполняются непосредственно в LocalMeetAssist, без запуска CLI.", Fields: []settingField{
 			boolSetting("transcription.auto_run", "Выполнять автоматически", "Автоматически распознавать встречу после остановки. Ручной запуск доступен независимо от этой настройки.", cfg.Transcription.AutoRun),
 			selectSetting("transcription.engine", "Движок", "Выбранная модель вызывается нативно из процесса LocalMeetAssist.", cfg.Transcription.Engine, option("gigaam-onnx", "GigaAM v3 ONNX"), option("whispercpp-native", "Whisper.cpp native")),
-			textSetting("transcription.model_path", "Модель", "Каталог GigaAM или файл Whisper GGML; удобнее скачать и применить модель в разделе «Модели».", cfg.Transcription.ModelPath),
+			modelField("transcription.model_path", "Модель", "Каталог GigaAM или файл Whisper GGML; серые пункты ещё не загружены. Свою модель можно указать в config.toml.", cfg.Transcription.ModelPath, modelChoices["transcription.model_path"]),
 			textSetting("transcription.language", "Язык", "Код языка, например ru.", cfg.Transcription.Language),
 			intSetting("transcription.threads", "Потоки CPU", "Количество потоков распознавания; 0 — выбрать автоматически.", cfg.Transcription.Threads),
 			intSetting("transcription.timeout_seconds", "Таймаут, сек", "Максимальное время обработки источника.", cfg.Transcription.TimeoutSeconds),
@@ -235,7 +235,7 @@ func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) 
 			intSetting("transcription.echo_time_tolerance_ms", "Допуск времени эха, мс", "Максимальное расхождение реплик по времени.", cfg.Transcription.EchoTimeToleranceMS),
 			floatSetting("transcription.echo_text_similarity", "Сходство текста", "Порог 0–1 для определения дубликата.", cfg.Transcription.EchoTextSimilarity),
 			boolSetting("transcription.vad_enabled", "VAD", "Отделять речь от тишины до распознавания.", cfg.Transcription.VADEnabled),
-			textSetting("transcription.vad_model_path", "Модель VAD", "Путь к модели Silero VAD.", cfg.Transcription.VADModelPath),
+			modelField("transcription.vad_model_path", "Модель VAD", "Модель Silero VAD или своя ONNX-модель, указанная в config.toml.", cfg.Transcription.VADModelPath, modelChoices["transcription.vad_model_path"]),
 			floatSetting("transcription.vad_threshold", "Порог VAD", "Вероятность речи 0–1.", cfg.Transcription.VADThreshold),
 			intSetting("transcription.vad_min_speech_ms", "Минимальная речь, мс", "Короткие фрагменты ниже значения отбрасываются.", cfg.Transcription.VADMinSpeechMS),
 			intSetting("transcription.vad_min_silence_ms", "Минимальная пауза, мс", "Пауза для разделения речевых фрагментов.", cfg.Transcription.VADMinSilenceMS),
@@ -247,8 +247,8 @@ func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) 
 		{ID: "diarization", Title: "Диаризация", Description: "PyAnnote Segmentation 3 + WeSpeaker и кластеризация голосов на Go.", Fields: []settingField{
 			boolSetting("diarization.auto_run", "Выполнять автоматически", "Автоматически разделять удалённых участников на спикеров. Ручной запуск доступен всегда.", cfg.Diarization.AutoRun),
 			selectSetting("diarization.engine", "Движок", "Выполняется в процессе LocalMeetAssist без CLI.", cfg.Diarization.Engine, option("pyannote-wespeaker-onnx", "PyAnnote + WeSpeaker ONNX")),
-			modelField("diarization.segmentation_model", "Модель сегментации", "Скачанные модели сегментации; серые пункты ещё не загружены.", cfg.Diarization.SegmentationModel, modelChoices["segmentation"]),
-			modelField("diarization.embedding_model", "Модель голосовых признаков", "Скачанные модели голосовых признаков; серые пункты ещё не загружены. На разных записях точнее разделяют разные модели.", cfg.Diarization.EmbeddingModel, modelChoices["embedding"]),
+			modelField("diarization.segmentation_model", "Модель сегментации", "Скачанные модели сегментации; серые пункты ещё не загружены.", cfg.Diarization.SegmentationModel, modelChoices["diarization.segmentation_model"]),
+			modelField("diarization.embedding_model", "Модель голосовых признаков", "Скачанные модели голосовых признаков; серые пункты ещё не загружены. На разных записях точнее разделяют разные модели.", cfg.Diarization.EmbeddingModel, modelChoices["diarization.embedding_model"]),
 			floatSetting("diarization.cluster_threshold", "Порог косинусного расстояния", "Без заданного количества участников голоса объединяются, пока расстояние не превышает порог.", cfg.Diarization.ClusterThreshold),
 			intSetting("diarization.max_auto_speakers", "Максимум при auto", "Защита от появления десятков ложных спикеров.", cfg.Diarization.MaxAutoSpeakers),
 			boolSetting("diarization.microphone_enabled", "Диаризовать микрофон", "Обычно выключено: владелец определяется по отдельному потоку.", cfg.Diarization.MicrophoneEnabled),
@@ -450,6 +450,13 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Модель распознавания и движок — пара: выбрали Whisper в списке, движок
+	// должен переключиться на whisper.cpp, иначе распознавание упадёт.
+	if value, ok := request.Values["transcription.model_path"]; ok {
+		if engine := s.transcriptionEngineForPath(validationConfig, strings.TrimSpace(value)); engine != "" {
+			literals["transcription.engine"] = strconv.Quote(engine)
+		}
+	}
 	if len(literals) == 0 {
 		writeError(w, http.StatusBadRequest, "no changed settings")
 		return
@@ -645,10 +652,34 @@ func (s *Server) testSettings(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// diarizationModelChoices lists the known diarization models for the two path
-// settings. A model that is not downloaded stays in the list but disabled, and a
-// custom path already configured is kept as its own option so saving the form
-// never silently replaces it.
+// transcriptionEngineForPath returns the engine that owns a known transcription
+// model path, so choosing a model in the settings also switches the engine.
+func (s *Server) transcriptionEngineForPath(cfg config.Config, path string) string {
+	if strings.TrimSpace(path) == "" {
+		return ""
+	}
+	canonical := func(value string) string {
+		if filepath.IsAbs(value) || cfg.ConfigFile == "" {
+			return filepath.Clean(value)
+		}
+		return filepath.Clean(filepath.Join(filepath.Dir(cfg.ConfigFile), value))
+	}
+	target := canonical(path)
+	for _, status := range s.models.Statuses() {
+		if status.SettingKey != "transcription.model_path" || status.Engine == "" {
+			continue
+		}
+		if canonical(status.Path) == target {
+			return status.Engine
+		}
+	}
+	return ""
+}
+
+// diarizationModelChoices lists the known models for every model path setting.
+// A model that is not downloaded stays in the list but disabled, and a custom
+// path already configured is kept as its own option so saving the form never
+// silently replaces it.
 func (s *Server) diarizationModelChoices(cfg config.Config) map[string][]settingOption {
 	statuses := s.models.Statuses()
 	// Настройки показывают пути так, как они записаны в конфиге: обычно это
@@ -700,7 +731,9 @@ func (s *Server) diarizationModelChoices(cfg config.Config) map[string][]setting
 	}
 	customPrefix := config.Localized(cfg.App.Language, "Свой путь: ", "Custom path: ")
 	return map[string][]settingOption{
-		"segmentation": build([]string{"diarization-segmentation"}, cfg.Diarization.SegmentationModel, customPrefix),
-		"embedding":    build([]string{"diarization-embedding-wespeaker", "diarization-embedding-campplus"}, cfg.Diarization.EmbeddingModel, customPrefix),
+		"diarization.segmentation_model": build([]string{"diarization-segmentation"}, cfg.Diarization.SegmentationModel, customPrefix),
+		"diarization.embedding_model":    build([]string{"diarization-embedding-wespeaker", "diarization-embedding-campplus"}, cfg.Diarization.EmbeddingModel, customPrefix),
+		"transcription.model_path":       build([]string{"gigaam-v3-e2e-rnnt-int8", "whisper-small-q5", "whisper-medium-q5", "whisper-large-v3-turbo-q5"}, cfg.Transcription.ModelPath, customPrefix),
+		"transcription.vad_model_path":   build([]string{"silero-vad"}, cfg.Transcription.VADModelPath, customPrefix),
 	}
 }

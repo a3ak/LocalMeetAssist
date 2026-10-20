@@ -36,7 +36,7 @@ func TestDiarizationModelChoices(t *testing.T) {
 	server := &Server{models: modelmanager.New(cfg, log.New(io.Discard, "", 0))}
 	choices := server.diarizationModelChoices(cfg)
 
-	embedding := choices["embedding"]
+	embedding := choices["diarization.embedding_model"]
 	if len(embedding) != 2 {
 		t.Fatalf("expected both embedding models, got %+v", embedding)
 	}
@@ -63,7 +63,7 @@ func TestDiarizationModelChoices(t *testing.T) {
 	cfg.Diarization.EmbeddingModel = "./models/diarization/wespeaker-resnet34-lm/voxceleb_resnet34_LM.onnx"
 	relative := server.diarizationModelChoices(cfg)
 	matched := false
-	for _, option := range relative["embedding"] {
+	for _, option := range relative["diarization.embedding_model"] {
 		if strings.HasPrefix(option.Label, "Свой путь") {
 			t.Fatalf("a relative path to a known model produced a custom option: %+v", option)
 		}
@@ -75,7 +75,29 @@ func TestDiarizationModelChoices(t *testing.T) {
 		}
 	}
 	if !matched {
-		t.Fatalf("the ResNet34 option is missing for a relative path: %+v", relative["embedding"])
+		t.Fatalf("the ResNet34 option is missing for a relative path: %+v", relative["diarization.embedding_model"])
+	}
+
+	// Транскрибация и VAD тоже списки: GigaAM, Whisper и Silero видны, чужие
+	// модели попадают в список как «Свой путь».
+	transcription := choices["transcription.model_path"]
+	if len(transcription) < 4 {
+		t.Fatalf("expected GigaAM and Whisper models, got %+v", transcription)
+	}
+	vad := choices["transcription.vad_model_path"]
+	if len(vad) != 1 || !strings.Contains(vad[0].Label, "Silero") {
+		t.Fatalf("unexpected VAD choices: %+v", vad)
+	}
+	cfg.Transcription.ModelPath = filepath.Join(dir, "custom-asr", "model.onnx")
+	customASR := server.diarizationModelChoices(cfg)
+	foundCustom := false
+	for _, option := range customASR["transcription.model_path"] {
+		if option.Value == cfg.Transcription.ModelPath && strings.HasPrefix(option.Label, "Свой путь") {
+			foundCustom = true
+		}
+	}
+	if !foundCustom {
+		t.Fatalf("a custom transcription model must be selectable: %+v", customASR["transcription.model_path"])
 	}
 
 	// Произвольный путь не теряется при сохранении формы.
@@ -83,13 +105,13 @@ func TestDiarizationModelChoices(t *testing.T) {
 	cfg.Diarization.EmbeddingModel = custom
 	customChoices := server.diarizationModelChoices(cfg)
 	found := false
-	for _, option := range customChoices["embedding"] {
+	for _, option := range customChoices["diarization.embedding_model"] {
 		if option.Value == custom && strings.HasPrefix(option.Label, "Свой путь") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("a custom path must stay selectable: %+v", customChoices["embedding"])
+		t.Fatalf("a custom path must stay selectable: %+v", customChoices["diarization.embedding_model"])
 	}
 }
 
@@ -105,4 +127,26 @@ func findSettingField(t *testing.T, groups []settingGroup, key string) settingFi
 	}
 	t.Fatalf("setting %q is not listed", key)
 	return settingField{}
+}
+
+// TestTranscriptionEngineFollowsModel keeps the model and its engine a pair:
+// choosing Whisper in the list must switch the engine, otherwise recognition
+// would use the wrong runtime.
+func TestTranscriptionEngineFollowsModel(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.ConfigFile = filepath.Join(dir, "config.toml")
+	config.ResolvePaths(&cfg, cfg.ConfigFile)
+	server := &Server{models: modelmanager.New(cfg, log.New(io.Discard, "", 0))}
+
+	cases := map[string]string{
+		"./models/whisper/ggml-small-q5_1.bin":     "whispercpp-native",
+		"./models/asr/gigaam-v3-e2e-rnnt-int8":     "gigaam-onnx",
+		"./models/custom/unknown-model/model.onnx": "",
+	}
+	for path, want := range cases {
+		if got := server.transcriptionEngineForPath(cfg, path); got != want {
+			t.Fatalf("engine for %q = %q, want %q", path, got, want)
+		}
+	}
 }

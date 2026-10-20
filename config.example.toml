@@ -62,6 +62,9 @@ llama_runtime_path = "./runtime/llama.cpp"
 # Только автоматический запуск после остановки записи; ручной запуск доступен всегда.
 auto_run = false
 engine = "gigaam-onnx"
+# Каталог GigaAM или файл Whisper GGML. Можно указать свою модель (абсолютный
+# путь или путь относительно этого файла): она появится в списке настроек как
+# «Свой путь» и должна принимать те же входы, что и штатная.
 model_path = "./models/asr/gigaam-v3-e2e-rnnt-int8"
 language = "ru"
 threads = 0
@@ -73,6 +76,7 @@ echo_dedup_enabled = true
 echo_time_tolerance_ms = 1500
 echo_text_similarity = 0.72
 vad_enabled = true
+# ONNX-модель Silero VAD; свою модель можно указать так же относительным путём.
 vad_model_path = "./models/vad/silero-v6.2/silero_vad.onnx"
 vad_threshold = 0.50
 vad_min_speech_ms = 250
@@ -87,6 +91,8 @@ mixed_fallback_enabled = true
 # Только автоматический запуск после успешной транскрибации.
 auto_run = false
 engine = "pyannote-wespeaker-onnx"
+# Обе модели можно заменить своими ONNX-файлами: они появятся в настройках
+# диаризации как «Свой путь». Формат входов и выходов должен совпадать со штатным.
 segmentation_model = "./models/diarization/pyannote-segmentation-3/model.onnx"
 embedding_model = "./models/diarization/wespeaker-resnet34-lm/voxceleb_resnet34_LM.onnx"
 # Если во встрече задано количество участников, оно имеет приоритет.

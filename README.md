@@ -187,6 +187,23 @@ sudo apt install build-essential pkg-config libx11-dev libayatana-appindicator3-
 
 Для PipeWire нужен PulseAudio-совместимый monitor-источник (`pipewire-pulse`). Точный набор пакетов зависит от дистрибутива и рабочего окружения.
 
+### Свои модели
+
+Список моделей в настройках не закрыт: любую модель можно прописать в `config.toml`, и она появится в выпадающем списке как «Свой путь: <файл>». Путь может быть абсолютным или относительным к самому `config.toml`.
+
+| Ключ | Что принимает |
+| --- | --- |
+| `transcription.model_path` | каталог GigaAM (ONNX и словарь) или файл Whisper GGML `.bin` |
+| `transcription.vad_model_path` | ONNX-модель Silero VAD |
+| `diarization.segmentation_model` | ONNX-модель сегментации pyannote |
+| `diarization.embedding_model` | ONNX-модель голосовых признаков WeSpeaker |
+| `summary.model_path` | файл GGUF для llama.cpp |
+| `inference.runtime_path`, `inference.whisper_runtime_path`, `inference.llama_runtime_path` | библиотека ONNX Runtime и каталоги нативных рантаймов |
+
+После правки конфига откройте «Настройки» — модель появится в списке; чтобы приложение её использовало, перезапустите его (сохранение любых настроек тоже перечитывает `config.toml`). Для модели распознавания движок переключается автоматически: Whisper включает `whispercpp-native`, GigaAM — `gigaam-onnx`.
+
+Приложение не проверяет формат своей модели: файл должен принимать те же входы и отдавать те же выходы, что и штатный. Несовместимую модель этап отклонит с ошибкой ONNX Runtime в журнале. Скачанные штатные модели остаются в списке, а нераспакованные показаны серым.
+
 ### Первый запуск
 
 1. Откройте **«Модели»** и скачайте ONNX Runtime.
@@ -522,6 +539,23 @@ sudo apt install build-essential pkg-config libx11-dev libayatana-appindicator3-
 ```
 
 PipeWire needs a PulseAudio-compatible monitor source (`pipewire-pulse`). Exact packages depend on your distribution and desktop environment.
+
+### Custom models
+
+The model list is not closed: point `config.toml` at any model and it appears in the settings dropdown as “Custom path: <file>”. The path may be absolute or relative to `config.toml` itself.
+
+| Key | Accepts |
+| --- | --- |
+| `transcription.model_path` | GigaAM directory (ONNX files and vocabulary) or a Whisper GGML `.bin` |
+| `transcription.vad_model_path` | Silero VAD ONNX model |
+| `diarization.segmentation_model` | pyannote segmentation ONNX model |
+| `diarization.embedding_model` | WeSpeaker voice embedding ONNX model |
+| `summary.model_path` | GGUF file for llama.cpp |
+| `inference.runtime_path`, `inference.whisper_runtime_path`, `inference.llama_runtime_path` | ONNX Runtime library and native runtime directories |
+
+After editing the config, open Settings — the model appears in the list; restart the application to actually use it (saving any setting also reloads `config.toml`). For a recognition model the engine follows automatically: Whisper selects `whispercpp-native`, GigaAM selects `gigaam-onnx`.
+
+The application does not validate a custom model: the file must accept the same inputs and produce the same outputs as the shipped one. An incompatible model makes the stage fail with an ONNX Runtime error in the log. Downloaded shipped models stay in the list, and ones that are not unpacked are shown in grey.
 
 ### First run
 
