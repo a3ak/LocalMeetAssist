@@ -260,6 +260,9 @@ typedef struct {
     AudioStreamBasicDescription source_format;
     unsigned int stream_first_buffer;
     int stream_interleaved;
+    // Частота, в которой CoreAudio реально отдаёт данные: у Bluetooth-гарнитуры
+    // тап заявляет 48 кГц, а поток идёт в частоте устройства (44.1 кГц).
+    double input_rate;
     double step;
     lm_tap_resampler resamplers[LM_TAP_MAX_CHANNELS];
     float* channel_scratch[LM_TAP_MAX_CHANNELS];
@@ -602,8 +605,19 @@ static int lm_tap_create_aggregate(lm_macos_capture* capture, char* error_text, 
         capture->aggregate_id = kAudioObjectUnknown;
         return -1;
     }
-    capture->step = capture->source_format.mSampleRate / (double)capture->target_rate;
+    // Шаг пересчёта считается по частоте агрегатного устройства: IOProc отдаёт
+    // кадры в его такте, даже если тап заявляет другую частоту.
+    capture->input_rate = capture->source_format.mSampleRate;
+    Float64 clock_rate = 0;
+    UInt32 clock_size = sizeof(clock_rate);
+    AudioObjectPropertyAddress rate_address = {kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    if (AudioObjectGetPropertyData(aggregate, &rate_address, 0, NULL, &clock_size, &clock_rate) == noErr && clock_rate > 0) {
+        capture->input_rate = clock_rate;
+    }
+    capture->step = capture->input_rate / (double)capture->target_rate;
     lm_tap_reset_resamplers(capture);
+    fprintf(stderr, "system audio tap: capturing %.0f Hz into %.0f Hz (step %.4f)\n",
+        capture->input_rate, (double)capture->target_rate, capture->step);
     return 0;
 }
 
