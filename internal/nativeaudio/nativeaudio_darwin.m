@@ -6,6 +6,7 @@
 #import <CoreAudio/CATapDescription.h>
 
 #include <math.h>
+#include <mach/mach_time.h>
 #include <pthread.h>
 #include <stdint.h>
 #include <string.h>
@@ -246,6 +247,9 @@ typedef struct {
     AudioDeviceIOProcID proc_id;
     // UID of the tap: the aggregate device refers to it by this string.
     NSString* tap_uid;
+    // UID of the output device the aggregate is currently built on: a repeated
+    // notification for the same device must not rebuild anything.
+    NSString* device_uid;
     // Set before the teardown so a queued device-change block does not rebuild.
     int stopping;
     AudioObjectPropertyListenerBlock device_listener;
@@ -264,6 +268,11 @@ typedef struct {
     // тап заявляет 48 кГц, а поток идёт в частоте устройства (44.1 кГц).
     double input_rate;
     double step;
+    // Выравнивание по времени хоста: между колбэками (и при пересоздании
+    // агрегата) CoreAudio может отдать больше или меньше данных, чем прошло
+    // времени. Лишнее пропускаем, недостающее дополняем тишиной, чтобы дорожка
+    // не уезжала относительно встречи.
+    uint64_t last_host_time;
     lm_tap_resampler resamplers[LM_TAP_MAX_CHANNELS];
     float* channel_scratch[LM_TAP_MAX_CHANNELS];
     int16_t* output_scratch;
@@ -322,6 +331,41 @@ static double lm_tap_sinc(double value)
 }
 
 // lm_tap_write resamples the pending buffer and writes it to the WAV sink.
+// lm_tap_ticks_per_second converts mach host time ticks into seconds.
+static double lm_tap_ticks_per_second(void)
+{
+    static double cached = 0;
+    if (cached > 0) return cached;
+    mach_timebase_info_data_t info;
+    if (mach_timebase_info(&info) != KERN_SUCCESS || info.denom == 0) {
+        cached = 1e9;
+        return cached;
+    }
+    cached = 1e9 * (double)info.denom / (double)info.numer;
+    return cached;
+}
+
+// lm_tap_write_silence pads the output so a gap in delivery keeps the track
+// aligned with the meeting timeline.
+static void lm_tap_write_silence(lm_macos_capture* capture, size_t input_frames)
+{
+    if (capture->step <= 0) return;
+    size_t frames = (size_t)((double)input_frames / capture->step);
+    if (frames == 0) return;
+    memset(capture->output_scratch, 0, capture->output_capacity * sizeof(int16_t));
+    while (frames > 0) {
+        size_t chunk = frames;
+        size_t room = capture->output_capacity / capture->channels;
+        if (chunk > room) chunk = room;
+        if (lm_platform_wav_write(capture->sink, capture->output_scratch, chunk * capture->channels * sizeof(int16_t)) != 0) {
+            lm_macos_capture_fail(capture, "Ошибка записи системного аудио в WAV");
+            return;
+        }
+        capture->frames_written += (uint64_t)chunk;
+        frames -= chunk;
+    }
+}
+
 static void lm_tap_flush(lm_macos_capture* capture)
 {
     if (capture->failed || capture->sink == NULL) return;
@@ -412,36 +456,64 @@ static void lm_tap_flush(lm_macos_capture* capture)
 }
 
 // lm_tap_handle_audio converts one IO callback buffer into the WAV sink.
-static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList* input)
+static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList* input, uint64_t host_time)
 {
     if (capture->failed || capture->sink == NULL || input == NULL) return;
+    // Пересоздание агрегата меняет формат, шаг и буферы; без блокировки
+    // обратный вызов мог бы прочитать наполовину обновлённое состояние.
+    pthread_mutex_lock(&capture->lock);
     const AudioStreamBasicDescription* format = &capture->source_format;
-    if (format->mChannelsPerFrame == 0) return;
+    if (format->mChannelsPerFrame == 0) {
+        pthread_mutex_unlock(&capture->lock);
+        return;
+    }
     int interleaved = capture->stream_interleaved;
     unsigned int first_buffer = capture->stream_first_buffer;
     unsigned int needed_buffers = interleaved ? first_buffer + 1 : first_buffer + format->mChannelsPerFrame;
     if (input->mNumberBuffers < needed_buffers) {
         lm_macos_capture_fail(capture, "CoreAudio вернул неполный список аудиобуферов");
+        pthread_mutex_unlock(&capture->lock);
         return;
     }
     size_t frame_bytes = interleaved ? format->mBytesPerFrame : (format->mBitsPerChannel / 8);
-    if (frame_bytes == 0) return;
-    size_t frames = input->mBuffers[first_buffer].mDataByteSize / frame_bytes;
-    if (frames == 0) return;
+    size_t frames = frame_bytes > 0 ? input->mBuffers[first_buffer].mDataByteSize / frame_bytes : 0;
+    if (frames == 0) {
+        pthread_mutex_unlock(&capture->lock);
+        return;
+    }
+    size_t skip = 0;
+    if (host_time != 0 && capture->last_host_time != 0 && capture->input_rate > 0) {
+        double elapsed = (double)(host_time - capture->last_host_time) / lm_tap_ticks_per_second();
+        double expected = elapsed * capture->input_rate;
+        double delta = (double)frames - expected;
+        double tolerance = 0.08 * capture->input_rate;
+        if (delta > tolerance) {
+            skip = (size_t)(delta > (double)frames ? (double)frames : delta);
+        } else if (delta < -tolerance) {
+            lm_tap_write_silence(capture, (size_t)(-delta));
+        }
+    }
+    capture->last_host_time = host_time;
+    if (skip >= frames) {
+        pthread_mutex_unlock(&capture->lock);
+        return;
+    }
+    frames -= skip;
     for (unsigned int channel = 0; channel < capture->channels; channel++) {
         lm_tap_resampler* resampler = &capture->resamplers[channel];
         float* scratch = capture->channel_scratch[channel];
         unsigned int source_channel = channel < format->mChannelsPerFrame ? channel : format->mChannelsPerFrame - 1;
         for (size_t frame = 0; frame < frames; frame++) {
+            size_t source_frame = frame + skip;
             float value;
             if (capture->channels == 1 && format->mChannelsPerFrame > 1) {
                 float mixed = 0.0f;
                 for (unsigned int other = 0; other < format->mChannelsPerFrame; other++) {
-                    mixed += lm_read_stream_sample(input, first_buffer, format, interleaved, frame, other);
+                    mixed += lm_read_stream_sample(input, first_buffer, format, interleaved, source_frame, other);
                 }
                 value = mixed / (float)format->mChannelsPerFrame;
             } else {
-                value = lm_read_stream_sample(input, first_buffer, format, interleaved, frame, source_channel);
+                value = lm_read_stream_sample(input, first_buffer, format, interleaved, source_frame, source_channel);
             }
             scratch[frame] = value;
         }
@@ -451,6 +523,7 @@ static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList
         resampler->pending_frames += (int)frames;
     }
     lm_tap_flush(capture);
+    pthread_mutex_unlock(&capture->lock);
 }
 
 // lm_tap_default_output_uid returns the UID of the current default output device.
@@ -588,6 +661,10 @@ static int lm_tap_create_aggregate(lm_macos_capture* capture, char* error_text, 
         return -1;
     }
     capture->aggregate_id = aggregate;
+    if (capture->device_uid != nil) {
+        [capture->device_uid release];
+    }
+    capture->device_uid = [uid copy];
     if (lm_tap_read_tap_format(capture->tap_id, &capture->source_format) != 0 || capture->source_format.mSampleRate <= 0) {
         lm_macos_error(error_text, error_size, @"Не удалось определить формат системного звука");
         AudioHardwareDestroyAggregateDevice(aggregate);
@@ -626,8 +703,10 @@ static int lm_tap_start_io(lm_macos_capture* capture, char* error_text, size_t e
 {
     OSStatus status = AudioDeviceCreateIOProcIDWithBlock(&capture->proc_id, capture->aggregate_id, NULL,
         ^(const AudioTimeStamp* now, const AudioBufferList* input, const AudioTimeStamp* inputTime, AudioBufferList* outputData, const AudioTimeStamp* outputTime) {
-            (void)now; (void)inputTime; (void)outputData; (void)outputTime;
-            lm_tap_handle_audio(capture, input);
+            (void)inputTime; (void)outputData; (void)outputTime;
+            uint64_t host_time = now != NULL ? now->mHostTime : 0;
+            if (host_time == 0 && inputTime != NULL) host_time = inputTime->mHostTime;
+            lm_tap_handle_audio(capture, input, host_time);
         });
     if (status != noErr || capture->proc_id == NULL) {
         lm_macos_error(error_text, error_size, [NSString stringWithFormat:@"Не удалось создать IOProc системного звука (OSStatus=%d)", (int)status]);
@@ -658,17 +737,27 @@ static void lm_tap_stop_io(lm_macos_capture* capture)
 static void lm_tap_rebuild(lm_macos_capture* capture)
 {
     pthread_mutex_lock(&capture->lock);
-    if (!capture->stopping && capture->sink != NULL) {
+    NSString* current = lm_tap_default_output_uid();
+    int unchanged = current != nil && capture->device_uid != nil && [current isEqualToString:capture->device_uid];
+    if (!unchanged && !capture->stopping && capture->sink != NULL) {
         lm_tap_stop_io(capture);
         if (capture->aggregate_id != kAudioObjectUnknown) {
             AudioHardwareDestroyAggregateDevice(capture->aggregate_id);
             capture->aggregate_id = kAudioObjectUnknown;
         }
         char error[512] = {0};
+        uint64_t rebuild_started = mach_absolute_time();
         if (lm_tap_create_aggregate(capture, error, sizeof(error)) != 0) {
             lm_macos_capture_fail(capture, error);
         } else if (lm_tap_start_io(capture, error, sizeof(error)) != 0) {
             lm_macos_capture_fail(capture, error);
+        } else {
+            // Пока агрегат пересоздавался, звук не захватывался. Дописываем эту
+            // паузу тишиной, иначе дорожка сдвинется относительно встречи.
+            double downtime = (double)(mach_absolute_time() - rebuild_started) / lm_tap_ticks_per_second();
+            if (downtime > 0.02 && capture->input_rate > 0) {
+                lm_tap_write_silence(capture, (size_t)(downtime * capture->input_rate));
+            }
         }
     }
     pthread_mutex_unlock(&capture->lock);
@@ -685,6 +774,10 @@ static void lm_tap_free(lm_macos_capture* capture)
     if (capture->tap_uid != nil) {
         [capture->tap_uid release];
         capture->tap_uid = nil;
+    }
+    if (capture->device_uid != nil) {
+        [capture->device_uid release];
+        capture->device_uid = nil;
     }
     if (capture->queue != NULL) {
         dispatch_release(capture->queue);
