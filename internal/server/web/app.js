@@ -955,7 +955,11 @@ async function openDetail(uid, preserveTab = false) {
     const metaParts = [fmtFullDay(meeting.started_at), `${fmtClock(interval.start)}–${fmtClock(interval.end)}`, durationText];
     if (meeting.speaker_count > 0) metaParts.push(participantsLabel(meeting.speaker_count));
     $("#detailMeta").textContent = metaParts.join(" · ");
-    renderStatusStrip(meeting.status, meeting.processing_stage, meeting.last_error, meeting.metadata?.audio_warning);
+    const restoredFromMixed = meeting.metadata?.audio_restored_from_mixed === "true"
+      || meeting.metadata?.audio_import_type === "mixed";
+    const audioWarning = meeting.metadata?.audio_warning
+      || (restoredFromMixed ? t("detail.audioRestoredFromMixed") : "");
+    renderStatusStrip(meeting.status, meeting.processing_stage, meeting.last_error, audioWarning);
     // Счётчик спикеров на вкладке: он подсказывает, есть ли что смотреть.
     const speakerCount = Number(meeting.speaker_count || 0);
     const speakersBadge = $("#speakersTabCount");

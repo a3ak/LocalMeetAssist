@@ -290,7 +290,7 @@ func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) 
 			textSetting("storage.file_name_template", "Шаблон имени", "Поддерживает date, time, title_slug, uid_short и artifact_type в двойных фигурных скобках.", cfg.Storage.FileNameTemplate),
 			textSetting("storage.date_format", "Формат даты", "Формат Go time, например 2006-01-02.", cfg.Storage.DateFormat),
 			textSetting("storage.time_format", "Формат времени", "Формат Go time, например 15-04-05.", cfg.Storage.TimeFormat),
-			selectSetting("storage.audio_after_processing", "После обработки", "По умолчанию WAV сохраняются. opus — сохранить общий Ogg/Opus и удалить WAV только после успешного пайплайна; delete — удалить звук.", cfg.Storage.AudioAfterProcessing, option("wav", "Все WAV (по умолчанию)"), option("opus", "Ogg/Opus"), option("delete", "Удалить звук"), option("mp3", "MP3 (внешний encoder)")),
+			selectSetting("storage.audio_after_processing", "После обработки", "По умолчанию WAV сохраняются. opus — сохранить общий Ogg/Opus и удалить WAV только после успешного пайплайна; повторная обработка тогда идёт по общему потоку, раздельные дорожки теряются. delete — удалить звук.", cfg.Storage.AudioAfterProcessing, option("wav", "Все WAV (по умолчанию)"), option("opus", "Ogg/Opus"), option("delete", "Удалить звук"), option("mp3", "MP3 (внешний encoder)")),
 			intSetting("storage.opus_bitrate_kbps", "Opus, кбит/с", "Битрейт встроенного Go-кодировщика.", cfg.Storage.OpusBitrateKbps),
 			intSetting("storage.mp3_bitrate_kbps", "MP3, кбит/с", "Используется только для политики mp3.", cfg.Storage.MP3BitrateKbps),
 			textSetting("storage.encoder_command", "MP3 encoder", "Путь к внешнему LAME; для Opus не нужен.", cfg.Storage.EncoderCommand),

@@ -193,7 +193,7 @@ var settingFieldsEN = map[string]settingTextEN{
 	"storage.file_name_template":     {"Name template", "Supports date, time, title_slug, uid_short and artifact_type in double curly braces."},
 	"storage.date_format":            {"Date format", "Go time format, for example 2006-01-02."},
 	"storage.time_format":            {"Time format", "Go time format, for example 15-04-05."},
-	"storage.audio_after_processing": {"After processing", "WAV files are kept by default. opus — keep the mixed Ogg/Opus and delete WAV only after a successful pipeline; delete — remove audio."},
+	"storage.audio_after_processing": {"After processing", "WAV files are kept by default. opus keeps one Ogg/Opus file and removes the WAVs after a successful pipeline, so reprocessing uses the mixed stream and the separate tracks are lost. delete removes the audio."},
 	"storage.opus_bitrate_kbps":      {"Opus, kbps", "Bitrate of the built-in Go encoder."},
 	"storage.mp3_bitrate_kbps":       {"MP3, kbps", "Used only for the mp3 policy."},
 	"storage.encoder_command":        {"MP3 encoder", "Path to an external LAME; not needed for Opus."},

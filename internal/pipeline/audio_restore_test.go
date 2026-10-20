@@ -68,6 +68,29 @@ func TestEnsureCanonicalAudioRestoresOpusOnlyMeeting(t *testing.T) {
 	if updated.Metadata["audio_import_sources"] != "mixed" || updated.Metadata["transcription_source_mode"] != "mixed" {
 		t.Fatalf("unexpected restored metadata: %+v", updated.Metadata)
 	}
+	// Пометка обязательна: общий поток записан в system.wav, микрофон — тишина,
+	// и интерфейс должен предупредить, а не показывать ложные дорожки.
+	if updated.Metadata["audio_restored_from_mixed"] != "true" {
+		t.Fatalf("the restored meeting is not marked: %+v", updated.Metadata)
+	}
+	artifacts, err := st.Artifacts(meeting.UID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mixed, fakeSystem, fakeMicrophone bool
+	for _, artifact := range artifacts {
+		switch artifact.Type {
+		case "mixed_wav":
+			mixed = artifact.Path == systemPath
+		case "system_wav":
+			fakeSystem = true
+		case "mic_wav":
+			fakeMicrophone = true
+		}
+	}
+	if !mixed || fakeSystem || fakeMicrophone {
+		t.Fatalf("restored artifacts must be listed as mixed only: mixed=%v system=%v microphone=%v", mixed, fakeSystem, fakeMicrophone)
+	}
 	if _, err := os.Stat(opusPath); err != nil {
 		t.Fatalf("source Opus was removed: %v", err)
 	}

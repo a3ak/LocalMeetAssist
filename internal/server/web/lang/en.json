@@ -368,5 +368,6 @@
   "speakers.addSpeaker": "New speaker",
   "speakers.newSpeakerName": "Speaker {n}",
   "speakers.newSpeakerHint": "New speaker: select fragments and press “Move selected”",
-  "speakers.noFragments": "No fragments"
+  "speakers.noFragments": "No fragments",
+  "detail.audioRestoredFromMixed": "Audio was restored from the mixed stream: the separate microphone and system tracks are unavailable. The transcript is kept."
 }

@@ -704,6 +704,7 @@ func (r *Runner) ensureCanonicalAudio(meeting *model.Meeting, micPath, sysPath s
 	if meeting.Metadata == nil {
 		meeting.Metadata = make(map[string]string)
 	}
+	restoredFromMixed := false
 	if micValid && !sysValid {
 		if err := audio.CreateSilentPCM16WAVLike(micPath, sysPath); err != nil {
 			return false, fmt.Errorf("could not create the system WAV companion: %w", err)
@@ -744,11 +745,27 @@ func (r *Runner) ensureCanonicalAudio(meeting *model.Meeting, micPath, sysPath s
 		meeting.Metadata["audio_import_sources"] = "mixed"
 		meeting.Metadata["audio_import_type"] = "mixed"
 		meeting.Metadata["transcription_source_mode"] = "mixed"
-		r.logger.Printf("compressed audio restored uid=%s source=%q microphone=%q system=%q", meeting.UID, compressed, micPath, sysPath)
+		// Отдельных дорожек больше нет: общий поток записан в system.wav, а
+		// microphone.wav — тишина-заглушка. Без пометки интерфейс показывал бы
+		// общий поток как «системный звук», а микрофон — как пустую дорожку.
+		meeting.Metadata["audio_restored_from_mixed"] = "true"
+		restoredFromMixed = true
+		appLogging.Warnf(r.logger, "audio restored from the mixed stream, separate tracks are unavailable uid=%s source=%q", meeting.UID, compressed)
 	}
 	meeting.UpdatedAt = time.Now()
 	if err := r.store.SaveMeeting(*meeting); err != nil {
 		return false, err
+	}
+	// metadata.json читается при старте: без него reconciler не увидит пометку
+	// о восстановлении из общего потока.
+	if dir := r.meetingDir(*meeting); dir != "" {
+		_ = writeMetadata(filepath.Join(dir, "metadata.json"), *meeting)
+	}
+	if restoredFromMixed {
+		// Общий поток регистрируется как mixed, чтобы в интерфейсе не появилась
+		// ложная «системная» дорожка с голосом владельца.
+		_, _ = r.addArtifact(meeting.UID, "mixed_wav", sysPath, "audio/wav", "restored")
+		return true, nil
 	}
 	_, _ = r.addArtifact(meeting.UID, "mic_wav", micPath, "audio/wav", "restored")
 	_, _ = r.addArtifact(meeting.UID, "system_wav", sysPath, "audio/wav", "restored")

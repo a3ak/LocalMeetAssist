@@ -368,5 +368,6 @@
   "speakers.addSpeaker": "Новый спикер",
   "speakers.newSpeakerName": "Спикер {n}",
   "speakers.newSpeakerHint": "Новый спикер: выделите фрагменты и нажмите «Переместить выбранные»",
-  "speakers.noFragments": "Нет фрагментов"
+  "speakers.noFragments": "Нет фрагментов",
+  "detail.audioRestoredFromMixed": "Аудио восстановлено из общего потока: раздельные дорожки микрофона и системного звука недоступны. Транскрипт сохранён."
 }
