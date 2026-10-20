@@ -44,6 +44,12 @@ int lm_audio_stop(lm_capture* capture, char* error_text, size_t error_size);
 // monitor source). Returns 0 while running, 1 when it was just restored, 2 when
 // it is lost and cannot be restored.
 int lm_audio_system_health(lm_capture* capture);
+
+// Микрофон на macOS: статус доступа (0 не определён, 1 ограничен, 2 запрещён,
+// 3 разрешён) и запрос доступа, если бандл объясняет причину. Запрос возвращает
+// -1, когда спросить нельзя (обычный бинарник без Info.plist).
+int lm_macos_microphone_status(void);
+int lm_macos_microphone_request(void);
 int lm_audio_activity(int* microphone_active, int* system_active, char* error_text, size_t error_size);
 int lm_audio_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size);
 const char* lm_audio_backend_name(void);

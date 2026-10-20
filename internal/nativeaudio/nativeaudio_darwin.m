@@ -254,7 +254,12 @@ typedef struct {
     void* sink;
     unsigned int channels;
     unsigned int target_rate;
+    // Формат самого тапа, а не агрегатного устройства: если у устройства вывода
+    // есть микрофон (гарнитура, USB-аудио), первым входным потоком агрегата идёт
+    // он, и формат устройства описывает микрофон.
     AudioStreamBasicDescription source_format;
+    unsigned int stream_first_buffer;
+    int stream_interleaved;
     double step;
     lm_tap_resampler resamplers[LM_TAP_MAX_CHANNELS];
     float* channel_scratch[LM_TAP_MAX_CHANNELS];
@@ -287,11 +292,12 @@ static int16_t lm_float_to_s16(float value)
     return (int16_t)lrintf(value < 0 ? value * 32768.0f : value * 32767.0f);
 }
 
-static float lm_read_sample(const AudioBufferList* list, const AudioStreamBasicDescription* format, size_t frame, unsigned int channel)
+// lm_read_stream_sample reads one sample of the stream that starts at the given
+// buffer, so the microphone buffers of an aggregate device are ignored.
+static float lm_read_stream_sample(const AudioBufferList* list, unsigned int first_buffer, const AudioStreamBasicDescription* format, int interleaved, size_t frame, unsigned int channel)
 {
-    int non_interleaved = (format->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
-    const AudioBuffer* buffer = non_interleaved ? &list->mBuffers[channel] : &list->mBuffers[0];
-    size_t index = non_interleaved ? frame : frame * format->mChannelsPerFrame + channel;
+    const AudioBuffer* buffer = interleaved ? &list->mBuffers[first_buffer] : &list->mBuffers[first_buffer + channel];
+    size_t index = interleaved ? frame * format->mChannelsPerFrame + channel : frame;
     if ((format->mFormatFlags & kAudioFormatFlagIsFloat) != 0 && format->mBitsPerChannel == 32) {
         return ((const float*)buffer->mData)[index];
     }
@@ -408,13 +414,16 @@ static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList
     if (capture->failed || capture->sink == NULL || input == NULL) return;
     const AudioStreamBasicDescription* format = &capture->source_format;
     if (format->mChannelsPerFrame == 0) return;
-    int non_interleaved = (format->mFormatFlags & kAudioFormatFlagIsNonInterleaved) != 0;
-    unsigned int needed_buffers = non_interleaved ? format->mChannelsPerFrame : 1;
+    int interleaved = capture->stream_interleaved;
+    unsigned int first_buffer = capture->stream_first_buffer;
+    unsigned int needed_buffers = interleaved ? first_buffer + 1 : first_buffer + format->mChannelsPerFrame;
     if (input->mNumberBuffers < needed_buffers) {
         lm_macos_capture_fail(capture, "CoreAudio вернул неполный список аудиобуферов");
         return;
     }
-    size_t frames = input->mBuffers[0].mDataByteSize / format->mBytesPerFrame;
+    size_t frame_bytes = interleaved ? format->mBytesPerFrame : (format->mBitsPerChannel / 8);
+    if (frame_bytes == 0) return;
+    size_t frames = input->mBuffers[first_buffer].mDataByteSize / frame_bytes;
     if (frames == 0) return;
     for (unsigned int channel = 0; channel < capture->channels; channel++) {
         lm_tap_resampler* resampler = &capture->resamplers[channel];
@@ -425,11 +434,11 @@ static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList
             if (capture->channels == 1 && format->mChannelsPerFrame > 1) {
                 float mixed = 0.0f;
                 for (unsigned int other = 0; other < format->mChannelsPerFrame; other++) {
-                    mixed += lm_read_sample(input, format, frame, other);
+                    mixed += lm_read_stream_sample(input, first_buffer, format, interleaved, frame, other);
                 }
                 value = mixed / (float)format->mChannelsPerFrame;
             } else {
-                value = lm_read_sample(input, format, frame, source_channel);
+                value = lm_read_stream_sample(input, first_buffer, format, interleaved, frame, source_channel);
             }
             scratch[frame] = value;
         }
@@ -458,12 +467,86 @@ static NSString* lm_tap_default_output_uid(void)
     return result;
 }
 
-// lm_tap_read_format reads the input format of a device, falling back to the tap.
-static int lm_tap_read_aggregate_format(AudioObjectID aggregate, AudioStreamBasicDescription* format)
+// lm_tap_read_tap_format reads the format the tap itself produces.
+static int lm_tap_read_tap_format(AudioObjectID tap, AudioStreamBasicDescription* format)
 {
-    AudioObjectPropertyAddress address = {kAudioDevicePropertyStreamFormat, kAudioDevicePropertyScopeInput, kAudioObjectPropertyElementMain};
+    AudioObjectPropertyAddress address = {kAudioTapPropertyFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
     UInt32 size = sizeof(*format);
-    if (AudioObjectGetPropertyData(aggregate, &address, 0, NULL, &size, format) != noErr) return -1;
+    if (AudioObjectGetPropertyData(tap, &address, 0, NULL, &size, format) != noErr) return -1;
+    return format->mChannelsPerFrame > 0 ? 0 : -1;
+}
+
+// lm_tap_find_tap_stream finds the buffer of the tap inside the aggregate's input
+// buffer list. A stream occupies one buffer when interleaved and one buffer per
+// channel otherwise, so the tap's offset is the sum of the streams before it.
+// The tap is added after the sub-devices, so the last matching stream wins.
+static int lm_tap_find_tap_stream(lm_macos_capture* capture, char* error_text, size_t error_size)
+{
+    AudioObjectPropertyAddress list_address = {kAudioDevicePropertyStreams, kAudioDevicePropertyScopeInput, kAudioObjectPropertyElementMain};
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(capture->aggregate_id, &list_address, 0, NULL, &size) != noErr || size < sizeof(AudioStreamID)) {
+        lm_macos_error(error_text, error_size, @"Не удалось получить входные потоки агрегатного устройства");
+        return -1;
+    }
+    unsigned int count = size / sizeof(AudioStreamID);
+    AudioStreamID* streams = (AudioStreamID*)malloc(size);
+    if (streams == NULL) {
+        lm_macos_error(error_text, error_size, @"Недостаточно памяти для потоков агрегатного устройства");
+        return -1;
+    }
+    if (AudioObjectGetPropertyData(capture->aggregate_id, &list_address, 0, NULL, &size, streams) != noErr) {
+        free(streams);
+        lm_macos_error(error_text, error_size, @"Не удалось получить входные потоки агрегатного устройства");
+        return -1;
+    }
+    const AudioStreamBasicDescription tap = capture->source_format;
+    unsigned int offset = 0;
+    int chosen_offset = -1;
+    int chosen_interleaved = 1;
+    AudioStreamBasicDescription chosen_format = tap;
+    int last_offset = 0;
+    int last_interleaved = 1;
+    AudioStreamBasicDescription last_format = tap;
+    unsigned int last_channels = 0;
+    for (unsigned int index = 0; index < count; index++) {
+        AudioObjectPropertyAddress format_address = {kAudioStreamPropertyVirtualFormat, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+        AudioStreamBasicDescription stream = {0};
+        UInt32 format_size = sizeof(stream);
+        if (AudioObjectGetPropertyData(streams[index], &format_address, 0, NULL, &format_size, &stream) != noErr) {
+            stream = tap;
+        }
+        int interleaved = (stream.mFormatFlags & kAudioFormatFlagIsNonInterleaved) == 0;
+        if (stream.mSampleRate == tap.mSampleRate &&
+            stream.mChannelsPerFrame == tap.mChannelsPerFrame &&
+            stream.mBytesPerFrame == tap.mBytesPerFrame) {
+            chosen_offset = (int)offset;
+            chosen_interleaved = interleaved;
+            chosen_format = stream;
+        }
+        last_offset = (int)offset;
+        last_interleaved = interleaved;
+        last_format = stream;
+        last_channels = stream.mChannelsPerFrame;
+        offset += interleaved ? 1 : (stream.mChannelsPerFrame > 0 ? stream.mChannelsPerFrame : 1);
+    }
+    free(streams);
+    if (chosen_offset < 0) {
+        // Формат мог измениться из-за дрейф-компенсации: берём последний поток,
+        // он принадлежит тапу, и сообщаем об этом в лог.
+        chosen_offset = last_offset;
+        chosen_interleaved = last_interleaved;
+        chosen_format = last_format;
+        fprintf(stderr, "system audio tap: stream format %.0f Hz %u ch differs from the tap (%.0f Hz %u ch), using the last stream of %u ch\n",
+            chosen_format.mSampleRate, chosen_format.mChannelsPerFrame, tap.mSampleRate, tap.mChannelsPerFrame, last_channels);
+    }
+    // Дальше декодируем и пересчитываем по формату выбранного потока: при
+    // дрейф-компенсации CoreAudio может отдавать тап в частоте суб-устройства.
+    capture->source_format = chosen_format;
+    capture->stream_first_buffer = (unsigned int)chosen_offset;
+    capture->stream_interleaved = chosen_interleaved;
+    fprintf(stderr, "system audio tap: %.0f Hz %u ch, buffer %u of %u, interleaved=%d\n",
+        capture->source_format.mSampleRate, capture->source_format.mChannelsPerFrame,
+        capture->stream_first_buffer, count, chosen_interleaved);
     return 0;
 }
 
@@ -502,8 +585,19 @@ static int lm_tap_create_aggregate(lm_macos_capture* capture, char* error_text, 
         return -1;
     }
     capture->aggregate_id = aggregate;
-    if (lm_tap_read_aggregate_format(aggregate, &capture->source_format) != 0 || capture->source_format.mSampleRate <= 0) {
+    if (lm_tap_read_tap_format(capture->tap_id, &capture->source_format) != 0 || capture->source_format.mSampleRate <= 0) {
         lm_macos_error(error_text, error_size, @"Не удалось определить формат системного звука");
+        AudioHardwareDestroyAggregateDevice(aggregate);
+        capture->aggregate_id = kAudioObjectUnknown;
+        return -1;
+    }
+    if (lm_tap_find_tap_stream(capture, error_text, error_size) != 0) {
+        AudioHardwareDestroyAggregateDevice(aggregate);
+        capture->aggregate_id = kAudioObjectUnknown;
+        return -1;
+    }
+    if (capture->source_format.mSampleRate <= 0) {
+        lm_macos_error(error_text, error_size, @"Не удалось определить частоту системного звука");
         AudioHardwareDestroyAggregateDevice(aggregate);
         capture->aggregate_id = kAudioObjectUnknown;
         return -1;

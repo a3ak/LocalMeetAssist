@@ -733,6 +733,22 @@ lm_capture* lm_audio_start(
         free(capture);
         return NULL;
     }
+#if defined(__APPLE__)
+    // Без доступа к микрофону CoreAudio отдаёт тишину без ошибки, и встреча
+    // остаётся без голоса владельца. Запрещённый доступ лучше показать сразу.
+    {
+        int permission = lm_macos_microphone_request();
+        if (permission < 0) {
+            fprintf(stderr, "microphone: permission is not confirmed for this binary; if the microphone track stays silent, grant microphone access to the terminal or run the app bundle\n");
+        }
+        if (permission == 1 || permission == 2) {
+            lm_set_error(error_text, error_size, "microphone access is denied: allow LocalMeetAssist in System Settings > Privacy & Security > Microphone");
+            lm_cleanup_capture(capture);
+            free(capture);
+            return NULL;
+        }
+    }
+#endif
     if (lm_init_microphone(capture, microphone_id, sample_rate, channels, error_text, error_size) != 0) {
         lm_cleanup_capture(capture);
         free(capture);

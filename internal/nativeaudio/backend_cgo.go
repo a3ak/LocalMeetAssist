@@ -16,7 +16,7 @@ package nativeaudio
 // scripts/make-app.sh экспортирует MACOSX_DEPLOYMENT_TARGET=14.2 и глушит
 // предупреждения через -extldflags=-Wl,-w.
 #cgo darwin CFLAGS: -fblocks
-#cgo darwin LDFLAGS: -framework AppKit -framework Foundation -framework CoreAudio -framework AudioToolbox
+#cgo darwin LDFLAGS: -framework AppKit -framework Foundation -framework CoreAudio -framework AudioToolbox -framework AVFoundation
 #include <stdlib.h>
 #include "nativeaudio.h"
 // Declared here as well, so the cgo binding does not depend on the header
