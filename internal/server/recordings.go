@@ -13,6 +13,7 @@ import (
 	"localmeetassist/internal/config"
 	appLogging "localmeetassist/internal/logging"
 	"localmeetassist/internal/model"
+	"localmeetassist/internal/recording"
 	"localmeetassist/internal/uuidv7"
 )
 
@@ -159,12 +160,12 @@ func (s *Server) stopMeetingRecording(uid string) (model.Meeting, error) {
 	m.UpdatedAt = now
 	// Потеря системного звука — предупреждение, а не конец встречи: запись
 	// микрофона целая, а собеседники могли пропасть только с какого-то момента.
-	if event, at := session.SystemIssue(); event != "" {
+	if warnings := audioWarnings(s.config().App.Language, session); len(warnings) > 0 {
 		if m.Metadata == nil {
 			m.Metadata = make(map[string]string)
 		}
-		m.Metadata["audio_warning"] = audioWarningText(s.config().App.Language, event, at)
-		appLogging.Warnf(s.logger, "meeting audio warning uid=%s event=%s at=%s", uid, event, at.Format(time.RFC3339))
+		m.Metadata["audio_warning"] = strings.Join(warnings, " ")
+		appLogging.Warnf(s.logger, "meeting audio warning uid=%s text=%q", uid, m.Metadata["audio_warning"])
 	}
 	if err := s.store.SaveMeeting(m); err != nil {
 		return m, err
@@ -176,20 +177,50 @@ func (s *Server) stopMeetingRecording(uid string) (model.Meeting, error) {
 
 // audioWarningText renders the system audio event for the meeting card. The
 // native layer reports a code, so the text follows the interface language.
-func audioWarningText(language, event string, at time.Time) string {
+func audioWarningText(language, source, event string, at time.Time) string {
 	stamp := at.Format("15:04")
+	microphone := source == "microphone"
 	switch event {
 	case "lost":
+		if microphone {
+			return config.Localized(language,
+				"Микрофон потерян в "+stamp+": входное устройство недоступно, ваш голос мог не записаться.",
+				"The microphone was lost at "+stamp+": the input device became unavailable, so your voice may be missing.")
+		}
 		return config.Localized(language,
 			"Системный звук потерян в "+stamp+": устройство вывода недоступно, голоса собеседников могли не записаться.",
 			"System audio was lost at "+stamp+": the output device became unavailable, so remote voices may be missing.")
 	case "restored":
+		if microphone {
+			return config.Localized(language,
+				"Микрофон пересоздан в "+stamp+" после смены входного устройства — в записи возможен короткий провал.",
+				"The microphone was recreated at "+stamp+" after the input device changed — a short gap in the recording is possible.")
+		}
 		return config.Localized(language,
 			"Системный звук пересоздан в "+stamp+" после смены устройства вывода — в записи возможен короткий провал.",
 			"System audio was recreated at "+stamp+" after the output device changed — a short gap in the recording is possible.")
 	default:
 		return ""
 	}
+}
+
+// audioWarnings renders every capture problem of the finished session.
+func audioWarnings(language string, session *recording.Session) []string {
+	var warnings []string
+	if session == nil {
+		return warnings
+	}
+	if event, at := session.SystemIssue(); event != "" {
+		if text := audioWarningText(language, "system", event, at); text != "" {
+			warnings = append(warnings, text)
+		}
+	}
+	if event, at := session.MicrophoneIssue(); event != "" {
+		if text := audioWarningText(language, "microphone", event, at); text != "" {
+			warnings = append(warnings, text)
+		}
+	}
+	return warnings
 }
 
 // StopActiveRecording finalizes WAV headers during a controlled application
@@ -221,11 +252,11 @@ func (s *Server) StopActiveRecording(ctx context.Context) error {
 	meeting.ProcessingStage = "shutdown_finalization"
 	// Приложение закрывают во время записи: предупреждение о потере системного
 	// звука тоже нужно сохранить.
-	if event, at := session.SystemIssue(); event != "" {
+	if warnings := audioWarnings(s.config().App.Language, session); len(warnings) > 0 {
 		if meeting.Metadata == nil {
 			meeting.Metadata = make(map[string]string)
 		}
-		meeting.Metadata["audio_warning"] = audioWarningText(s.config().App.Language, event, at)
+		meeting.Metadata["audio_warning"] = strings.Join(warnings, " ")
 	}
 	if saveErr := s.store.SaveMeeting(meeting); saveErr != nil {
 		return saveErr

@@ -38,6 +38,7 @@ type Backend struct{}
 type Session interface {
 	Stop() error
 	SystemHealth() SystemHealth
+	MicrophoneHealth() SystemHealth
 }
 
 // SystemHealth is the state of the system capture stream.
@@ -54,6 +55,9 @@ type Capture struct{}
 
 // SystemHealth reports the system stream state; the stub has no capture.
 func (capture *Capture) SystemHealth() SystemHealth { return SystemOK }
+
+// MicrophoneHealth reports the microphone state; the stub has no capture.
+func (capture *Capture) MicrophoneHealth() SystemHealth { return SystemOK }
 
 // New creates a native audio backend.
 func New() *Backend { return &Backend{} }

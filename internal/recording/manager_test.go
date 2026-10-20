@@ -40,6 +40,8 @@ type syntheticBackend struct {
 	silentSystem bool
 	// health is the sequence of system stream states the fake session reports.
 	health []nativeaudio.SystemHealth
+	// microphoneHealth is the same sequence for the microphone.
+	microphoneHealth []nativeaudio.SystemHealth
 }
 
 func (syntheticBackend) Name() string { return "synthetic-native-test" }
@@ -57,33 +59,43 @@ func (backend syntheticBackend) Start(request nativeaudio.StartRequest) (nativea
 		_ = microphone.Close()
 		return nil, err
 	}
-	session := &syntheticSession{microphone: microphone, system: system, silentSystem: backend.silentSystem, health: backend.health, done: make(chan struct{})}
+	session := &syntheticSession{microphone: microphone, system: system, silentSystem: backend.silentSystem, health: backend.health, microphoneHealth: backend.microphoneHealth, done: make(chan struct{})}
 	session.wait.Add(1)
 	go session.write(request.SampleRate, request.Channels)
 	return session, nil
 }
 
 type syntheticSession struct {
-	microphone   *audio.WAVWriter
-	system       *audio.WAVWriter
-	silentSystem bool
-	healthMu     sync.Mutex
-	health       []nativeaudio.SystemHealth
-	done         chan struct{}
-	once         sync.Once
-	wait         sync.WaitGroup
+	microphone       *audio.WAVWriter
+	system           *audio.WAVWriter
+	silentSystem     bool
+	healthMu         sync.Mutex
+	health           []nativeaudio.SystemHealth
+	microphoneHealth []nativeaudio.SystemHealth
+	done             chan struct{}
+	once             sync.Once
+	wait             sync.WaitGroup
 }
 
 // SystemHealth replays the scripted health sequence.
 func (s *syntheticSession) SystemHealth() nativeaudio.SystemHealth {
+	return s.nextHealth(&s.health)
+}
+
+// MicrophoneHealth replays the scripted microphone sequence.
+func (s *syntheticSession) MicrophoneHealth() nativeaudio.SystemHealth {
+	return s.nextHealth(&s.microphoneHealth)
+}
+
+func (s *syntheticSession) nextHealth(queue *[]nativeaudio.SystemHealth) nativeaudio.SystemHealth {
 	s.healthMu.Lock()
 	defer s.healthMu.Unlock()
-	if len(s.health) == 0 {
+	if len(*queue) == 0 {
 		return nativeaudio.SystemOK
 	}
-	next := s.health[0]
-	if len(s.health) > 1 {
-		s.health = s.health[1:]
+	next := (*queue)[0]
+	if len(*queue) > 1 {
+		*queue = (*queue)[1:]
 	}
 	return next
 }
@@ -229,5 +241,52 @@ func TestSystemAudioRecoveryIsRecorded(t *testing.T) {
 	}
 	if _, err := manager.Stop("meeting-device-switch"); err != nil {
 		t.Fatalf("recording with a restored stream must still save: %v", err)
+	}
+}
+
+// TestMicrophoneRecoveryIsRecorded mirrors the system audio case: the microphone
+// follows a changed input device and must leave a meeting warning.
+func TestMicrophoneRecoveryIsRecorded(t *testing.T) {
+	previous := systemWatchInterval
+	systemWatchInterval = 10 * time.Millisecond
+	defer func() { systemWatchInterval = previous }()
+
+	backend := syntheticBackend{microphoneHealth: []nativeaudio.SystemHealth{
+		nativeaudio.SystemOK,
+		nativeaudio.SystemRestored,
+		nativeaudio.SystemOK,
+		nativeaudio.SystemLost,
+	}}
+	manager := newManager(config.Defaults().Audio, log.New(io.Discard, "", 0), backend)
+	session, err := manager.Start(
+		"meeting-microphone-switch",
+		t.TempDir(),
+		16000,
+		1,
+		model.Device{ID: "mic", Name: "Test microphone"},
+		model.Device{ID: "system", Name: "Test system"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		if event, _ := session.MicrophoneIssue(); event == "lost" {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	event, at := session.MicrophoneIssue()
+	if event != "lost" {
+		t.Fatalf("microphone loss was not recorded: %q", event)
+	}
+	if at.IsZero() {
+		t.Fatal("microphone event has no timestamp")
+	}
+	if event, _ := session.SystemIssue(); event != "" {
+		t.Fatalf("the microphone must not change the system audio state: %q", event)
+	}
+	if _, err := manager.Stop("meeting-microphone-switch"); err != nil {
+		t.Fatalf("recording with a recreated microphone must still save: %v", err)
 	}
 }

@@ -74,6 +74,9 @@ type Session interface {
 	// SystemHealth reports whether system audio capture is still alive and
 	// recreates the stream after the output device disappeared.
 	SystemHealth() SystemHealth
+	// MicrophoneHealth reports whether the microphone is still alive and
+	// recreates it after the input device changed or disappeared.
+	MicrophoneHealth() SystemHealth
 }
 
 // SystemHealth is the state of the system capture stream.
@@ -225,6 +228,16 @@ func (capture *Capture) SystemHealth() SystemHealth {
 		return SystemOK
 	}
 	return SystemHealth(C.lm_audio_system_health(capture.handle))
+}
+
+// MicrophoneHealth checks the microphone and follows a changed input device.
+func (capture *Capture) MicrophoneHealth() SystemHealth {
+	capture.mu.Lock()
+	defer capture.mu.Unlock()
+	if capture.handle == nil || capture.stopped {
+		return SystemOK
+	}
+	return SystemHealth(C.lm_audio_microphone_health(capture.handle))
 }
 
 // Stop finalizes the capture and releases the native handle.

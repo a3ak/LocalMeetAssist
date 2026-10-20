@@ -51,9 +51,13 @@ type Session struct {
 	// turns it into a meeting warning.
 	SystemEvent   string
 	SystemEventAt time.Time
-	mu            sync.Mutex
-	watchDone     chan struct{}
-	watchOnce     sync.Once
+	// MicrophoneEvent records the same for the microphone, which follows a
+	// changed input device and is recreated after it disappeared.
+	MicrophoneEvent   string
+	MicrophoneEventAt time.Time
+	mu                sync.Mutex
+	watchDone         chan struct{}
+	watchOnce         sync.Once
 }
 
 // Manager owns the active recording sessions.
@@ -311,6 +315,7 @@ var systemWatchInterval = 2 * time.Second
 func (m *Manager) watchSystem(session *Session) {
 	ticker := time.NewTicker(systemWatchInterval)
 	defer ticker.Stop()
+	systemLost, microphoneLost := false, false
 	for {
 		select {
 		case <-session.watchDone:
@@ -324,6 +329,19 @@ func (m *Manager) watchSystem(session *Session) {
 		case nativeaudio.SystemLost:
 			session.setSystemEvent("lost")
 			appLogging.Warnf(m.logger, "native recording system audio lost uid=%s", session.MeetingUID)
+			systemLost = true
+		}
+		switch session.capture.MicrophoneHealth() {
+		case nativeaudio.SystemRestored:
+			session.setMicrophoneEvent("restored")
+			m.logger.Printf("native recording microphone restored uid=%s", session.MeetingUID)
+		case nativeaudio.SystemLost:
+			session.setMicrophoneEvent("lost")
+			appLogging.Warnf(m.logger, "native recording microphone lost uid=%s", session.MeetingUID)
+			microphoneLost = true
+		}
+		if systemLost && microphoneLost {
+			// Оба потока потеряны: дальше опрашивать нечего.
 			return
 		}
 	}
@@ -350,6 +368,27 @@ func (session *Session) SystemIssue() (string, time.Time) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	return session.SystemEvent, session.SystemEventAt
+}
+
+// setMicrophoneEvent stores the first microphone problem of the session.
+func (session *Session) setMicrophoneEvent(event string) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	if session.MicrophoneEvent == event || session.MicrophoneEvent == "lost" {
+		return
+	}
+	if event == "restored" && session.MicrophoneEvent != "" {
+		return
+	}
+	session.MicrophoneEvent = event
+	session.MicrophoneEventAt = time.Now()
+}
+
+// MicrophoneIssue returns the recorded microphone event, if any.
+func (session *Session) MicrophoneIssue() (string, time.Time) {
+	session.mu.Lock()
+	defer session.mu.Unlock()
+	return session.MicrophoneEvent, session.MicrophoneEventAt
 }
 
 // Stop finalizes the WAV files and validates their headers.

@@ -45,6 +45,11 @@ int lm_audio_stop(lm_capture* capture, char* error_text, size_t error_size);
 // it is lost and cannot be restored.
 int lm_audio_system_health(lm_capture* capture);
 
+// lm_audio_microphone_health checks the microphone stream and recreates the device
+// after a change or a disappearance. Returns 0 while running, 1 when recreated,
+// 2 when lost.
+int lm_audio_microphone_health(lm_capture* capture);
+
 // Микрофон на macOS: статус доступа (0 не определён, 1 ограничен, 2 запрещён,
 // 3 разрешён) и запрос доступа, если бандл объясняет причину. Запрос возвращает
 // -1, когда спросить нельзя (обычный бинарник без Info.plist).

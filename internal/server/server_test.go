@@ -931,3 +931,5 @@ type noopNativeSession struct{}
 func (noopNativeSession) Stop() error { return nil }
 
 func (noopNativeSession) SystemHealth() nativeaudio.SystemHealth { return nativeaudio.SystemOK }
+
+func (noopNativeSession) MicrophoneHealth() nativeaudio.SystemHealth { return nativeaudio.SystemOK }

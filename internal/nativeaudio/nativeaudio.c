@@ -216,6 +216,14 @@ struct lm_capture {
     ma_device microphone;
     int microphone_initialized;
     int microphone_started;
+    // Настройки микрофона нужны, чтобы пересоздать поток после смены устройства.
+    char microphone_device_id[1024];
+    unsigned int microphone_sample_rate;
+    unsigned int microphone_channels;
+    ma_device_id microphone_current_id;
+    int microphone_has_current;
+    int microphone_restored;
+    int microphone_lost;
 #if !defined(__APPLE__)
     ma_device system;
     int system_initialized;
@@ -549,22 +557,14 @@ void lm_audio_free_devices(lm_device_info* devices)
     free(devices);
 }
 
-static int lm_init_microphone(lm_capture* capture, const char* device_id, unsigned int sample_rate, unsigned int channels, char* error_text, size_t error_size)
+// lm_open_microphone initializes the capture device without starting it.
+static int lm_open_microphone(lm_capture* capture, const ma_device_id* selected_id, char* error_text, size_t error_size)
 {
-    ma_device_id id;
-    ma_device_id* selected_id = NULL;
-    if (device_id != NULL && device_id[0] != '\0') {
-        if (lm_hex_decode(device_id, &id) != 0) {
-            lm_set_error(error_text, error_size, "invalid microphone device id");
-            return -1;
-        }
-        selected_id = &id;
-    }
     ma_device_config config = ma_device_config_init(ma_device_type_capture);
     config.capture.pDeviceID = selected_id;
     config.capture.format = ma_format_s16;
-    config.capture.channels = channels;
-    config.sampleRate = sample_rate;
+    config.capture.channels = capture->microphone_channels;
+    config.sampleRate = capture->microphone_sample_rate;
     config.periodSizeInMilliseconds = 100;
     config.dataCallback = lm_data_callback;
     config.pUserData = &capture->microphone_sink;
@@ -574,6 +574,103 @@ static int lm_init_microphone(lm_capture* capture, const char* device_id, unsign
         return -1;
     }
     capture->microphone_initialized = 1;
+    capture->microphone_has_current = 0;
+    ma_device_info info;
+    if (ma_device_get_info(&capture->microphone, ma_device_type_capture, &info) == MA_SUCCESS) {
+        capture->microphone_current_id = info.id;
+        capture->microphone_has_current = 1;
+    }
+    return 0;
+}
+
+static int lm_init_microphone(lm_capture* capture, const char* device_id, unsigned int sample_rate, unsigned int channels, char* error_text, size_t error_size)
+{
+    capture->microphone_sample_rate = sample_rate;
+    capture->microphone_channels = channels;
+    if (device_id != NULL) {
+        snprintf(capture->microphone_device_id, sizeof(capture->microphone_device_id), "%s", device_id);
+    }
+    ma_device_id id;
+    ma_device_id* selected_id = NULL;
+    if (device_id != NULL && device_id[0] != '\0') {
+        if (lm_hex_decode(device_id, &id) != 0) {
+            lm_set_error(error_text, error_size, "invalid microphone device id");
+            return -1;
+        }
+        selected_id = &id;
+    }
+    return lm_open_microphone(capture, selected_id, error_text, error_size);
+}
+
+// lm_resolve_capture_device returns the configured capture device, falling back
+// to the system default when it is gone, and -1 when no input exists at all.
+static int lm_resolve_capture_device(lm_capture* capture, ma_device_id* id)
+{
+    ma_device_info* devices = NULL;
+    ma_uint32 count = 0;
+    if (ma_context_get_devices(&capture->context, NULL, NULL, &devices, &count) != MA_SUCCESS || devices == NULL) {
+        return -1;
+    }
+    ma_device_id configured;
+    int have_configured = capture->microphone_device_id[0] != '\0' && lm_hex_decode(capture->microphone_device_id, &configured) == 0;
+    ma_device_id fallback;
+    int have_fallback = 0;
+    for (ma_uint32 index = 0; index < count; index++) {
+        if (have_configured && memcmp(&devices[index].id, &configured, sizeof(ma_device_id)) == 0) {
+            *id = devices[index].id;
+            return 0;
+        }
+        if (devices[index].isDefault) {
+            fallback = devices[index].id;
+            have_fallback = 1;
+        }
+    }
+    if (have_fallback) {
+        *id = fallback;
+        return 0;
+    }
+    return -1;
+}
+
+// lm_microphone_silence pads a capture gap so the track keeps the meeting time.
+static void lm_microphone_silence(lm_capture* capture, unsigned int frames)
+{
+    static const int16_t zeros[1024];
+    size_t bytes = (size_t)frames * capture->microphone_channels * sizeof(int16_t);
+    while (bytes > 0) {
+        size_t chunk = bytes > sizeof(zeros) ? sizeof(zeros) : bytes;
+        if (lm_wav_write(&capture->microphone_sink, zeros, chunk) != 0) return;
+        bytes -= chunk;
+    }
+}
+
+// lm_microphone_restart reopens the microphone on the given device.
+static int lm_microphone_restart(lm_capture* capture, const ma_device_id* device_id, char* error_text, size_t error_size)
+{
+    ma_timer timer;
+    ma_timer_init(&timer);
+    double started = ma_timer_get_time_in_seconds(&timer);
+    if (capture->microphone_started) {
+        ma_device_stop(&capture->microphone);
+        capture->microphone_started = 0;
+    }
+    if (capture->microphone_initialized) {
+        ma_device_uninit(&capture->microphone);
+        capture->microphone_initialized = 0;
+        capture->microphone_has_current = 0;
+    }
+    if (lm_open_microphone(capture, device_id, error_text, error_size) != 0) return -1;
+    if (ma_device_start(&capture->microphone) != MA_SUCCESS) {
+        ma_device_uninit(&capture->microphone);
+        capture->microphone_initialized = 0;
+        lm_set_error(error_text, error_size, "cannot start microphone");
+        return -1;
+    }
+    capture->microphone_started = 1;
+    double downtime = ma_timer_get_time_in_seconds(&timer) - started;
+    if (downtime > 0.02) {
+        lm_microphone_silence(capture, (unsigned int)(downtime * capture->microphone_sample_rate));
+    }
     return 0;
 }
 
@@ -645,6 +742,32 @@ static int lm_system_restart(lm_capture* capture, const char* device_id)
     return 0;
 }
 #endif
+
+// lm_audio_microphone_health checks the microphone stream, follows a changed
+// default input and recreates the device after it disappeared. Returns 0 while it
+// runs, 1 when it was just recreated, 2 when it is lost.
+int lm_audio_microphone_health(lm_capture* capture)
+{
+    if (capture == NULL || !capture->microphone_initialized) return 0;
+    if (capture->microphone_lost) return 2;
+    ma_device_id desired;
+    int have_desired = lm_resolve_capture_device(capture, &desired) == 0;
+    int running = capture->microphone_started && ma_device_get_state(&capture->microphone) == ma_device_state_started;
+    int unchanged = !have_desired || (capture->microphone_has_current && memcmp(&desired, &capture->microphone_current_id, sizeof(ma_device_id)) == 0);
+    if (running && unchanged) return 0;
+    char error[256] = {0};
+    if (have_desired && lm_microphone_restart(capture, &desired, error, sizeof(error)) == 0) {
+        capture->microphone_restored++;
+        return 1;
+    }
+    // Настроенное устройство могло исчезнуть насовсем: пробуем системное.
+    if (lm_microphone_restart(capture, NULL, error, sizeof(error)) == 0) {
+        capture->microphone_restored++;
+        return 1;
+    }
+    capture->microphone_lost = 1;
+    return 2;
+}
 
 // lm_audio_system_health checks that the system stream is still running and
 // recreates it when the output device has gone away: a disconnected monitor with
