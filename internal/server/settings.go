@@ -231,8 +231,8 @@ func settingsSchema(cfg config.Config) []settingGroup {
 		{ID: "diarization", Title: "Диаризация", Description: "PyAnnote Segmentation 3 + WeSpeaker и кластеризация голосов на Go.", Fields: []settingField{
 			boolSetting("diarization.auto_run", "Выполнять автоматически", "Автоматически разделять удалённых участников на спикеров. Ручной запуск доступен всегда.", cfg.Diarization.AutoRun),
 			selectSetting("diarization.engine", "Движок", "Выполняется в процессе LocalMeetAssist без CLI.", cfg.Diarization.Engine, option("pyannote-wespeaker-onnx", "PyAnnote + WeSpeaker ONNX")),
-			textSetting("diarization.segmentation_model", "Модель сегментации", "Путь к segmentation.onnx.", cfg.Diarization.SegmentationModel),
-			textSetting("diarization.embedding_model", "Модель голосовых признаков", "Путь к WeSpeaker ResNet34-LM ONNX.", cfg.Diarization.EmbeddingModel),
+			textSetting("diarization.segmentation_model", "Модель сегментации", "Путь к ONNX-модели сегментации; файл скачивается в окне «Модели».", cfg.Diarization.SegmentationModel),
+			textSetting("diarization.embedding_model", "Модель голосовых признаков", "Путь к ONNX-модели голосовых признаков; файл скачивается и выбирается в окне «Модели».", cfg.Diarization.EmbeddingModel),
 			floatSetting("diarization.cluster_threshold", "Порог косинусного расстояния", "Без заданного количества участников голоса объединяются, пока расстояние не превышает порог.", cfg.Diarization.ClusterThreshold),
 			intSetting("diarization.max_auto_speakers", "Максимум при auto", "Защита от появления десятков ложных спикеров.", cfg.Diarization.MaxAutoSpeakers),
 			boolSetting("diarization.microphone_enabled", "Диаризовать микрофон", "Обычно выключено: владелец определяется по отдельному потоку.", cfg.Diarization.MicrophoneEnabled),

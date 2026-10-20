@@ -158,8 +158,8 @@ var settingFieldsEN = map[string]settingTextEN{
 	// Diarization
 	"diarization.auto_run":           {"Run automatically", "Automatically separate remote participants into speakers. Manual start is always available."},
 	"diarization.engine":             {"Engine", "Runs inside the LocalMeetAssist process without a CLI."},
-	"diarization.segmentation_model": {"Segmentation model", "Path to segmentation.onnx."},
-	"diarization.embedding_model":    {"Voice embedding model", "Path to WeSpeaker ResNet34-LM ONNX."},
+	"diarization.segmentation_model": {"Segmentation model", "Path to the ONNX segmentation model; the file is downloaded in the Models window."},
+	"diarization.embedding_model":    {"Voice embedding model", "Path to the ONNX voice embedding model; the file is downloaded and chosen in the Models window."},
 	"diarization.cluster_threshold":  {"Cosine distance threshold", "Without a fixed participant count, voices are merged while the distance stays below the threshold."},
 	"diarization.max_auto_speakers":  {"Maximum with auto", "Protection against dozens of false speakers."},
 	"diarization.microphone_enabled": {"Diarize microphone", "Usually off: the owner is identified by the separate stream."},
