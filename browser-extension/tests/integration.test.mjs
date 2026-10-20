@@ -38,7 +38,8 @@ test('real WebSocket: manual start binds the active tab and stops after leaving 
   await app.tabEvent({kind:'navigation',id:1,url:api.tabs[0].url,at:Date.now()});
   await until(()=>mock.metrics().stops===1,4000);
   assert.equal(app.manualBinding,null);
-  assert.equal(app.publicStatus().recordingActive,false);
+  // Состояние приходит отдельным сообщением после команды.
+  await until(()=>app.publicStatus().recordingActive===false,2000);
 });
 test('real WebSocket: manual start keeps recording while the page stays and clears on manual stop',async t=>{
   const {mock,app}=await fixture(t,{stopDelaySeconds:1});
