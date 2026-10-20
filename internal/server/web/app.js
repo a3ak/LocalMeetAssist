@@ -1405,6 +1405,17 @@ function stopSpeakerFragment() {
   }
 }
 
+// pauseOtherAudio keeps one player active: starting a sound stops the previous
+// one. Without it the meeting recording kept playing under the speaker fragment,
+// because the fragment player lived outside the files tab.
+function pauseOtherAudio(current) {
+  document.querySelectorAll("audio").forEach((element) => {
+    if (element !== current && !element.paused) element.pause();
+  });
+  const session = state.speakerPlayer;
+  if (session && session.audio !== current) stopSpeakerFragment();
+}
+
 function playSpeakerFragment(button, url, start, end) {
   if (!url) return;
   if (state.speakerPlayer?.button === button) {
@@ -1412,6 +1423,8 @@ function playSpeakerFragment(button, url, start, end) {
     return;
   }
   stopSpeakerFragment();
+  // Фрагмент не вставлен в DOM, поэтому общий обработчик событий его не видит.
+  pauseOtherAudio(null);
   const player = new Audio();
   const session = { audio: player, button };
   state.speakerPlayer = session;
@@ -2366,6 +2379,12 @@ $("#discardSpeakerChanges").onclick = () => {
 };
 $("#moveSelectedSpeakerFragments").onclick = () => moveSpeakerFragments(state.speakerEditor ? [...state.speakerEditor.selected] : [], $("#speakerMoveTarget").value);
 $("#addSpeaker").onclick = () => addSpeakerDraft();
+
+// Плееры файлов и встреч вставлены в DOM, поэтому их запуск перехватывается
+// здесь: старт одного останавливает остальные и голосовой фрагмент.
+document.addEventListener("play", (event) => {
+  if (event.target instanceof HTMLMediaElement) pauseOtherAudio(event.target);
+}, true);
 $("#detailTitle").onchange = async () => {
   if (!state.detail) return;
   try {
