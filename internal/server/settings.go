@@ -17,6 +17,9 @@ import (
 type settingOption struct {
 	Value string `json:"value"`
 	Label string `json:"label"`
+	// Disabled marks a model that is not downloaded yet: the name is visible but
+	// cannot be selected, so the setting never points at a missing file.
+	Disabled bool `json:"disabled,omitempty"`
 }
 
 type settingField struct {
@@ -97,6 +100,15 @@ func selectIntSetting(key, label, description string, value int, options ...sett
 }
 func option(value, label string) settingOption { return settingOption{Value: value, Label: label} }
 
+// modelField renders a model choice as a list when the models are known and as a
+// plain path input otherwise (tests, or a build without the model manager).
+func modelField(key, label, description, value string, options []settingOption) settingField {
+	if len(options) == 0 {
+		return textSetting(key, label, description, value)
+	}
+	return selectSetting(key, label, description, value, options...)
+}
+
 func inSection(section string, fields ...settingField) []settingField {
 	for index := range fields {
 		fields[index].Section = section
@@ -153,7 +165,10 @@ func summaryPromptValue(cfg config.Config) string {
 
 // settingsSchema describes every editable setting, localized to the
 // configured interface language.
-func settingsSchema(cfg config.Config) []settingGroup {
+// settingsSchema describes every editable setting. modelChoices carries the
+// downloaded diarization models for the two path fields; without it those fields
+// stay plain text inputs (used by tests and when the model manager is absent).
+func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) []settingGroup {
 	defaultPrompt := cfg.Summary.DefaultPrompt
 	if strings.TrimSpace(defaultPrompt) == "" {
 		defaultPrompt = config.DefaultSummaryPrompt
@@ -197,6 +212,7 @@ func settingsSchema(cfg config.Config) []settingGroup {
 			intSetting("conference_detection.window_seconds", "Окно проверки, сек", "Микрофон и системный звук должны оставаться активными одновременно. По умолчанию 10 секунд.", cfg.ConferenceDetection.WindowSeconds),
 			listSetting("conference_detection.trusted_apps", "Доверенные приложения", "Приложения, для которых запись предлагается сразу, без вопроса о добавлении.", cfg.ConferenceDetection.TrustedApps),
 			listSetting("conference_detection.excluded_apps", "Исключения", "Приложения, про которые не спрашиваем никогда.", cfg.ConferenceDetection.ExcludedApps),
+			intSetting("conference_detection.stop_after_idle_seconds", "Остановка после тишины, сек", "Запись, начатая по активности микрофона, останавливается, когда приложение перестало использовать микрофон и системный звук. 0 — не останавливать.", cfg.ConferenceDetection.StopAfterIdleSeconds),
 		}},
 		{ID: "inference", Title: "ONNX Runtime", Description: "Нативная библиотека нейросетевого вывода. LocalMeetAssist загружает её напрямую; CLI и Python не нужны.", Fields: []settingField{
 			textSetting("inference.runtime_path", "Библиотека или каталог", "Можно указать готовый .dll/.dylib/.so вручную. Для каталога LocalMeetAssist выбирает файл по ОС и архитектуре.", cfg.Inference.RuntimePath),
@@ -231,8 +247,8 @@ func settingsSchema(cfg config.Config) []settingGroup {
 		{ID: "diarization", Title: "Диаризация", Description: "PyAnnote Segmentation 3 + WeSpeaker и кластеризация голосов на Go.", Fields: []settingField{
 			boolSetting("diarization.auto_run", "Выполнять автоматически", "Автоматически разделять удалённых участников на спикеров. Ручной запуск доступен всегда.", cfg.Diarization.AutoRun),
 			selectSetting("diarization.engine", "Движок", "Выполняется в процессе LocalMeetAssist без CLI.", cfg.Diarization.Engine, option("pyannote-wespeaker-onnx", "PyAnnote + WeSpeaker ONNX")),
-			textSetting("diarization.segmentation_model", "Модель сегментации", "Путь к ONNX-модели сегментации; файл скачивается в окне «Модели».", cfg.Diarization.SegmentationModel),
-			textSetting("diarization.embedding_model", "Модель голосовых признаков", "Путь к ONNX-модели голосовых признаков; файл скачивается и выбирается в окне «Модели».", cfg.Diarization.EmbeddingModel),
+			modelField("diarization.segmentation_model", "Модель сегментации", "Скачанные модели сегментации; серые пункты ещё не загружены.", cfg.Diarization.SegmentationModel, modelChoices["segmentation"]),
+			modelField("diarization.embedding_model", "Модель голосовых признаков", "Скачанные модели голосовых признаков; серые пункты ещё не загружены. На разных записях точнее разделяют разные модели.", cfg.Diarization.EmbeddingModel, modelChoices["embedding"]),
 			floatSetting("diarization.cluster_threshold", "Порог косинусного расстояния", "Без заданного количества участников голоса объединяются, пока расстояние не превышает порог.", cfg.Diarization.ClusterThreshold),
 			intSetting("diarization.max_auto_speakers", "Максимум при auto", "Защита от появления десятков ложных спикеров.", cfg.Diarization.MaxAutoSpeakers),
 			boolSetting("diarization.microphone_enabled", "Диаризовать микрофон", "Обычно выключено: владелец определяется по отдельному потоку.", cfg.Diarization.MicrophoneEnabled),
@@ -334,7 +350,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 				cfg = raw
 			}
 		}
-		writeJSON(w, http.StatusOK, map[string]any{"groups": settingsSchema(cfg), "config_path": cfg.ConfigFile})
+		writeJSON(w, http.StatusOK, map[string]any{"groups": settingsSchema(cfg, s.diarizationModelChoices(cfg)), "config_path": cfg.ConfigFile})
 		return
 	}
 	if r.Method == http.MethodPost {
@@ -370,7 +386,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	known := make(map[string]settingField)
-	for _, group := range settingsSchema(validationConfig) {
+	for _, group := range settingsSchema(validationConfig, nil) {
 		for _, field := range group.Fields {
 			known[field.Key] = field
 		}
@@ -627,4 +643,39 @@ func (s *Server) testSettings(w http.ResponseWriter, r *http.Request) {
 		result["message"] = "URL, TLS, authorization and test generation work"
 	}
 	writeJSON(w, http.StatusOK, result)
+}
+
+// diarizationModelChoices lists the known diarization models for the two path
+// settings. A model that is not downloaded stays in the list but disabled, and a
+// custom path already configured is kept as its own option so saving the form
+// never silently replaces it.
+func (s *Server) diarizationModelChoices(cfg config.Config) map[string][]settingOption {
+	statuses := s.models.Statuses()
+	build := func(ids []string, current, customPrefix string) []settingOption {
+		options := make([]settingOption, 0, len(ids)+1)
+		matched := false
+		for _, id := range ids {
+			for _, status := range statuses {
+				if status.ID != id {
+					continue
+				}
+				label := status.Name
+				if !status.Exists {
+					label += " — не скачана"
+				}
+				if filepath.Clean(status.Path) == filepath.Clean(current) {
+					matched = true
+				}
+				options = append(options, settingOption{Value: status.Path, Label: label, Disabled: !status.Exists})
+			}
+		}
+		if !matched && strings.TrimSpace(current) != "" {
+			options = append(options, settingOption{Value: current, Label: customPrefix + filepath.Base(current)})
+		}
+		return options
+	}
+	return map[string][]settingOption{
+		"segmentation": build([]string{"diarization-segmentation"}, cfg.Diarization.SegmentationModel, "Свой путь: "),
+		"embedding":    build([]string{"diarization-embedding-wespeaker", "diarization-embedding-campplus"}, cfg.Diarization.EmbeddingModel, "Свой путь: "),
+	}
 }

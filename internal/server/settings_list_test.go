@@ -15,7 +15,7 @@ func TestConferenceAppListsAreEditableSettings(t *testing.T) {
 	cfg.ConferenceDetection.ExcludedApps = []string{"Voice Memos"}
 
 	fields := map[string]settingField{}
-	for _, group := range settingsSchema(cfg) {
+	for _, group := range settingsSchema(cfg, nil) {
 		for _, field := range group.Fields {
 			fields[field.Key] = field
 		}

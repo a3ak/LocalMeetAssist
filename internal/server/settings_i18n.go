@@ -120,10 +120,11 @@ var settingFieldsEN = map[string]settingTextEN{
 	"desktop.open_ui":         {"Open UI", "Optional global combination to open the Web UI."},
 
 	// Conference detection
-	"conference_detection.enabled":        {"Offer to record", "Observe OS audio sessions and ask before recording. Audio amplitude is not inspected: an in-app mute normally leaves the session active."},
-	"conference_detection.window_seconds": {"Detection window, sec", "Microphone capture and system playback must remain active together. The default is 10 seconds."},
-	"conference_detection.trusted_apps":   {"Trusted applications", "Apps that are offered recording immediately, without asking to be remembered."},
-	"conference_detection.excluded_apps":  {"Exclusions", "Apps that are never asked about."},
+	"conference_detection.enabled":                 {"Offer to record", "Observe OS audio sessions and ask before recording. Audio amplitude is not inspected: an in-app mute normally leaves the session active."},
+	"conference_detection.window_seconds":          {"Detection window, sec", "Microphone capture and system playback must remain active together. The default is 10 seconds."},
+	"conference_detection.trusted_apps":            {"Trusted applications", "Apps that are offered recording immediately, without asking to be remembered."},
+	"conference_detection.stop_after_idle_seconds": {"Stop after silence, sec", "A recording started by microphone activity stops once the application no longer uses the microphone and system audio. 0 disables the automatic stop."},
+	"conference_detection.excluded_apps":           {"Exclusions", "Apps that are never asked about."},
 
 	// Inference
 	"inference.runtime_path":         {"Library or directory", "You can point to a ready .dll/.dylib/.so manually. For a directory, LocalMeetAssist picks the file by OS and architecture."},
@@ -158,8 +159,8 @@ var settingFieldsEN = map[string]settingTextEN{
 	// Diarization
 	"diarization.auto_run":           {"Run automatically", "Automatically separate remote participants into speakers. Manual start is always available."},
 	"diarization.engine":             {"Engine", "Runs inside the LocalMeetAssist process without a CLI."},
-	"diarization.segmentation_model": {"Segmentation model", "Path to the ONNX segmentation model; the file is downloaded in the Models window."},
-	"diarization.embedding_model":    {"Voice embedding model", "Path to the ONNX voice embedding model; the file is downloaded and chosen in the Models window."},
+	"diarization.segmentation_model": {"Segmentation model", "Downloaded segmentation models; grey entries are not downloaded yet."},
+	"diarization.embedding_model":    {"Voice embedding model", "Downloaded voice embedding models; grey entries are not downloaded yet. Different models separate speakers better on different recordings."},
 	"diarization.cluster_threshold":  {"Cosine distance threshold", "Without a fixed participant count, voices are merged while the distance stays below the threshold."},
 	"diarization.max_auto_speakers":  {"Maximum with auto", "Protection against dozens of false speakers."},
 	"diarization.microphone_enabled": {"Diarize microphone", "Usually off: the owner is identified by the separate stream."},

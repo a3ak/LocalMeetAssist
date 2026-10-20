@@ -192,6 +192,9 @@ main{padding:10px}
 .speaker-editor-help{padding:10px 12px;margin-bottom:10px;border-radius:9px;background:var(--surface);color:var(--muted);font-size:12px;line-height:1.45}
 .speaker-bulk-actions{position:sticky;top:0;z-index:2;display:flex;gap:8px;align-items:center;padding:10px;margin-bottom:10px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 4px 14px rgba(0,0,0,.16)}
 .speaker-bulk-actions span{margin-right:auto;color:var(--muted);font-size:12px}
+/* «Новый спикер» отодвинут от «Переместить выбранные»: рядом с ней кнопку
+   нажимали случайно, когда промахивались по переносу фрагментов. */
+.speaker-bulk-actions .speaker-add{margin-left:16px;border-style:dashed}
 .speaker-fragments{margin-top:10px;display:flex;flex-direction:column;gap:6px;max-height:360px;overflow:auto}
 .speaker-fragments-head{display:flex;align-items:center;justify-content:space-between;color:var(--muted);font-size:12px}
 .speaker-fragment{display:grid;grid-template-columns:auto auto minmax(0,1fr);gap:8px;align-items:center;padding:7px 8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);cursor:grab}

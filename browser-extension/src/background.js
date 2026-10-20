@@ -24,6 +24,12 @@
         await this.tracker.init(); await this.control.init();
         const saved = (await this.api.sessionGet('pendingCommand')).pendingCommand;
         if (saved && ['start','stop'].includes(saved.kind) && typeof saved.id === 'string' && Number.isFinite(saved.at)) this.command = saved;
+        // Ручной старт из плагина привязывается к активной вкладке: уход с неё
+        // (или закрытие) останавливает запись после настроенной задержки.
+        const binding = (await this.api.sessionGet('manualBinding')).manualBinding;
+        if (binding && Number.isSafeInteger(binding.id)) this.manualBinding = binding;
+        const pending = (await this.api.sessionGet('manualPending')).manualPending;
+        if (pending && Number.isSafeInteger(pending.id)) this.manualPending = pending;
       })());
       const epoch = ++this.epoch;
       this.timers.clearTimeout(this.detectionTimer); this.detectionDeadline = null; this.detectionTimer = null;
@@ -113,7 +119,15 @@
         case 'ack':
           if (this.command && message.command_id===this.command.id && ['applied','noop','rejected'].includes(message.command_result)) {
             this.commandError=message.command_result==='rejected'?'Приложение отклонило действие. Проверьте запись в приложении.':null;
+            const started=this.command.kind==='start'&&message.command_result==='applied';
             this.command=null; this.commandSentGeneration=null; await this.api.sessionSet({pendingCommand:null});
+            if(started&&this.manualPending){
+              this.manualBinding={...this.manualPending,stopAt:null};
+              this.manualPending=null;
+              await this.api.sessionSet({manualBinding:this.manualBinding,manualPending:null});
+            }else if(this.manualPending&&!started){
+              this.manualPending=null; await this.api.sessionSet({manualPending:null});
+            }
           }
           await this.snapshot(false,epoch); break;
       }
@@ -131,6 +145,7 @@
             this.sentSignature='[]'; delete this.control.data.needsEmpty;
           }
         }
+        await this.checkManualBinding(tabs);
         const result=this.control.collect(tabs,this.config,this.expressions,this.settings);
         this.pendingCount=result.pendingCount;this.ignoredCount=result.ignoredCount;this.matchedCount=result.urls.length;
         this.openCount=result.rows.length;
@@ -149,6 +164,34 @@
         }
       });
       this.scans=task.catch(()=>{});return task;
+    }
+    // checkManualBinding stops a manually started recording after the page it was
+    // started on is closed or navigated away from. The delay is the plugin's
+    // stop delay, so a reload of the same page does not end the recording.
+    async checkManualBinding(tabs) {
+      const binding=this.manualBinding;
+      if(!binding)return;
+      if(!this.recordingKnown)return;
+      if(!this.control.data.active){
+        this.manualBinding=null; await this.api.sessionSet({manualBinding:null}); return;
+      }
+      const live=tabs.find(tab=>tab.id===binding.id);
+      const left=!live||(live.url||'')!==binding.url;
+      if(!left){
+        if(binding.stopAt){binding.stopAt=null;await this.api.sessionSet({manualBinding:binding});}
+        return;
+      }
+      const delay=Math.max(0,Number(this.settings?.stopDelaySeconds??5))*1000;
+      if(!binding.stopAt){
+        binding.stopAt=this.now()+delay;
+        await this.api.sessionSet({manualBinding:binding});
+        this.timers.setTimeout(()=>{this.tabEvent().catch(()=>{});},delay+50);
+        return;
+      }
+      if(this.now()<binding.stopAt)return;
+      this.manualBinding=null;
+      await this.api.sessionSet({manualBinding:null});
+      if(!this.command)await this.queueCommand('stop');
     }
     async cancelCommand() { this.command=null;this.commandSentGeneration=null;await this.api.sessionSet({pendingCommand:null}); }
     async queueCommand(kind,automatic=false) {
@@ -216,7 +259,20 @@
         case 'confirm':case 'decline':return this.answer(message.kind,message.promptId);
         case 'manual-start':case 'manual-stop':
           if(!this.publicStatus().canControl)return{ok:false,error:'Нет актуального состояния записи или действие уже отправлено.'};
-          await this.queueCommand(message.kind==='manual-start'?'start':'stop');await this.snapshot(true);return{ok:true};
+          if(message.kind==='manual-start'){
+            // Активная вкладка запоминается до отправки команды: если она
+            // закроется или уйдёт на другой адрес, запись остановится сама.
+            const tab=await this.api.activeTab();
+            this.manualPending=tab&&Number.isSafeInteger(tab.id)?{id:tab.id,url:tab.url||'',at:this.now()}:null;
+            this.manualBinding=null;
+            await this.api.sessionSet({manualPending:this.manualPending,manualBinding:null});
+            await this.queueCommand('start');
+          }else{
+            this.manualPending=null;this.manualBinding=null;
+            await this.api.sessionSet({manualPending:null,manualBinding:null});
+            await this.queueCommand('stop');
+          }
+          await this.snapshot(true);return{ok:true};
         case 'wait-switch':
           if(!this.publicStatus().canControl)return{ok:false,error:'Нет связи с приложением.'};
           try{this.control.startSwitch();await this.control.persist();await this.snapshot(true);return{ok:true};}catch(error){return{ok:false,error:error.message};}

@@ -10,7 +10,7 @@ import (
 // summarySections returns the summary group of the schema.
 func summarySections(t *testing.T) settingGroup {
 	t.Helper()
-	for _, group := range settingsSchema(config.Defaults()) {
+	for _, group := range settingsSchema(config.Defaults(), nil) {
 		if group.ID == "summary" {
 			return group
 		}

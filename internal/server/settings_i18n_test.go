@@ -21,7 +21,7 @@ func hasCyrillic(value string) bool {
 func TestSettingsSchemaIsFullyLocalizedWhenEnglish(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.App.Language = "en"
-	for _, group := range settingsSchema(cfg) {
+	for _, group := range settingsSchema(cfg, nil) {
 		if hasCyrillic(group.Title) {
 			t.Fatalf("group %s title is not localized: %q", group.ID, group.Title)
 		}
@@ -51,7 +51,7 @@ func TestSettingsSchemaIsFullyLocalizedWhenEnglish(t *testing.T) {
 // remains the source of truth when the interface language is Russian.
 func TestSettingsSchemaKeepsRussianByDefault(t *testing.T) {
 	cfg := config.Defaults()
-	groups := settingsSchema(cfg)
+	groups := settingsSchema(cfg, nil)
 	if len(groups) == 0 || groups[0].Title != "Приложение" {
 		t.Fatalf("expected Russian schema by default, got %q", groups[0].Title)
 	}
@@ -66,7 +66,7 @@ func TestSettingsSchemaKeepsKeysAcrossLanguages(t *testing.T) {
 
 	keys := func(cfg config.Config) []string {
 		var out []string
-		for _, group := range settingsSchema(cfg) {
+		for _, group := range settingsSchema(cfg, nil) {
 			for _, field := range group.Fields {
 				out = append(out, field.Key)
 			}

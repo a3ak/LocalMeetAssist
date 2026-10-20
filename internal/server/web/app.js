@@ -1516,6 +1516,14 @@ function renderJobs(items) {
   if (!visibleItems.some((job) => job.stage === "encoding")) {
     visibleItems.push({ stage: "encoding", status: "not_started", progress: 0, last_error: "" });
   }
+  // Порядок этапов фиксирован: при повторном запуске сервер обновляет
+  // CreatedAt, и сортировка по времени заставляла строку «падать» вниз под курсор.
+  const stageOrder = ["transcribing", "diarizing", "summarizing", "encoding"];
+  visibleItems.sort((left, right) => {
+    const leftIndex = stageOrder.indexOf(left.stage);
+    const rightIndex = stageOrder.indexOf(right.stage);
+    return (leftIndex < 0 ? stageOrder.length : leftIndex) - (rightIndex < 0 ? stageOrder.length : rightIndex);
+  });
   const merging = items.find((job) => job.stage === "merging");
   const transcription = visibleItems.find((job) => job.stage === "transcribing");
   if (transcription && merging) {
@@ -2069,6 +2077,9 @@ function renderSettingsGroup(groupID) {
         const option = document.createElement("option");
         option.value = item.value;
         option.textContent = item.label;
+        // Модель, которая ещё не скачана, видна, но выбрать её нельзя: иначе
+        // настройка указывала бы на отсутствующий файл.
+        if (item.disabled) option.disabled = true;
         input.appendChild(option);
       });
       input.value = field.value;

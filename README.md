@@ -256,7 +256,7 @@ npm run package
 | Детектор речи | Silero VAD 6.2 ONNX | ~2,3 МБ | Убирает тишину из обработки и помогает против повторов |
 | Сегментация спикеров | PyAnnote Segmentation 3.0 ONNX | ~6 МБ | Определяет интервалы активности голосов |
 | Голосовые признаки | WeSpeaker ResNet34-LM VoxCeleb | ~27 МБ | Сравнивает голосовые фрагменты перед кластеризацией |
-| Голосовые признаки (альтернатива) | WeSpeaker CAM++ VoxCeleb | ~29 МБ | Лучше разделяет короткие реплики и похожие голоса; ставится отдельной карточкой и применяется в настройках диаризации |
+| Голосовые признаки (альтернатива) | WeSpeaker CAM++ VoxCeleb | ~29 МБ | Альтернатива ResNet34: на разных записях точнее разделяет то одна, то другая модель; ставится отдельной карточкой и выбирается в настройках диаризации |
 | Выполнение ONNX | ONNX Runtime 1.23.2 | зависит от ОС | Нужен для GigaAM, VAD и диаризации |
 | Выполнение Whisper | whisper.cpp runtime | зависит от ОС | Загружается только при выборе Whisper |
 | Выполнение LLM | llama.cpp runtime | 12–20 МБ архив | Нужен для локальных протоколов; на Linux и Windows есть отдельная Vulkan-сборка |
@@ -592,7 +592,7 @@ Models and native runtimes are not committed to the repository. Only what you ch
 | Voice activity detection | Silero VAD 6.2 ONNX | ~2.3 MB | Removes silence from processing and helps reduce repetitions |
 | Speaker segmentation | PyAnnote Segmentation 3.0 ONNX | ~6 MB | Detects voice activity intervals |
 | Speaker embeddings | WeSpeaker ResNet34-LM VoxCeleb | ~27 MB | Compares voice fragments before clustering |
-| Speaker embeddings (alternative) | WeSpeaker CAM++ VoxCeleb | ~29 MB | Separates short remarks and similar voices better; installed as a separate card and applied in the diarization settings |
+| Speaker embeddings (alternative) | WeSpeaker CAM++ VoxCeleb | ~29 MB | An alternative to ResNet34: which one separates speakers better depends on the recording; installed as a separate card and chosen in the diarization settings |
 | ONNX execution | ONNX Runtime 1.23.2 | platform-dependent | Required for GigaAM, VAD, and diarization |
 | Whisper execution | whisper.cpp runtime | platform-dependent | Only downloaded when Whisper is selected |
 | LLM execution | llama.cpp runtime | 12–20 MB archive | Needed for local minutes; Linux and Windows have a separate Vulkan build |

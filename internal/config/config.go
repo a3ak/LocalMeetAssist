@@ -169,6 +169,10 @@ type Desktop struct {
 type ConferenceDetection struct {
 	Enabled       bool
 	WindowSeconds int
+	// StopAfterIdleSeconds ends a recording that was started by the detector
+	// once neither the microphone nor the system audio is in use anymore. Zero
+	// disables the automatic stop.
+	StopAfterIdleSeconds int
 	// TrustedApps lists applications that may start a recording prompt without
 	// asking to be remembered first. ExcludedApps are never asked about.
 	TrustedApps  []string
@@ -440,7 +444,7 @@ func Defaults() Config {
 		App:                 App{Language: "ru", Theme: "dark", DataDir: "./data", ListenHost: "127.0.0.1", ListenPort: 0, OpenBrowser: true, MicrophoneOwnerName: ""},
 		Audio:               Audio{Backend: "native", SampleRate: 16000, Channels: 1, BlockMS: 250, InputMode: "auto", OutputMode: "native", MicrophoneGain: 1, SystemGain: 1, Normalize: true, EchoCancellation: "auto", EchoDelayMS: 100},
 		Desktop:             Desktop{TrayEnabled: true},
-		ConferenceDetection: ConferenceDetection{Enabled: true, WindowSeconds: 10},
+		ConferenceDetection: ConferenceDetection{Enabled: true, WindowSeconds: 10, StopAfterIdleSeconds: 60},
 		Inference:           Inference{RuntimePath: "./runtime/onnxruntime", AutoDownload: true, RuntimeVersion: "1.23.2", WhisperRuntimePath: "./runtime/whisper.cpp", LlamaRuntimePath: "./runtime/llama.cpp"},
 		Transcription:       Transcription{AutoRun: false, Engine: "gigaam-onnx", ModelPath: "./models/asr/gigaam-v3-e2e-rnnt-int8", Language: "ru", TimeoutSeconds: 3600, ChunkSeconds: 20, SourceMode: "auto", EchoDedupEnabled: true, EchoTimeToleranceMS: 1500, EchoTextSimilarity: 0.72, VADEnabled: true, VADModelPath: "./models/vad/silero-v6.2/silero_vad.onnx", VADThreshold: 0.5, VADMinSpeechMS: 250, VADMinSilenceMS: 300, SuppressNonSpeech: true, NoFallback: true, SilenceFilter: true, MinSegmentRMS: 0.0015, MixedFallbackEnabled: true, GigaAMModel: "v3_e2e_rnnt_int8", GigaAMBackend: "onnx", GigaAMONNXProvider: "cpu"},
 		Diarization: Diarization{
@@ -616,6 +620,9 @@ func Load(path string) (Config, error) {
 	}
 	if cfg.ConferenceDetection.WindowSeconds < 1 || cfg.ConferenceDetection.WindowSeconds > 120 {
 		return cfg, errors.New("conference_detection.window_seconds must be between 1 and 120")
+	}
+	if cfg.ConferenceDetection.StopAfterIdleSeconds < 0 || cfg.ConferenceDetection.StopAfterIdleSeconds > 3600 {
+		return cfg, errors.New("conference_detection.stop_after_idle_seconds must be between 0 and 3600")
 	}
 	if cfg.Transcription.VADThreshold <= 0 || cfg.Transcription.VADThreshold > 1 {
 		return cfg, errors.New("transcription.vad_threshold must be in (0, 1]")
@@ -818,7 +825,7 @@ func apply(c *Config, sec, key, raw string) error {
 	if err != nil {
 		return err
 	}
-	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "conference_detection.window_seconds": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
+	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "conference_detection.window_seconds": true, "conference_detection.stop_after_idle_seconds": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
 	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "conference_detection.enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
 	floatKeys := map[string]bool{"audio.microphone_gain": true, "audio.system_gain": true, "transcription.echo_text_similarity": true, "transcription.vad_threshold": true, "transcription.min_segment_rms": true, "diarization.cluster_threshold": true}
 	if intKeys[full] {
@@ -902,6 +909,8 @@ func apply(c *Config, sec, key, raw string) error {
 		c.ConferenceDetection.Enabled, _ = boolean(raw)
 	case "conference_detection.window_seconds":
 		c.ConferenceDetection.WindowSeconds, _ = integer(raw)
+	case "conference_detection.stop_after_idle_seconds":
+		c.ConferenceDetection.StopAfterIdleSeconds, _ = integer(raw)
 	case "conference_detection.trusted_apps":
 		if list, listErr := StringList(raw); listErr == nil {
 			c.ConferenceDetection.TrustedApps = list

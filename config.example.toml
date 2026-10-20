@@ -44,6 +44,9 @@ open_ui = ""
 # playback stay active for this period, LocalMeetAssist asks before recording.
 enabled = true
 window_seconds = 10
+# Запись, начатая по активности микрофона, останавливается, когда приложение
+# перестало использовать микрофон и системный звук. 0 — не останавливать.
+stop_after_idle_seconds = 60
 
 [inference]
 # Можно указать точный путь к вручную установленному .dll/.dylib/.so.

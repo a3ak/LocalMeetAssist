@@ -36,6 +36,11 @@ type conferenceDetectionState struct {
 	dismissed   bool
 	last        nativeaudio.Activity
 	lastWarning time.Time
+	// detected marks a recording that was started by the detector: only such a
+	// recording is stopped automatically when the audio activity ends.
+	detected     bool
+	recordingApp string
+	idleSince    time.Time
 }
 
 // StartConferenceDetection starts the low-frequency OS audio-session monitor.
@@ -60,7 +65,15 @@ func (s *Server) StartConferenceDetection(ctx context.Context) {
 
 func (s *Server) observeConferenceActivity(now time.Time) {
 	cfg := s.config().ConferenceDetection
-	if !cfg.Enabled || s.recorder.AnyActive() || s.browserAwaitingConfirmation() {
+	if !cfg.Enabled {
+		s.resetConferenceDetection(true)
+		return
+	}
+	if s.recorder.AnyActive() {
+		s.observeDetectedRecording(now, cfg)
+		return
+	}
+	if s.browserAwaitingConfirmation() {
 		s.resetConferenceDetection(true)
 		return
 	}
@@ -125,6 +138,55 @@ func (s *Server) observeConferenceActivity(now time.Time) {
 	s.publishConferenceCandidate(candidate)
 }
 
+// observeDetectedRecording stops a recording that was started by the detector
+// once the microphone and the system audio are no longer in use. The delay comes
+// from conference_detection.stop_after_idle_seconds; zero keeps the recording
+// until the user stops it.
+func (s *Server) observeDetectedRecording(now time.Time, cfg config.ConferenceDetection) {
+	state := s.conference
+	state.mu.Lock()
+	detected := state.detected
+	app := state.recordingApp
+	state.mu.Unlock()
+	if !detected {
+		s.resetConferenceDetection(true)
+		return
+	}
+	if cfg.StopAfterIdleSeconds <= 0 {
+		return
+	}
+	activity := s.activity.Activity()
+	inUse := activity.Available && (activity.Microphone || activity.System)
+	state.mu.Lock()
+	if inUse {
+		state.idleSince = time.Time{}
+		state.mu.Unlock()
+		return
+	}
+	if state.idleSince.IsZero() {
+		state.idleSince = now
+		state.mu.Unlock()
+		return
+	}
+	delay := time.Duration(cfg.StopAfterIdleSeconds) * time.Second
+	if now.Sub(state.idleSince) < delay {
+		state.mu.Unlock()
+		return
+	}
+	state.idleSince = time.Time{}
+	state.detected = false
+	state.mu.Unlock()
+	meeting, err := s.activeRecording()
+	if err != nil || meeting == nil {
+		return
+	}
+	if _, err := s.stopMeetingRecording(meeting.UID); err != nil {
+		s.logger.Printf("conference auto stop failed uid=%s error=%v", meeting.UID, err)
+		return
+	}
+	s.logger.Printf("conference auto stopped uid=%s app=%q delay=%s", meeting.UID, app, delay)
+}
+
 func (s *Server) browserAwaitingConfirmation() bool {
 	bs := s.browser
 	bs.mu.Lock()
@@ -138,6 +200,9 @@ func (s *Server) resetConferenceDetection(publish bool) {
 	hadCandidate := state.candidate != nil
 	state.activeSince = time.Time{}
 	state.candidate = nil
+	state.detected = false
+	state.recordingApp = ""
+	state.idleSince = time.Time{}
 	state.dismissed = false
 	state.mu.Unlock()
 	if publish && hadCandidate {
@@ -243,6 +308,11 @@ func (s *Server) conferenceDetection(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusInternalServerError, err.Error())
 			return
 		}
+		state.mu.Lock()
+		state.detected = true
+		state.recordingApp = candidate.AppName
+		state.idleSince = time.Time{}
+		state.mu.Unlock()
 		s.publishConferenceCandidate(nil)
 		writeJSON(w, http.StatusCreated, meeting)
 	default:

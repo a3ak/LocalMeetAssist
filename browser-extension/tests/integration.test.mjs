@@ -28,6 +28,28 @@ test('real WebSocket: manual toolbar start and stop use only tabs, application s
   mock.manualStart();await until(()=>app.publicStatus().recordingActive===true);
   await app.uiMessage({kind:'manual-stop'});await until(()=>mock.metrics().stops===2&&!app.command);
 });
+test('real WebSocket: manual start binds the active tab and stops after leaving it',async t=>{
+  const {mock,api,app}=await fixture(t,{stopDelaySeconds:1});
+  assert.equal((await app.uiMessage({kind:'manual-start'})).ok,true);
+  await until(()=>app.publicStatus().recordingActive===true&&!app.command);
+  assert.equal(app.manualBinding?.id,1);
+  // Переход на другой адрес в той же вкладке освобождает запись после задержки.
+  api.tabs[0].url=api.tabs[0].url+'?other';
+  await app.tabEvent({kind:'navigation',id:1,url:api.tabs[0].url,at:Date.now()});
+  await until(()=>mock.metrics().stops===1,4000);
+  assert.equal(app.manualBinding,null);
+  assert.equal(app.publicStatus().recordingActive,false);
+});
+test('real WebSocket: manual start keeps recording while the page stays and clears on manual stop',async t=>{
+  const {mock,app}=await fixture(t,{stopDelaySeconds:1});
+  await app.uiMessage({kind:'manual-start'});
+  await until(()=>app.publicStatus().recordingActive===true&&!app.command);
+  await app.snapshot(true);
+  assert.equal(mock.metrics().stops,0);
+  await app.uiMessage({kind:'manual-stop'});
+  await until(()=>mock.metrics().stops===1&&!app.command);
+  assert.equal(app.manualBinding,null);
+});
 test('real WebSocket: empty snapshot does not stop recording and disconnect preserves it within grace',async t=>{
   const {mock,api,app}=await fixture(t,{mode:'auto',stopDelaySeconds:5});await until(()=>app.active);
   api.tabs=[];await app.tabEvent({kind:'removed',id:1});assert(app.control.data.stopAt);
