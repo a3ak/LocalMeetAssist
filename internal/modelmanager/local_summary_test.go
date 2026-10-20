@@ -1,6 +1,9 @@
 package modelmanager
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -164,4 +167,68 @@ func TestDiarizationEmbeddingCards(t *testing.T) {
 	if !findStatus(t, manager, "diarization-embedding-campplus").Selected {
 		t.Fatal("CAM++ is not marked as applied after the switch")
 	}
+}
+
+// TestEmbeddingCardVerifiesItsOwnFile reproduces a reported bug: with CAM++
+// applied, testing the ResNet34 card hashed the configured file and reported
+// "SHA-256 mismatch", while applying the card wrote the already configured path
+// back, so nothing changed. Each embedding card must own its file.
+func TestEmbeddingCardVerifiesItsOwnFile(t *testing.T) {
+	dir := t.TempDir()
+	cfg := config.Defaults()
+	cfg.ConfigFile = filepath.Join(dir, "config.toml")
+	cfg.Inference.WhisperRuntimePath = filepath.Join(dir, "runtime", "whisper.cpp")
+
+	resnetPath := filepath.Join(dir, "models", "diarization", "wespeaker-resnet34-lm", "voxceleb_resnet34_LM.onnx")
+	campPath := filepath.Join(dir, "models", "diarization", "wespeaker-campplus", "voxceleb_campplus.onnx")
+	writeModelFile(t, campPath, "campplus")
+	writeModelFile(t, resnetPath, "resnet34")
+	cfg.Diarization.EmbeddingModel = campPath
+	// Ожидаемый хэш относится к файлу ResNet34, а не к применённому CAM++.
+	cfg.Models.EmbeddingSHA256 = sha256Text("resnet34")
+	manager := New(cfg, log.New(io.Discard, "", 0))
+
+	resnet := findStatus(t, manager, "diarization-embedding-wespeaker")
+	if resnet.Path != resnetPath {
+		t.Fatalf("the ResNet34 card points at %q, want its own file %q", resnet.Path, resnetPath)
+	}
+	if resnet.Selected {
+		t.Fatal("the ResNet34 card must not be applied while CAM++ is configured")
+	}
+	if !resnet.Exists {
+		t.Fatal("the ResNet34 file exists but the card does not see it")
+	}
+	// Полная проверка требует установленного ONNX Runtime, поэтому здесь важно
+	// именно то, что контрольная сумма прошла: иначе проверялся бы чужой файл.
+	result := manager.Test("diarization-embedding-wespeaker")
+	if strings.Contains(result.Message, "SHA-256") {
+		t.Fatalf("the intact ResNet34 file failed the checksum: %s", result.Message)
+	}
+	if checks := strings.Join(result.Checks, ", "); !strings.Contains(checks, "Files and checksums") {
+		t.Fatalf("checksums were not verified: message=%q checks=%q", result.Message, checks)
+	}
+	spec, err := manager.ApplyTarget("diarization-embedding-wespeaker")
+	if err != nil {
+		t.Fatalf("the card cannot be applied: %v", err)
+	}
+	if spec.Path != resnetPath {
+		t.Fatalf("applying the card would write %q, want %q", spec.Path, resnetPath)
+	}
+}
+
+// writeModelFile creates a file with the given content, as an installed model.
+func writeModelFile(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// sha256Text returns the hex checksum of a short string used as a fake model.
+func sha256Text(text string) string {
+	sum := sha256.Sum256([]byte(text))
+	return hex.EncodeToString(sum[:])
 }
