@@ -1901,6 +1901,7 @@ function settingValue(input) {
 
 function updateSettingsDirty(input) {
   const key = input.dataset.key;
+  if (!key) return;
   const value = settingValue(input);
   const original = input.dataset.original ?? "";
   if (value === original || (input.type === "password" && value === "")) state.settingsDirty.delete(key);
@@ -2034,7 +2035,8 @@ function buildAppsSettingEditor(input, field) {
   actions.className = "setting-list-actions";
   actions.appendChild(add);
   container.append(rows, actions);
-  sync();
+  // sync() здесь нельзя: ключ настройки присваивается после сборки редактора,
+  // иначе в сохранение попадал ключ undefined.
   return container;
 }
 
