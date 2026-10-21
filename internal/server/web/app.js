@@ -973,8 +973,14 @@ async function openDetail(uid, preserveTab = false) {
     $("#detailSpeakerCount").value = meeting.metadata?.participant_count || "0";
     setProcessingControls(Boolean(detail.processing_active));
     const artifacts = Array.isArray(detail.artifacts) ? detail.artifacts : [];
-    renderSpeakers(Array.isArray(detail.speakers) ? detail.speakers : [], artifacts, uid);
-    renderArtifacts(artifacts, uid);
+    // У встречи, восстановленной из общего потока, отдельные дорожки — тишина и
+    // копия микса. Показывать их как «микрофон» и «системный звук» нельзя:
+    // оставляем только общий поток, а фрагменты играются из него.
+    const visibleArtifacts = restoredFromMixed
+      ? artifacts.filter((item) => item.type !== "mic_wav" && item.type !== "system_wav")
+      : artifacts;
+    renderSpeakers(Array.isArray(detail.speakers) ? detail.speakers : [], visibleArtifacts, uid);
+    renderArtifacts(visibleArtifacts, uid);
     renderJobs(Array.isArray(detail.jobs) ? detail.jobs : []);
     if (!preserveTab) showTab("artifacts");
     if (!$("#detailDialog").open) $("#detailDialog").showModal();
@@ -1041,18 +1047,23 @@ function isAudioArtifact(artifact) {
   return artifact.mime_type?.startsWith("audio/") || /\.(wav|opus|ogg|mp3)$/i.test(artifact.path || "");
 }
 
+// preferredAudioArtifact picks the file a fragment is played from. When the
+// separate track is gone — for example an Opus-archived meeting restored into a
+// single mixed stream — the fragment falls back to the mixed file: the timeline
+// is the same, so the line stays audible instead of silent.
+function preferredAudioArtifact(artifacts, source) {
+  const pick = (...types) => types.map((type) => artifacts.find((item) => item.type === type)).find(Boolean);
+  if (source === "microphone") {
+    return pick("mic_wav") || pick("mixed_opus", "mixed_wav", "imported_mixed_wav") || pick("system_wav");
+  }
+  if (source === "system") {
+    return pick("system_wav") || pick("mixed_opus", "mixed_wav", "imported_mixed_wav") || pick("mic_wav");
+  }
+  return pick("mixed_opus", "mixed_wav", "imported_mixed_wav") || pick("system_wav") || pick("mic_wav") || artifacts.find(isAudioArtifact);
+}
+
 function sampleSource(speaker, artifacts) {
-  const preferred = speaker.source === "microphone"
-    ? ["mic_wav"]
-    : speaker.source === "system"
-      ? ["system_wav"]
-      : ["mixed_opus", "mixed_wav", "imported_mixed_wav"];
-  return preferred.map((type) => artifacts.find((item) => item.type === type)).find(Boolean)
-    || artifacts.find((item) => item.type === "mixed_opus")
-    || artifacts.find((item) => item.type === "mixed_wav")
-    || artifacts.find((item) => item.type === "system_wav")
-    || artifacts.find((item) => item.type === "mic_wav")
-    || artifacts.find(isAudioArtifact);
+  return preferredAudioArtifact(artifacts, speaker.source) || artifacts.find(isAudioArtifact);
 }
 
 function clockMS(value) {
@@ -1113,9 +1124,7 @@ function speakerCard(speaker) {
     ? `<div class="speaker-fragments-head"><span>${t("speakers.fragments", { n: fragments.length })}</span><small>${t("speakers.fragmentsHint")}</small></div><div class="speaker-fragments">${fragments.map((fragment) => {
         const start = Math.max(0, Number(fragment.start_ms || 0) / 1000 - 0.15);
         const end = Math.min(start + 20, Math.max(start + 0.5, Number(fragment.end_ms || 0) / 1000 + 0.2));
-        const fragmentSource = fragment.source === "microphone"
-          ? editor.artifacts.find((item) => item.type === "mic_wav")
-          : editor.artifacts.find((item) => item.type === "system_wav") || source;
+        const fragmentSource = preferredAudioArtifact(editor.artifacts, fragment.source) || source;
         const url = fragmentSource ? audioArtifactURL(editor.uid, fragmentSource) : "";
         return `<div class="speaker-fragment" draggable="true" data-fragment-id="${esc(fragment.id)}" data-source-speaker="${esc(speaker.id)}"><input class="fragment-select" type="checkbox" aria-label="${t("speakers.fragmentSelect")}"><button type="button" class="ghost play-fragment" data-url="${esc(url)}" data-start="${start}" data-end="${end}" ${url ? "" : "disabled"}>▶</button><div><div class="fragment-time">${clockMS(fragment.start_ms)}–${clockMS(fragment.end_ms)}</div><div class="fragment-text" title="${esc(fragment.text || "")}">${esc(fragment.text || t("speakers.noText"))}</div></div></div>`;
       }).join("")}</div>`
