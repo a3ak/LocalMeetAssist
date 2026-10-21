@@ -41,6 +41,26 @@ test('real WebSocket: manual start binds the active tab and stops after leaving 
   // Состояние приходит отдельным сообщением после команды.
   await until(()=>app.publicStatus().recordingActive===false,2000);
 });
+test('real WebSocket: a manual recording can be unbound and bound again',async t=>{
+  const {mock,api,app}=await fixture(t,{stopDelaySeconds:1});
+  await app.uiMessage({kind:'manual-start'});
+  await until(()=>app.publicStatus().recordingActive===true&&!app.command);
+  assert.equal(app.publicStatus().manual?.id,1);
+  assert.equal((await app.uiMessage({kind:'manual-unbind'})).ok,true);
+  assert.equal(app.publicStatus().manual,null);
+  // Без привязки уход со страницы запись не останавливает.
+  api.tabs[0].url=api.tabs[0].url+'?away';
+  await app.tabEvent({kind:'navigation',id:1,url:api.tabs[0].url,at:Date.now()});
+  await new Promise(resolve=>setTimeout(resolve,1200));
+  assert.equal(mock.metrics().stops,0);
+  // Привязка к текущей странице снова включает автостоп.
+  assert.equal((await app.uiMessage({kind:'manual-bind'})).ok,true);
+  assert.equal(app.publicStatus().manual?.id,1);
+  api.tabs[0].url=api.tabs[0].url+'?away2';
+  await app.tabEvent({kind:'navigation',id:1,url:api.tabs[0].url,at:Date.now()});
+  await until(()=>mock.metrics().stops===1,4000);
+  assert.equal(app.publicStatus().manual,null);
+});
 test('real WebSocket: manual start keeps recording while the page stays and clears on manual stop',async t=>{
   const {mock,app}=await fixture(t,{stopDelaySeconds:1});
   await app.uiMessage({kind:'manual-start'});

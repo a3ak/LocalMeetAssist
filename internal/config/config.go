@@ -181,6 +181,27 @@ type ConferenceDetection struct {
 	// asking to be remembered first. ExcludedApps are never asked about.
 	TrustedApps  []string
 	ExcludedApps []string
+	// AppTitles maps a real application name to the name shown in the meeting
+	// title: one "Real = Visible" entry per line. A missing entry keeps the real
+	// name.
+	AppTitles string
+}
+
+// DisplayName returns the visible name of an application for meeting titles.
+func (c ConferenceDetection) DisplayName(app string) string {
+	normalized := strings.ToLower(strings.TrimSpace(app))
+	for _, line := range strings.Split(c.AppTitles, "\n") {
+		real, visible, found := strings.Cut(line, "=")
+		if !found {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(real)) == normalized {
+			if title := strings.TrimSpace(visible); title != "" {
+				return title
+			}
+		}
+	}
+	return app
 }
 
 // Inference configures the native ONNX Runtime loaded by the Go process.
@@ -917,6 +938,8 @@ func apply(c *Config, sec, key, raw string) error {
 		c.ConferenceDetection.StopAfterIdleSeconds, _ = integer(raw)
 	case "conference_detection.title_template":
 		c.ConferenceDetection.TitleTemplate = s
+	case "conference_detection.app_titles":
+		c.ConferenceDetection.AppTitles = s
 	case "conference_detection.trusted_apps":
 		if list, listErr := StringList(raw); listErr == nil {
 			c.ConferenceDetection.TrustedApps = list

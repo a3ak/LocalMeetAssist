@@ -25,6 +25,9 @@ type conferenceCandidate struct {
 	// AppName is the localized name of the app capturing the microphone, when
 	// the platform can attribute it. Empty when unknown.
 	AppName string `json:"app_name,omitempty"`
+	// DisplayApp is the visible name from the trusted applications list; the UI
+	// shows it instead of the real one when set.
+	DisplayApp string `json:"display_app,omitempty"`
 	// Trusted means the app is known and may start a recording prompt; an
 	// unknown app asks to be remembered first.
 	Trusted bool `json:"trusted"`
@@ -132,7 +135,7 @@ func (s *Server) observeConferenceActivity(now time.Time) {
 		state.mu.Unlock()
 		return
 	}
-	candidate := &conferenceCandidate{ID: uuidv7.New(), DetectedAt: now, Backend: activity.Backend, AppName: appName, Trusted: trusted}
+	candidate := &conferenceCandidate{ID: uuidv7.New(), DetectedAt: now, Backend: activity.Backend, AppName: appName, DisplayApp: cfg.DisplayName(appName), Trusted: trusted}
 	state.candidate = candidate
 	state.mu.Unlock()
 	s.logger.Printf("conference detected candidate=%s backend=%q window=%s app=%q trusted=%v", candidate.ID, candidate.Backend, window, appName, trusted)
@@ -213,7 +216,7 @@ func (s *Server) buildConferenceTitle(app, backend string) string {
 	}
 	now := time.Now()
 	replacer := strings.NewReplacer(
-		"{{app}}", app,
+		"{{app}}", cfg.ConferenceDetection.DisplayName(app),
 		"{{backend}}", backend,
 		"{{date}}", now.Format(cfg.Storage.DateFormat),
 		"{{time}}", now.Format(cfg.Storage.TimeFormat),

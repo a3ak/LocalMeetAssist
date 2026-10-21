@@ -229,6 +229,7 @@
         canControl:this.status==='online'&&this.compatible&&this.recordingKnown&&this.config?.enabled&&!this.command,
         commandPending:!!this.command,commandError:this.commandError||null,
         origin:d.origin||null,controller:d.controller||null,switchAt:d.switchAt||null,stopAt:d.stopAt||null,notice:d.notice||null,restartWaiting:!!d.restartWaiting,
+        manual:this.manualBinding?{id:this.manualBinding.id,url:this.manualBinding.url,title:this.manualBinding.title||'',stopAt:this.manualBinding.stopAt||null}:null,
         rows:this.control.rows.map(row=>({id:row.id,url:row.url,glob:row.glob,title:row.title,
           source:d.active&&row.id===d.origin?.id&&row.url===d.origin.url,
           controlling:d.active&&row.id===d.controller?.id,
@@ -257,13 +258,24 @@
         case 'test-notification':return this.notifications.test();
         case 'reconnect':if(!this.client||this.client.blocked)return{ok:false,error:'Укажите порт и действующий токен.'};this.client.connect();return{ok:true};
         case 'confirm':case 'decline':return this.answer(message.kind,message.promptId);
+        case 'manual-bind':{
+          const tab=await this.api.activeTab();
+          if(!tab||!Number.isSafeInteger(tab.id))return{ok:false,error:'Активная вкладка недоступна.'};
+          this.manualBinding={id:tab.id,url:tab.url||'',title:tab.title||'',at:this.now(),stopAt:null};
+          await this.api.sessionSet({manualBinding:this.manualBinding});
+          await this.snapshot(true);return{ok:true};
+        }
+        case 'manual-unbind':
+          this.manualBinding=null;
+          await this.api.sessionSet({manualBinding:null});
+          await this.snapshot(true);return{ok:true};
         case 'manual-start':case 'manual-stop':
           if(!this.publicStatus().canControl)return{ok:false,error:'Нет актуального состояния записи или действие уже отправлено.'};
           if(message.kind==='manual-start'){
             // Активная вкладка запоминается до отправки команды: если она
             // закроется или уйдёт на другой адрес, запись остановится сама.
             const tab=await this.api.activeTab();
-            this.manualPending=tab&&Number.isSafeInteger(tab.id)?{id:tab.id,url:tab.url||'',at:this.now()}:null;
+            this.manualPending=tab&&Number.isSafeInteger(tab.id)?{id:tab.id,url:tab.url||'',title:tab.title||'',at:this.now()}:null;
             this.manualBinding=null;
             await this.api.sessionSet({manualPending:this.manualPending,manualBinding:null});
             await this.queueCommand('start');

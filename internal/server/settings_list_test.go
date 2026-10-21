@@ -1,6 +1,7 @@
 package server
 
 import (
+	"strings"
 	"testing"
 
 	"localmeetassist/internal/config"
@@ -25,10 +26,13 @@ func TestConferenceAppListsAreEditableSettings(t *testing.T) {
 	if !ok {
 		t.Fatal("trusted apps field is missing from the settings schema")
 	}
-	if trusted.Kind != "list" {
-		t.Fatalf("trusted apps kind = %q, want list", trusted.Kind)
+	if trusted.Kind != "apps" {
+		t.Fatalf("trusted apps kind = %q, want apps", trusted.Kind)
 	}
-	if trusted.Value != "Zoom Workplace, Microsoft Teams" {
+	if len(trusted.Items) != 2 || trusted.Items[0].Real != "Zoom Workplace" || trusted.Items[0].Visible != "Zoom Workplace" {
+		t.Fatalf("trusted apps items = %+v", trusted.Items)
+	}
+	if !strings.Contains(trusted.Value, "Zoom Workplace = Zoom Workplace") {
 		t.Fatalf("trusted apps value = %q", trusted.Value)
 	}
 	excluded, ok := fields["conference_detection.excluded_apps"]

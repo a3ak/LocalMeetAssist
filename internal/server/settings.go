@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"path/filepath"
@@ -22,18 +23,26 @@ type settingOption struct {
 	Disabled bool `json:"disabled,omitempty"`
 }
 
+// settingAppItem is one entry of the trusted application list: the real name is
+// what the operating system reports, the visible name is used in meeting titles.
+type settingAppItem struct {
+	Real    string `json:"real"`
+	Visible string `json:"visible"`
+}
+
 type settingField struct {
-	Key          string          `json:"key"`
-	Label        string          `json:"label"`
-	Description  string          `json:"description"`
-	Section      string          `json:"section,omitempty"`
-	Kind         string          `json:"kind"`
-	Value        string          `json:"value"`
-	Options      []settingOption `json:"options,omitempty"`
-	Integer      bool            `json:"integer,omitempty"`
-	SecretSet    bool            `json:"secret_set,omitempty"`
-	DefaultValue string          `json:"default_value,omitempty"`
-	Resettable   bool            `json:"resettable,omitempty"`
+	Key          string           `json:"key"`
+	Label        string           `json:"label"`
+	Description  string           `json:"description"`
+	Section      string           `json:"section,omitempty"`
+	Kind         string           `json:"kind"`
+	Value        string           `json:"value"`
+	Options      []settingOption  `json:"options,omitempty"`
+	Items        []settingAppItem `json:"items,omitempty"`
+	Integer      bool             `json:"integer,omitempty"`
+	SecretSet    bool             `json:"secret_set,omitempty"`
+	DefaultValue string           `json:"default_value,omitempty"`
+	Resettable   bool             `json:"resettable,omitempty"`
 	// ShowIf hides the field unless another setting has one of the listed
 	// values. It is how the network and the local minutes settings stay apart:
 	// only the section of the selected engine is shown.
@@ -99,6 +108,24 @@ func selectIntSetting(key, label, description string, value int, options ...sett
 	return settingField{Key: key, Label: label, Description: description, Kind: "select", Value: strconv.Itoa(value), Options: options, Integer: true}
 }
 func option(value, label string) settingOption { return settingOption{Value: value, Label: label} }
+
+// appsSetting renders the trusted applications with an editable visible name.
+func appsSetting(key, label, description string, items []settingAppItem) settingField {
+	lines := make([]string, 0, len(items))
+	for _, item := range items {
+		lines = append(lines, item.Real+" = "+item.Visible)
+	}
+	return settingField{Key: key, Label: label, Description: description, Kind: "apps", Value: strings.Join(lines, "\n"), Items: items}
+}
+
+// conferenceAppItems joins the trusted applications with their display names.
+func conferenceAppItems(cfg config.Config) []settingAppItem {
+	items := make([]settingAppItem, 0, len(cfg.ConferenceDetection.TrustedApps))
+	for _, app := range cfg.ConferenceDetection.TrustedApps {
+		items = append(items, settingAppItem{Real: app, Visible: cfg.ConferenceDetection.DisplayName(app)})
+	}
+	return items
+}
 
 // modelField renders a model choice as a list when the models are known and as a
 // plain path input otherwise (tests, or a build without the model manager).
@@ -210,7 +237,7 @@ func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) 
 		{ID: "conference_detection", Title: "Определение конференции", Description: "Запрос на запись, когда ОС одновременно сообщает об использовании микрофона и воспроизведении системного звука.", Fields: []settingField{
 			boolSetting("conference_detection.enabled", "Предлагать запись", "Наблюдать системные аудиосессии и спрашивать перед началом записи. Громкость не анализируется: mute внутри приложения обычно не скрывает активную сессию.", cfg.ConferenceDetection.Enabled),
 			intSetting("conference_detection.window_seconds", "Окно проверки, сек", "Микрофон и системный звук должны оставаться активными одновременно. По умолчанию 10 секунд.", cfg.ConferenceDetection.WindowSeconds),
-			listSetting("conference_detection.trusted_apps", "Доверенные приложения", "Приложения, для которых запись предлагается сразу, без вопроса о добавлении.", cfg.ConferenceDetection.TrustedApps),
+			appsSetting("conference_detection.trusted_apps", "Доверенные приложения", "Приложения, для которых запись предлагается сразу. Настоящее имя показывает система, видимое подставляется в название встречи вместо {{app}}.", conferenceAppItems(cfg)),
 			listSetting("conference_detection.excluded_apps", "Исключения", "Приложения, про которые не спрашиваем никогда.", cfg.ConferenceDetection.ExcludedApps),
 			intSetting("conference_detection.stop_after_idle_seconds", "Остановка после тишины, сек", "Запись, начатая по активности микрофона, останавливается, когда приложение перестало использовать микрофон и системный звук. 0 — не останавливать.", cfg.ConferenceDetection.StopAfterIdleSeconds),
 			textSetting("conference_detection.title_template", "Название встречи", "Шаблон названия для встречи, начатой детектором. Подстановки: {{app}} — приложение, {{backend}} — источник активности, {{date}} и {{time}} — дата и время, {{uid}} — идентификатор. Пустое имя приложения даёт обычное название.", cfg.ConferenceDetection.TitleTemplate),
@@ -422,6 +449,14 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 			literals[key] = value
 		case "list":
 			literals[key] = config.QuotedList(splitSettingList(value))
+		case "apps":
+			apps, titles, err := parseSettingApps(value)
+			if err != nil {
+				writeError(w, http.StatusBadRequest, fmt.Sprintf("%s: %v", key, err))
+				return
+			}
+			literals[key] = config.QuotedList(apps)
+			literals["conference_detection.app_titles"] = strconv.Quote(strings.Join(titles, "\n"))
 		case "password":
 			if value == "" {
 				continue
@@ -801,4 +836,46 @@ func (s *Server) diarizationModelChoices(cfg config.Config) map[string][]setting
 		"transcription.model_path":       build([]string{"gigaam-v3-e2e-rnnt-int8", "whisper-small-q5", "whisper-medium-q5", "whisper-large-v3-turbo-q5"}, cfg.Transcription.ModelPath, customPrefix),
 		"transcription.vad_model_path":   build([]string{"silero-vad"}, cfg.Transcription.VADModelPath, customPrefix),
 	}
+}
+
+// parseSettingApps reads "real = visible" lines of the trusted applications
+// editor. It returns the real names for detection and the display names for the
+// title template.
+func parseSettingApps(value string) ([]string, []string, error) {
+	if len(value) > 16*1024 {
+		return nil, nil, errors.New("the application list is too long")
+	}
+	var apps, titles []string
+	seen := make(map[string]bool)
+	for _, line := range strings.Split(value, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		real, visible, found := strings.Cut(line, "=")
+		real = strings.TrimSpace(real)
+		visible = strings.TrimSpace(visible)
+		if !found || visible == "" {
+			visible = real
+		}
+		if real == "" {
+			real = visible
+		}
+		if real == "" || len(real) > 256 || len(visible) > 256 {
+			return nil, nil, errors.New("an application name is empty or too long")
+		}
+		key := strings.ToLower(real)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		apps = append(apps, real)
+		if visible != real {
+			titles = append(titles, real+" = "+visible)
+		}
+		if len(apps) > 200 {
+			return nil, nil, errors.New("too many applications")
+		}
+	}
+	return apps, titles, nil
 }

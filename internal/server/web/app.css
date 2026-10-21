@@ -793,3 +793,9 @@ main{grid-template-columns:minmax(0,1fr) minmax(260px,340px)!important}
 .find-replace .find-option input{width:auto;margin:0}
 .find-replace .find-count{font-size:12px;color:var(--muted);margin-left:auto;white-space:nowrap}
 .find-replace.find-invalid .find-input{border-color:var(--danger)}
+
+/* Доверенные приложения: видимое имя редактируется, настоящее показано под ним. */
+.setting-app-row{display:flex;flex-direction:column;gap:2px;margin-bottom:8px}
+.setting-app-line{display:flex;gap:8px;align-items:center}
+.setting-app-line input{flex:1}
+.setting-app-real{color:var(--muted);font-size:11px;padding-left:2px}

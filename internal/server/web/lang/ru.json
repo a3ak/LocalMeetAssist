@@ -382,5 +382,7 @@
   "replace.replaced": "Заменено: {n}",
   "replace.invalid": "Неверное выражение",
   "settings.savedDeferred": "Сохранено; применится со следующей встречи",
-  "settings.deferredToast": "Идёт запись или обработка: настройки сохранены и применятся со следующей встречи."
+  "settings.deferredToast": "Идёт запись или обработка: настройки сохранены и применятся со следующей встречи.",
+  "settings.appVisiblePlaceholder": "Отображаемое название",
+  "settings.appRealPlaceholder": "Настоящее имя"
 }

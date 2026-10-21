@@ -365,7 +365,7 @@ function renderConferenceCandidate(candidate) {
     return;
   }
   $("#conferenceBackend").textContent = candidate.backend || "";
-  const app = candidate.app_name || "";
+  const app = candidate.display_app || candidate.app_name || "";
   $("#conferenceApp").textContent = app ? t("conference.appLabel", { app }) : "";
   const question = $("#conferenceQuestion");
   const actions = $("#conferenceActions");
@@ -1980,6 +1980,64 @@ function applyAppVersion() {
 // buildListSettingEditor renders a list of names as editable rows with a
 // remove button per row and one button to add a row. The hidden input keeps the
 // comma-separated value the settings API already expects.
+// buildAppsSettingEditor edits the trusted applications: the visible name is
+// what meeting titles use, the real name is what the system reports and stays
+// visible underneath.
+function buildAppsSettingEditor(input, field) {
+  const container = document.createElement("div");
+  container.className = "setting-list";
+  const rows = document.createElement("div");
+  rows.className = "setting-list-rows";
+  const sync = () => {
+    const entries = [...rows.querySelectorAll(".setting-app-row")].map((row) => {
+      const visible = row.querySelector("input").value.trim();
+      const real = (row.dataset.real || "").trim() || visible;
+      return visible ? `${real} = ${visible}` : "";
+    }).filter(Boolean);
+    input.value = entries.join("\n");
+    updateSettingsDirty(input);
+  };
+  const addRow = (real, visible) => {
+    const row = document.createElement("div");
+    row.className = "setting-app-row";
+    row.dataset.real = real || "";
+    const line = document.createElement("div");
+    line.className = "setting-app-line";
+    const text = document.createElement("input");
+    text.type = "text";
+    text.value = visible || real || "";
+    text.placeholder = t("settings.appVisiblePlaceholder");
+    text.autocomplete = "off";
+    text.addEventListener("input", sync);
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "icon-action danger";
+    remove.title = t("settings.removeApp");
+    remove.setAttribute("aria-label", t("settings.removeApp"));
+    remove.innerHTML = TRASH_ICON;
+    remove.onclick = () => { row.remove(); sync(); };
+    line.append(text, remove);
+    const hint = document.createElement("small");
+    hint.className = "setting-app-real";
+    hint.textContent = real || t("settings.appRealPlaceholder");
+    row.append(line, hint);
+    rows.appendChild(row);
+    return text;
+  };
+  (field.items || []).forEach((item) => addRow(item.real, item.visible));
+  const add = document.createElement("button");
+  add.type = "button";
+  add.className = "ghost small";
+  add.textContent = t("settings.addApp");
+  add.onclick = () => addRow("", "").focus();
+  const actions = document.createElement("div");
+  actions.className = "setting-list-actions";
+  actions.appendChild(add);
+  container.append(rows, actions);
+  sync();
+  return container;
+}
+
 function buildListSettingEditor(input) {
   const container = document.createElement("div");
   container.className = "setting-list";
@@ -2090,7 +2148,13 @@ function renderSettingsGroup(groupID) {
     title.textContent = field.label;
     let input;
     let listEditor = null;
-    if (field.kind === "list") {
+    let appsEditor = null;
+    if (field.kind === "apps") {
+      input = document.createElement("input");
+      input.type = "hidden";
+      input.value = field.value || "";
+      appsEditor = buildAppsSettingEditor(input, field);
+    } else if (field.kind === "list") {
       // Список приложений: значение живёт в скрытом поле, а редактируется
       // построчно (см. buildListSettingEditor).
       input = document.createElement("input");
@@ -2163,6 +2227,11 @@ function renderSettingsGroup(groupID) {
           updateSettingsDirty(input);
         };
         control.append(input, reset);
+        row.append(title, control, description);
+      } else if (field.kind === "apps") {
+        const control = document.createElement("div");
+        control.className = "setting-control list-control";
+        control.append(appsEditor, input);
         row.append(title, control, description);
       } else if (field.kind === "list") {
         const control = document.createElement("div");
