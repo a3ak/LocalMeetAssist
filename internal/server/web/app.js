@@ -2472,6 +2472,54 @@ setupFindReplace();
 // setupFindReplace wires the find/replace panel of the transcript and summary
 // tabs. Plain text is matched literally and case-insensitively unless the case
 // box is ticked; the regex box switches to a JavaScript expression.
+// caretTopInTextarea measures where the caret at index sits vertically. Soft
+// wrapped lines make a line-count estimate wrong, so the prefix is laid out in a
+// hidden mirror with the same font and width and the marker's offset is read.
+function caretTopInTextarea(textarea, index) {
+  const style = window.getComputedStyle(textarea);
+  const mirror = document.createElement("div");
+  for (const prop of ["fontFamily", "fontSize", "fontWeight", "fontStyle", "letterSpacing", "lineHeight", "textTransform", "wordSpacing", "paddingTop", "paddingRight", "paddingBottom", "paddingLeft", "textIndent", "tabSize"]) {
+    mirror.style[prop] = style[prop];
+  }
+  const padLeft = parseFloat(style.paddingLeft) || 0;
+  const padRight = parseFloat(style.paddingRight) || 0;
+  Object.assign(mirror.style, {
+    position: "absolute",
+    top: "0",
+    left: "-10000px",
+    visibility: "hidden",
+    boxSizing: "content-box",
+    width: Math.max(20, textarea.clientWidth - padLeft - padRight) + "px",
+    height: "auto",
+    whiteSpace: "pre-wrap",
+    overflowWrap: "break-word",
+    wordBreak: style.wordBreak || "normal",
+    overflow: "hidden",
+  });
+  const marker = document.createElement("span");
+  marker.textContent = "\u200b";
+  mirror.append(document.createTextNode(textarea.value.slice(0, index)), marker);
+  document.body.appendChild(mirror);
+  const top = marker.getBoundingClientRect().top - mirror.getBoundingClientRect().top;
+  mirror.remove();
+  return top;
+}
+
+// scrollTextareaTo brings the caret at index into view, keeping it about a third
+// from the top of the field.
+function scrollTextareaTo(textarea, index) {
+  let top = 0;
+  try { top = caretTopInTextarea(textarea, index); } catch { top = 0; }
+  if (!Number.isFinite(top) || top <= 0) {
+    const lineHeight = parseFloat(window.getComputedStyle(textarea).lineHeight) || 20;
+    top = Math.max(0, (textarea.value.slice(0, index).split("\n").length - 1) * lineHeight);
+  }
+  const view = textarea.clientHeight || 0;
+  if (top < textarea.scrollTop || top > textarea.scrollTop + view - 24) {
+    textarea.scrollTop = Math.max(0, top - view / 3);
+  }
+}
+
 function setupFindReplace() {
   $$(".find-replace").forEach((panel) => {
     const target = document.getElementById(panel.dataset.target);
@@ -2533,19 +2581,10 @@ function setupFindReplace() {
       if (!inserted) target.setRangeText(text, start, end, "end");
       target.dispatchEvent(new Event("input", { bubbles: true }));
     };
-    const scrollToSelection = (index) => {
-      const style = window.getComputedStyle(target);
-      const lineHeight = parseFloat(style.lineHeight) || 20;
-      const line = target.value.slice(0, index).split("\n").length - 1;
-      const top = line * lineHeight;
-      if (top < target.scrollTop || top > target.scrollTop + target.clientHeight - lineHeight * 2) {
-        target.scrollTop = Math.max(0, top - target.clientHeight / 3);
-      }
-    };
     const selectMatch = (match) => {
       target.focus();
       target.setSelectionRange(match.index, match.index + match.length);
-      scrollToSelection(match.index);
+      scrollTextareaTo(target, match.index);
     };
     const nextMatch = () => {
       const found = refresh();
