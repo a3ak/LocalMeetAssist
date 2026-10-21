@@ -25,6 +25,20 @@
     document.getElementById('open-app').disabled = !data.port;
     document.getElementById('open-app').title = `Открыть приложение · http://127.0.0.1:${data.port || 'port'}/`;
     document.getElementById('source').hidden = !active || !data.origin;
+    // Ручная запись не привязана к странице встречи: показываем, к какой
+    // вкладке она привязана, и даём привязать или отвязать вручную.
+    const manual = document.getElementById('manual');
+    manual.hidden = !active || !!data.origin;
+    if (active && !data.origin) {
+      const bound = data.manual;
+      document.getElementById('manual-page').textContent = bound
+        ? (bound.title ? bound.title + ' · ' + bound.url : bound.url)
+        : 'Запись не привязана: уход со страницы её не остановит.';
+      document.getElementById('manual-unbind').hidden = !bound;
+      document.getElementById('manual-bind').hidden = !!bound;
+      document.getElementById('manual-bind').disabled = sending || !data.canControl;
+      document.getElementById('manual-unbind').disabled = sending || !data.canControl;
+    }
     document.getElementById('source-url').textContent = data.origin?.url || '';
     document.getElementById('source-glob').textContent = data.origin?.glob || '';
     document.getElementById('controller').hidden = !data.controller || (data.controller.id === data.origin?.id && data.controller.url === data.origin?.url);
@@ -118,6 +132,8 @@
   document.getElementById('record-control').addEventListener('click', () => action({ kind: lastStatus?.recordingActive ? 'manual-stop' : 'manual-start' }));
   document.getElementById('open-app').addEventListener('click', () => action({ kind: 'open-app' }));
   document.getElementById('wait-switch').addEventListener('click', () => action({ kind: 'wait-switch' }));
+  document.getElementById('manual-bind').addEventListener('click', () => action({ kind: 'manual-bind' }));
+  document.getElementById('manual-unbind').addEventListener('click', () => action({ kind: 'manual-unbind' }));
   document.getElementById('select-controller').addEventListener('click', () => action({ kind: 'select-controller' }));
   document.getElementById('matches').addEventListener('click', () => menu(true));
   document.getElementById('back').addEventListener('click', () => menu(false));

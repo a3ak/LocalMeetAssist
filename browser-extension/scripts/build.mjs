@@ -18,6 +18,9 @@ for (const target of ['chrome', 'firefox']) {
   for (const name of ['browser-api.js', 'ui.js', 'options.html', 'options.js', 'popup.html', 'popup.js', 'styles.css', 'icons', 'ui-icons']) {
     await cp(path.join(root, 'src', name), path.join(out, name), { recursive: true });
   }
-  await cp(path.join(root, 'manifests', `manifest.${target}.json`), path.join(out, 'manifest.json'));
+  // Подставляем версию из package.json, чтобы манифест не отставал от сборки.
+  const manifest = JSON.parse(await readFile(path.join(root, 'manifests', `manifest.${target}.json`), 'utf8'));
+  manifest.version = version;
+  await writeFile(path.join(out, 'manifest.json'), JSON.stringify(manifest, null, 2) + '\n');
 }
 console.log('Built dist/chrome and dist/firefox (no dependencies, no minification).');

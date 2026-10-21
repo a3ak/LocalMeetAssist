@@ -272,6 +272,10 @@
         case 'manual-start':case 'manual-stop':
           if(!this.publicStatus().canControl)return{ok:false,error:'Нет актуального состояния записи или действие уже отправлено.'};
           if(message.kind==='manual-start'){
+            // Ручной старт не связан со страницей, которую нашла детекция:
+            // убираем её следы, иначе попап покажет её вместо блока привязки.
+            this.control.clearControl();
+            await this.control.persist();
             // Активная вкладка запоминается до отправки команды: если она
             // закроется или уйдёт на другой адрес, запись остановится сама.
             const tab=await this.api.activeTab();

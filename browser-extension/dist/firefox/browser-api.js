@@ -19,7 +19,15 @@
       if (api.storage.session.setAccessLevel) await api.storage.session.setAccessLevel({ accessLevel: 'TRUSTED_CONTEXTS' });
     },
     queryTabs: () => api.tabs.query({}),
-    activeTab: async () => (await api.tabs.query({ active: true, lastFocusedWindow: true }))[0],
+    // activeTab also has to work from the service worker, where the focused
+    // window may be unknown: try the last focused window, then the current one,
+    // and finally any active tab.
+    activeTab: async () => {
+      for (const query of [{ active: true, lastFocusedWindow: true }, { active: true, currentWindow: true }, { active: true }]) {
+        try { const tabs = await api.tabs.query(query); if (tabs && tabs[0]) return tabs[0]; } catch { /* следующий вариант */ }
+      }
+      return undefined;
+    },
     closeTabs: ids => api.tabs.remove(ids),
     openTab: url => api.tabs.create({ url }),
     createNotification: (id, options) => api.notifications.create(id, options),

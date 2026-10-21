@@ -43,8 +43,12 @@ test('real WebSocket: manual start binds the active tab and stops after leaving 
 });
 test('real WebSocket: a manual recording can be unbound and bound again',async t=>{
   const {mock,api,app}=await fixture(t,{stopDelaySeconds:1});
+  // Следы прошлой детекции не должны подменять привязку ручной записи.
+  app.control.data.origin={id:7,url:'https://meet.example/room',glob:'*meet.example*'};
+  app.control.data.active=true;
   await app.uiMessage({kind:'manual-start'});
   await until(()=>app.publicStatus().recordingActive===true&&!app.command);
+  assert.equal(app.publicStatus().origin,null);
   assert.equal(app.publicStatus().manual?.id,1);
   assert.equal((await app.uiMessage({kind:'manual-unbind'})).ok,true);
   assert.equal(app.publicStatus().manual,null);

@@ -10,3 +10,7 @@
 *.download.part
 *.part
 *.log
+
+# Собираются CI (npm run package), в репозитории не хранятся.
+/browser-extension/artifacts/
+/browser-extension/packages/

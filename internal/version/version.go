@@ -5,4 +5,4 @@ package version
 // the startup log. It is a variable so release builds can inject the tag:
 //
 //	go build -ldflags "-X localmeetassist/internal/version.Version=0.1.0"
-var Version = "0.2.2"
+var Version = "0.2.3"
