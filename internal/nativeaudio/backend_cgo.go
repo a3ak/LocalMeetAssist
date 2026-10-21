@@ -30,6 +30,7 @@ import (
 	"errors"
 	"fmt"
 	"runtime"
+	"strings"
 	"sync"
 	"unsafe"
 )
@@ -53,6 +54,10 @@ type Activity struct {
 	// MicrophoneApp is the localized name of the process that is actively
 	// capturing input, when the platform can attribute it. Empty when unknown.
 	MicrophoneApp string `json:"microphone_app,omitempty"`
+	// Apps lists every application that currently uses the microphone or plays
+	// audio, when the platform can attribute it. It lets the detector decide
+	// whether the application that started a recording is still busy.
+	Apps []string `json:"apps,omitempty"`
 }
 
 // StartRequest describes the two capture streams to open.
@@ -135,6 +140,9 @@ func (b *Backend) Activity() Activity {
 	}
 	if activity.Microphone {
 		activity.MicrophoneApp = b.ActiveInputApp()
+	}
+	if runtime.GOOS != "linux" {
+		activity.Apps = activeAudioApps()
 	}
 	return activity
 }
@@ -272,4 +280,29 @@ func cString(buffer []byte) string {
 		}
 	}
 	return string(buffer)
+}
+
+// activeAudioApps lists the applications using audio, when the platform can
+// attribute it.
+func activeAudioApps() []string {
+	buffer := make([]byte, 4096)
+	var found C.int
+	errbuf := make([]byte, 512)
+	if C.lm_audio_activity_apps(
+		(*C.char)(unsafe.Pointer(&buffer[0])),
+		C.size_t(len(buffer)),
+		&found,
+		(*C.char)(unsafe.Pointer(&errbuf[0])),
+		C.size_t(len(errbuf)),
+	) != 0 || found == 0 {
+		return nil
+	}
+	var apps []string
+	for _, name := range strings.Split(cString(buffer), "\n") {
+		name = strings.TrimSpace(name)
+		if name != "" {
+			apps = append(apps, name)
+		}
+	}
+	return apps
 }

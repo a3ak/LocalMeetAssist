@@ -44,6 +44,10 @@ int lm_audio_stop(lm_capture* capture, char* error_text, size_t error_size);
 // monitor source). Returns 0 while running, 1 when it was just restored, 2 when
 // it is lost and cannot be restored.
 int lm_audio_system_health(lm_capture* capture);
+// lm_audio_activity_apps writes newline-separated names of the applications that
+// use the microphone or play audio. found stays 0 when the platform cannot
+// attribute activity, and the caller falls back to the global flags.
+int lm_audio_activity_apps(char* names, size_t names_size, int* found, char* error_text, size_t error_size);
 
 // lm_audio_microphone_health checks the microphone stream and recreates the device
 // after a change or a disappearance. Returns 0 while running, 1 when recreated,

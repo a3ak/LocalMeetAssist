@@ -123,6 +123,7 @@ var settingFieldsEN = map[string]settingTextEN{
 	"conference_detection.enabled":                 {"Offer to record", "Observe OS audio sessions and ask before recording. Audio amplitude is not inspected: an in-app mute normally leaves the session active."},
 	"conference_detection.window_seconds":          {"Detection window, sec", "Microphone capture and system playback must remain active together. The default is 10 seconds."},
 	"conference_detection.trusted_apps":            {"Trusted applications", "Apps that are offered recording immediately, without asking to be remembered."},
+	"conference_detection.title_template":          {"Meeting title", "Title template for a meeting started by the detector. Placeholders: {{app}} is the application, {{backend}} the activity source, {{date}} and {{time}} the date and time, {{uid}} an identifier. An unknown application keeps the default title."},
 	"conference_detection.stop_after_idle_seconds": {"Stop after silence, sec", "A recording started by microphone activity stops once the application no longer uses the microphone and system audio. 0 disables the automatic stop."},
 	"conference_detection.excluded_apps":           {"Exclusions", "Apps that are never asked about."},
 

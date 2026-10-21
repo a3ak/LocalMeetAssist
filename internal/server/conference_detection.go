@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -157,6 +158,17 @@ func (s *Server) observeDetectedRecording(now time.Time, cfg config.ConferenceDe
 	}
 	activity := s.activity.Activity()
 	inUse := activity.Available && (activity.Microphone || activity.System)
+	// Когда платформа умеет относить активность к приложениям, смотрим именно на
+	// то, что запустило запись: посторонний плеер больше не удерживает встречу.
+	if app != "" && len(activity.Apps) > 0 {
+		inUse = false
+		for _, active := range activity.Apps {
+			if strings.EqualFold(strings.TrimSpace(active), strings.TrimSpace(app)) {
+				inUse = true
+				break
+			}
+		}
+	}
 	state.mu.Lock()
 	if inUse {
 		state.idleSince = time.Time{}
@@ -185,6 +197,29 @@ func (s *Server) observeDetectedRecording(now time.Time, cfg config.ConferenceDe
 		return
 	}
 	s.logger.Printf("conference auto stopped uid=%s app=%q delay=%s", meeting.UID, app, delay)
+}
+
+// buildConferenceTitle renders the meeting title from the configured template.
+// An unknown application keeps the default title, so a meeting is never named
+// after an empty string.
+func (s *Server) buildConferenceTitle(app, backend string) string {
+	if strings.TrimSpace(app) == "" {
+		return ""
+	}
+	cfg := s.config()
+	tmpl := cfg.ConferenceDetection.TitleTemplate
+	if strings.TrimSpace(tmpl) == "" {
+		tmpl = "{{app}} — {{date}} {{time}}"
+	}
+	now := time.Now()
+	replacer := strings.NewReplacer(
+		"{{app}}", app,
+		"{{backend}}", backend,
+		"{{date}}", now.Format(cfg.Storage.DateFormat),
+		"{{time}}", now.Format(cfg.Storage.TimeFormat),
+		"{{uid}}", uuidv7.New(),
+	)
+	return strings.TrimSpace(replacer.Replace(tmpl))
 }
 
 func (s *Server) browserAwaitingConfirmation() bool {
@@ -298,7 +333,11 @@ func (s *Server) conferenceDetection(w http.ResponseWriter, r *http.Request) {
 				s.logger.Printf("remember trusted app %q: %v", candidate.AppName, err)
 			}
 		}
-		meeting, err := s.startMeetingRecording(r.Context(), model.RecordingStart{}, "detected", map[string]string{"conference_detection_backend": candidate.Backend})
+		title := s.buildConferenceTitle(candidate.AppName, candidate.Backend)
+		meeting, err := s.startMeetingRecording(r.Context(), model.RecordingStart{Title: title}, "detected", map[string]string{
+			"conference_detection_backend": candidate.Backend,
+			"conference_detection_app":     candidate.AppName,
+		})
 		if err != nil {
 			state.mu.Lock()
 			state.candidate = candidate

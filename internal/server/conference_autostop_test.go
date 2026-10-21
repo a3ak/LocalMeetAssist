@@ -68,3 +68,57 @@ func TestConferenceAutoStopDisabled(t *testing.T) {
 		t.Fatal("a zero delay must not stop the recording")
 	}
 }
+
+// TestConferenceAutoStopFollowsTriggeringApp stops the recording when the
+// application that started it released the microphone, even if another app still
+// plays audio.
+func TestConferenceAutoStopFollowsTriggeringApp(t *testing.T) {
+	s := newBrowserServer(t, "auto")
+	s.activity = staticActivity{value: nativeaudio.Activity{Available: true, Microphone: true, System: true, Apps: []string{"Firefox"}}}
+	detection := s.config().ConferenceDetection
+	detection.StopAfterIdleSeconds = 10
+
+	if _, err := s.startMeetingRecording(context.Background(), model.RecordingStart{}, "detected", nil); err != nil {
+		t.Fatal(err)
+	}
+	s.conference.mu.Lock()
+	s.conference.detected = true
+	s.conference.recordingApp = "Zoom"
+	s.conference.mu.Unlock()
+
+	start := time.Now()
+	s.observeDetectedRecording(start, detection)
+	s.observeDetectedRecording(start.Add(5*time.Second), detection)
+	if !s.recorder.AnyActive() {
+		t.Fatal("the recording was stopped before the delay expired")
+	}
+	// Ещё один посторонний плеер не должен удерживать встречу.
+	s.observeDetectedRecording(start.Add(11*time.Second), detection)
+	if s.recorder.AnyActive() {
+		t.Fatal("an unrelated application kept the recording alive")
+	}
+}
+
+// TestConferenceAutoStopWaitsForTheTriggeringApp proves the opposite case: while
+// the application that started the meeting still uses audio, nothing stops.
+func TestConferenceAutoStopWaitsForTheTriggeringApp(t *testing.T) {
+	s := newBrowserServer(t, "auto")
+	s.activity = staticActivity{value: nativeaudio.Activity{Available: true, Apps: []string{"Firefox", "Zoom"}}}
+	detection := s.config().ConferenceDetection
+	detection.StopAfterIdleSeconds = 5
+
+	if _, err := s.startMeetingRecording(context.Background(), model.RecordingStart{}, "detected", nil); err != nil {
+		t.Fatal(err)
+	}
+	s.conference.mu.Lock()
+	s.conference.detected = true
+	s.conference.recordingApp = "Zoom"
+	s.conference.mu.Unlock()
+
+	start := time.Now()
+	s.observeDetectedRecording(start, detection)
+	s.observeDetectedRecording(start.Add(time.Hour), detection)
+	if !s.recorder.AnyActive() {
+		t.Fatal("the recording was stopped while the triggering application was still busy")
+	}
+}

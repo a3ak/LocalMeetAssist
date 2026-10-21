@@ -173,6 +173,10 @@ type ConferenceDetection struct {
 	// once neither the microphone nor the system audio is in use anymore. Zero
 	// disables the automatic stop.
 	StopAfterIdleSeconds int
+	// TitleTemplate builds the meeting title when the detector starts a
+	// recording: {{app}}, {{backend}}, {{date}}, {{time}} and {{uid}} are
+	// replaced. An empty application name falls back to the default title.
+	TitleTemplate string
 	// TrustedApps lists applications that may start a recording prompt without
 	// asking to be remembered first. ExcludedApps are never asked about.
 	TrustedApps  []string
@@ -444,7 +448,7 @@ func Defaults() Config {
 		App:                 App{Language: "ru", Theme: "dark", DataDir: "./data", ListenHost: "127.0.0.1", ListenPort: 0, OpenBrowser: true, MicrophoneOwnerName: ""},
 		Audio:               Audio{Backend: "native", SampleRate: 16000, Channels: 1, BlockMS: 250, InputMode: "auto", OutputMode: "native", MicrophoneGain: 1, SystemGain: 1, Normalize: true, EchoCancellation: "auto", EchoDelayMS: 100},
 		Desktop:             Desktop{TrayEnabled: true},
-		ConferenceDetection: ConferenceDetection{Enabled: true, WindowSeconds: 10, StopAfterIdleSeconds: 60},
+		ConferenceDetection: ConferenceDetection{Enabled: true, WindowSeconds: 10, StopAfterIdleSeconds: 60, TitleTemplate: "{{app}} — {{date}} {{time}}"},
 		Inference:           Inference{RuntimePath: "./runtime/onnxruntime", AutoDownload: true, RuntimeVersion: "1.23.2", WhisperRuntimePath: "./runtime/whisper.cpp", LlamaRuntimePath: "./runtime/llama.cpp"},
 		Transcription:       Transcription{AutoRun: false, Engine: "gigaam-onnx", ModelPath: "./models/asr/gigaam-v3-e2e-rnnt-int8", Language: "ru", TimeoutSeconds: 3600, ChunkSeconds: 20, SourceMode: "auto", EchoDedupEnabled: true, EchoTimeToleranceMS: 1500, EchoTextSimilarity: 0.72, VADEnabled: true, VADModelPath: "./models/vad/silero-v6.2/silero_vad.onnx", VADThreshold: 0.5, VADMinSpeechMS: 250, VADMinSilenceMS: 300, SuppressNonSpeech: true, NoFallback: true, SilenceFilter: true, MinSegmentRMS: 0.0015, MixedFallbackEnabled: true, GigaAMModel: "v3_e2e_rnnt_int8", GigaAMBackend: "onnx", GigaAMONNXProvider: "cpu"},
 		Diarization: Diarization{
@@ -911,6 +915,8 @@ func apply(c *Config, sec, key, raw string) error {
 		c.ConferenceDetection.WindowSeconds, _ = integer(raw)
 	case "conference_detection.stop_after_idle_seconds":
 		c.ConferenceDetection.StopAfterIdleSeconds, _ = integer(raw)
+	case "conference_detection.title_template":
+		c.ConferenceDetection.TitleTemplate = s
 	case "conference_detection.trusted_apps":
 		if list, listErr := StringList(raw); listErr == nil {
 			c.ConferenceDetection.TrustedApps = list

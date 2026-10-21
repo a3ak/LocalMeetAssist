@@ -213,6 +213,7 @@ func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) 
 			listSetting("conference_detection.trusted_apps", "Доверенные приложения", "Приложения, для которых запись предлагается сразу, без вопроса о добавлении.", cfg.ConferenceDetection.TrustedApps),
 			listSetting("conference_detection.excluded_apps", "Исключения", "Приложения, про которые не спрашиваем никогда.", cfg.ConferenceDetection.ExcludedApps),
 			intSetting("conference_detection.stop_after_idle_seconds", "Остановка после тишины, сек", "Запись, начатая по активности микрофона, останавливается, когда приложение перестало использовать микрофон и системный звук. 0 — не останавливать.", cfg.ConferenceDetection.StopAfterIdleSeconds),
+			textSetting("conference_detection.title_template", "Название встречи", "Шаблон названия для встречи, начатой детектором. Подстановки: {{app}} — приложение, {{backend}} — источник активности, {{date}} и {{time}} — дата и время, {{uid}} — идентификатор. Пустое имя приложения даёт обычное название.", cfg.ConferenceDetection.TitleTemplate),
 		}},
 		{ID: "inference", Title: "ONNX Runtime", Description: "Нативная библиотека нейросетевого вывода. LocalMeetAssist загружает её напрямую; CLI и Python не нужны.", Fields: []settingField{
 			textSetting("inference.runtime_path", "Библиотека или каталог", "Можно указать готовый .dll/.dylib/.so вручную. Для каталога LocalMeetAssist выбирает файл по ОС и архитектуре.", cfg.Inference.RuntimePath),

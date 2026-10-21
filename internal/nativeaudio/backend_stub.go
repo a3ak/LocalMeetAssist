@@ -19,6 +19,8 @@ type Activity struct {
 	Backend       string `json:"backend"`
 	Warning       string `json:"warning,omitempty"`
 	MicrophoneApp string `json:"microphone_app,omitempty"`
+	// Apps is always empty in the stub: no platform attribution.
+	Apps []string `json:"apps,omitempty"`
 }
 
 // StartRequest describes the two capture streams to open.

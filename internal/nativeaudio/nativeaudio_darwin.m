@@ -42,6 +42,20 @@ static int lm_macos_device_channel_count(AudioObjectID device, AudioObjectProper
     return channels;
 }
 
+// lm_macos_is_own_aggregate reports whether the device is the private aggregate
+// this process created for the system tap. Its output is running while a meeting
+// is recorded, and counting it would keep the activity flag set forever.
+static int lm_macos_is_own_aggregate(AudioObjectID device)
+{
+    AudioObjectPropertyAddress address = {kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    CFStringRef uid = NULL;
+    UInt32 size = sizeof(uid);
+    if (AudioObjectGetPropertyData(device, &address, 0, NULL, &size, &uid) != noErr || uid == NULL) return 0;
+    int own = CFStringHasPrefix(uid, CFSTR("localmeetassist.system."));
+    CFRelease(uid);
+    return own;
+}
+
 // lm_macos_any_device_running scans every device in the given direction. The
 // default device alone is not enough: a headset or an external interface can
 // carry the meeting while the built-in devices stay idle.
@@ -64,6 +78,7 @@ static int lm_macos_any_device_running(AudioObjectPropertyScope scope, int* acti
     }
     for (int index = 0; index < count; index++) {
         if (lm_macos_device_channel_count(devices[index], scope) <= 0) continue;
+        if (lm_macos_is_own_aggregate(devices[index])) continue;
         UInt32 running = 0;
         UInt32 running_size = sizeof(running);
         AudioObjectPropertyAddress running_address = {
@@ -81,10 +96,10 @@ static int lm_macos_any_device_running(AudioObjectPropertyScope scope, int* acti
     return 0;
 }
 
-// lm_macos_any_foreign_process_running_input reports whether some other process
-// is capturing the microphone. known stays 0 on macOS versions without the
-// per-process API, so the caller can fall back to the device scan.
-static int lm_macos_any_foreign_process_running_input(int* active, int* known)
+// lm_macos_any_foreign_process_running reports whether another process uses the
+// given direction. known stays 0 on macOS versions without the per-process API,
+// so the caller can fall back to the device scan.
+static int lm_macos_any_foreign_process_running(AudioObjectPropertySelector selector, int* active, int* known)
 {
     *active = 0;
     *known = 0;
@@ -107,7 +122,7 @@ static int lm_macos_any_foreign_process_running_input(int* active, int* known)
         UInt32 running = 0;
         UInt32 running_size = sizeof(running);
         AudioObjectPropertyAddress running_address = {
-            kAudioProcessPropertyIsRunningInput,
+            selector,
             kAudioObjectPropertyScopeGlobal,
             kAudioObjectPropertyElementMain
         };
@@ -133,16 +148,100 @@ int lm_macos_audio_activity(int* microphone_active, int* system_active, char* er
 {
     int mic_active = 0;
     int mic_known = 0;
-    if (lm_macos_any_foreign_process_running_input(&mic_active, &mic_known) != 0) mic_known = 0;
+    if (lm_macos_any_foreign_process_running(kAudioProcessPropertyIsRunningInput, &mic_active, &mic_known) != 0) mic_known = 0;
     if (!mic_known && lm_macos_any_device_running(kAudioDevicePropertyScopeInput, &mic_active) != 0) {
         if (error_text != NULL && error_size > 0) snprintf(error_text, error_size, "%s", "CoreAudio activity query failed");
         return -1;
     }
-    if (lm_macos_any_device_running(kAudioDevicePropertyScopeOutput, system_active) != 0) {
+    // Активность вывода считается по процессам: устройство остаётся «занятым»
+    // и из-за нашего собственного агрегатного устройства с тапом, из-за чего
+    // автостоп встречи не срабатывал.
+    int sys_active = 0;
+    int sys_known = 0;
+    if (lm_macos_any_foreign_process_running(kAudioProcessPropertyIsRunningOutput, &sys_active, &sys_known) != 0) sys_known = 0;
+    if (!sys_known && lm_macos_any_device_running(kAudioDevicePropertyScopeOutput, &sys_active) != 0) {
         if (error_text != NULL && error_size > 0) snprintf(error_text, error_size, "%s", "CoreAudio activity query failed");
         return -1;
     }
     *microphone_active = mic_active;
+    *system_active = sys_active;
+    return 0;
+}
+
+// lm_macos_process_label resolves the localized application name, the bundle
+// identifier or the process name of a pid, in that order.
+static void lm_macos_process_label(pid_t pid, char* label, size_t label_size)
+{
+    if (label == NULL || label_size == 0) return;
+    label[0] = '\0';
+    NSRunningApplication* application = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
+    if (application != nil) {
+        if (application.localizedName != nil && application.localizedName.length > 0) {
+            snprintf(label, label_size, "%s", [application.localizedName UTF8String]);
+        }
+        if (label[0] == '\0' && application.bundleIdentifier != nil && application.bundleIdentifier.length > 0) {
+            snprintf(label, label_size, "%s", [application.bundleIdentifier UTF8String]);
+        }
+    }
+    if (label[0] == '\0') {
+        char process_name[512];
+        int name_len = proc_name(pid, process_name, sizeof(process_name));
+        if (name_len > 0) {
+            process_name[sizeof(process_name) - 1] = '\0';
+            snprintf(label, label_size, "%s", process_name);
+        }
+    }
+}
+
+// lm_macos_active_audio_apps writes newline-separated names of the applications
+// that currently use the microphone or play audio, excluding this process. It
+// lets the detector stop a recording when the application that started it is
+// done, even if another application keeps playing something.
+int lm_macos_active_audio_apps(char* names, size_t names_size, int* found, char* error_text, size_t error_size)
+{
+    (void)error_text;
+    (void)error_size;
+    if (names == NULL || names_size == 0 || found == NULL) return -1;
+    names[0] = '\0';
+    *found = 0;
+
+    AudioObjectPropertyAddress address = {kAudioHardwarePropertyProcessObjectList, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+    UInt32 size = 0;
+    if (AudioObjectGetPropertyDataSize(kAudioObjectSystemObject, &address, 0, NULL, &size) != noErr || size == 0) return -1;
+    int count = (int)(size / sizeof(AudioObjectID));
+    AudioObjectID* objects = (AudioObjectID*)calloc((size_t)count, sizeof(AudioObjectID));
+    if (objects == NULL) return -1;
+    if (AudioObjectGetPropertyData(kAudioObjectSystemObject, &address, 0, NULL, &size, objects) != noErr) {
+        free(objects);
+        return -1;
+    }
+    *found = 1;
+    size_t used = 0;
+    for (int index = 0; index < count; index++) {
+        UInt32 running_in = 0, running_out = 0;
+        UInt32 running_size = sizeof(running_in);
+        AudioObjectPropertyAddress in_address = {kAudioProcessPropertyIsRunningInput, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+        AudioObjectPropertyAddress out_address = {kAudioProcessPropertyIsRunningOutput, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+        if (AudioObjectGetPropertyData(objects[index], &in_address, 0, NULL, &running_size, &running_in) != noErr) running_in = 0;
+        running_size = sizeof(running_out);
+        if (AudioObjectGetPropertyData(objects[index], &out_address, 0, NULL, &running_size, &running_out) != noErr) running_out = 0;
+        if (running_in == 0 && running_out == 0) continue;
+        pid_t pid = 0;
+        UInt32 pid_size = sizeof(pid);
+        AudioObjectPropertyAddress pid_address = {kAudioProcessPropertyPID, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
+        if (AudioObjectGetPropertyData(objects[index], &pid_address, 0, NULL, &pid_size, &pid) != noErr || pid <= 0) continue;
+        if (pid == getpid()) continue;
+        char label[512];
+        lm_macos_process_label(pid, label, sizeof(label));
+        if (label[0] == '\0') continue;
+        size_t length = strlen(label);
+        if (used + length + 2 > names_size) break;
+        if (used > 0) names[used++] = '\n';
+        memcpy(names + used, label, length);
+        used += length;
+        names[used] = '\0';
+    }
+    free(objects);
     return 0;
 }
 
@@ -194,23 +293,9 @@ int lm_macos_active_input_app(char* name, size_t name_size, int* found, char* er
         /* Себя не показываем: приложение не должно предлагать записать самого себя. */
         if (pid == getpid()) continue;
 
-        const char* label = NULL;
-        NSRunningApplication* application = [NSRunningApplication runningApplicationWithProcessIdentifier:pid];
-        if (application != nil) {
-            if (application.localizedName != nil && application.localizedName.length > 0) label = [application.localizedName UTF8String];
-            if (label == NULL && application.bundleIdentifier != nil && application.bundleIdentifier.length > 0) label = [application.bundleIdentifier UTF8String];
-        }
-        if (label == NULL || label[0] == '\0') {
-            // Вспомогательный процесс (например, аудио-хелпер Zoom) может не быть
-            // зарегистрированным приложением — тогда берём имя процесса.
-            char process_name[512];
-            int name_len = proc_name(pid, process_name, sizeof(process_name));
-            if (name_len > 0) {
-                process_name[sizeof(process_name) - 1] = '\0';
-                label = process_name;
-            }
-        }
-        if (label == NULL || label[0] == '\0') continue;
+        char label[512];
+        lm_macos_process_label(pid, label, sizeof(label));
+        if (label[0] == '\0') continue;
         snprintf(name, name_size, "%s", label);
         *found = 1;
         free(objects);

@@ -44,6 +44,7 @@ void* lm_macos_system_start(const char* path, unsigned int sample_rate, unsigned
 int lm_macos_system_stop(void* handle, char* error_text, size_t error_size);
 int lm_macos_audio_activity(int* microphone_active, int* system_active, char* error_text, size_t error_size);
 int lm_macos_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size);
+int lm_macos_active_audio_apps(char* names, size_t names_size, int* found, char* error_text, size_t error_size);
 #endif
 
 #if defined(_WIN32)
@@ -961,6 +962,22 @@ int lm_audio_stop(lm_capture* capture, char* error_text, size_t error_size)
         return -1;
     }
     return 0;
+}
+
+// lm_audio_activity_apps lists applications using audio, when the platform can
+// attribute it. Callers fall back to the global activity flags otherwise.
+int lm_audio_activity_apps(char* names, size_t names_size, int* found, char* error_text, size_t error_size)
+{
+    if (names == NULL || names_size == 0 || found == NULL) return -1;
+    names[0] = '\0';
+    *found = 0;
+#if defined(__APPLE__)
+    return lm_macos_active_audio_apps(names, names_size, found, error_text, error_size);
+#else
+    (void)error_text;
+    (void)error_size;
+    return 0;
+#endif
 }
 
 int lm_audio_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size)
