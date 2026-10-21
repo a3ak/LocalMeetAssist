@@ -380,5 +380,7 @@
   "replace.count": "Matches: {n}",
   "replace.none": "No matches",
   "replace.replaced": "Replaced: {n}",
-  "replace.invalid": "Invalid expression"
+  "replace.invalid": "Invalid expression",
+  "settings.savedDeferred": "Saved; applies from the next meeting",
+  "settings.deferredToast": "A meeting is being recorded or processed: settings are saved and will apply from the next meeting."
 }

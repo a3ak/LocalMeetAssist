@@ -343,6 +343,7 @@ func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) 
 // settings returns the settings schema or persists validated changes.
 func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet {
+		s.applyPendingConfig()
 		cfg := s.config()
 		if cfg.ConfigFile != "" {
 			if raw, err := config.Load(cfg.ConfigFile); err == nil {
@@ -475,7 +476,9 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		if restartOnly[key] {
 			restartKeys = append(restartKeys, key)
 		} else {
-			if key == "logging.level" {
+			// Уровень лога, тема и язык интерфейса не влияют на текущую
+			// запись, поэтому применяются сразу даже во время встречи.
+			if key == "logging.level" || key == "app.theme" || key == "app.language" {
 				appliedKeys = append(appliedKeys, key)
 				continue
 			}
@@ -488,11 +491,11 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	}
 	sort.Strings(restartKeys)
 	sort.Strings(appliedKeys)
-	if dynamicChanged && (s.pipeline.AnyRunning() || s.recorder.AnyActive()) {
-		writeError(w, http.StatusConflict, "wait for recording and processing to finish before changing working settings")
-		return
-	}
-	if modelSettingsChanged && s.models.AnyDownloading() {
+	// Во время записи и обработки настройки принимаются, но применяются к
+	// процессу только со следующей встречи: текущая должна остаться на тех
+	// значениях, с которыми началась.
+	deferred := dynamicChanged && (s.pipeline.AnyRunning() || s.recorder.AnyActive())
+	if !deferred && modelSettingsChanged && s.models.AnyDownloading() {
 		writeError(w, http.StatusConflict, "wait for the model download to finish")
 		return
 	}
@@ -500,23 +503,18 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	loaded, err := config.Load(current.ConfigFile)
+	restartRequired := len(restartKeys) > 0
+	if deferred {
+		s.setPendingConfig(true)
+		s.logger.Printf("configuration saved for the next meeting path=%q keys=%d", current.ConfigFile, len(literals))
+		writeJSON(w, http.StatusOK, map[string]any{"saved": true, "deferred": true, "restart_required": restartRequired, "restart_keys": restartKeys, "applied_keys": []string{}, "changed": len(literals)})
+		return
+	}
+	loaded, err := s.loadConfigForRuntime(current)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "settings were saved but could not be reloaded: "+err.Error())
 		return
 	}
-	loaded.ConfigFile = current.ConfigFile
-	config.ResolvePaths(&loaded, current.ConfigFile)
-	// These resources are owned by the running process and cannot be replaced
-	// safely without reopening the listener, database or log file.
-	loaded.App.DataDir = current.App.DataDir
-	loaded.App.ListenHost = current.App.ListenHost
-	loaded.App.ListenPort = current.App.ListenPort
-	loaded.App.OpenBrowser = current.App.OpenBrowser
-	loaded.Desktop.TrayEnabled = current.Desktop.TrayEnabled
-	loaded.Storage.DatabasePath = current.Storage.DatabasePath
-	loaded.Storage.BackupCount = current.Storage.BackupCount
-	loaded.Logging = current.Logging
 	var nextLogLevel string
 	if value, changed := literals["logging.level"]; changed {
 		nextLogLevel, _ = strconv.Unquote(value)
@@ -542,9 +540,75 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 	if nextLogLevel != "" && s.logLevel != nil {
 		s.logLevel.Set(nextLogLevel)
 	}
-	restartRequired := len(restartKeys) > 0
 	s.logger.Printf("configuration updated path=%q keys=%d hot_applied=%d restart_required=%t", current.ConfigFile, len(literals), len(appliedKeys), restartRequired)
 	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "restart_required": restartRequired, "restart_keys": restartKeys, "applied_keys": appliedKeys, "changed": len(literals)})
+}
+
+// setPendingConfig records that settings were saved while a meeting was running.
+func (s *Server) setPendingConfig(value bool) {
+	s.pendingMu.Lock()
+	s.pendingConfig = value
+	s.pendingMu.Unlock()
+}
+
+// loadConfigForRuntime reloads config.toml and keeps the values owned by the
+// running process: the listener, database, log file and tray cannot be replaced
+// without a restart.
+func (s *Server) loadConfigForRuntime(current config.Config) (config.Config, error) {
+	loaded, err := config.Load(current.ConfigFile)
+	if err != nil {
+		return config.Config{}, err
+	}
+	loaded.ConfigFile = current.ConfigFile
+	config.ResolvePaths(&loaded, current.ConfigFile)
+	loaded.App.DataDir = current.App.DataDir
+	loaded.App.ListenHost = current.App.ListenHost
+	loaded.App.ListenPort = current.App.ListenPort
+	loaded.App.OpenBrowser = current.App.OpenBrowser
+	loaded.Desktop.TrayEnabled = current.Desktop.TrayEnabled
+	loaded.Storage.DatabasePath = current.Storage.DatabasePath
+	loaded.Storage.BackupCount = current.Storage.BackupCount
+	loaded.Logging = current.Logging
+	return loaded, nil
+}
+
+// applyPendingConfig applies settings saved during a meeting. It waits until
+// nothing is recorded or processed, so the meeting that was running keeps the
+// settings it started with and the next one gets the new values.
+func (s *Server) applyPendingConfig() {
+	s.pendingMu.Lock()
+	pending := s.pendingConfig
+	s.pendingMu.Unlock()
+	if !pending || s.recorder.AnyActive() || s.pipeline.AnyRunning() {
+		return
+	}
+	current := s.config()
+	if strings.TrimSpace(current.ConfigFile) == "" {
+		return
+	}
+	loaded, err := s.loadConfigForRuntime(current)
+	if err != nil {
+		s.logger.Printf("deferred configuration reload failed: %v", err)
+		return
+	}
+	if err := s.pipeline.UpdateConfig(loaded); err != nil {
+		s.logger.Printf("deferred configuration: pipeline update failed: %v", err)
+		return
+	}
+	if err := s.recorder.UpdateConfig(loaded.Audio); err != nil {
+		s.logger.Printf("deferred configuration: recorder update failed: %v", err)
+		return
+	}
+	if err := s.models.UpdateConfig(loaded); err != nil {
+		s.logger.Printf("deferred configuration: model manager update failed: %v", err)
+		return
+	}
+	s.setConfig(loaded)
+	s.setPendingConfig(false)
+	if s.logLevel != nil {
+		s.logLevel.Set(loaded.Logging.Level)
+	}
+	s.logger.Printf("deferred configuration applied path=%q", loaded.ConfigFile)
 }
 
 // testSettings performs a real completion against the summary endpoint.

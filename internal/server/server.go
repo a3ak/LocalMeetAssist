@@ -37,8 +37,13 @@ var webFS embed.FS
 
 // Server holds the application state shared by all HTTP handlers.
 type Server struct {
-	cfgMu         sync.RWMutex
-	cfg           config.Config
+	cfgMu sync.RWMutex
+	cfg   config.Config
+	// pendingConfig marks settings that were saved while a recording or the
+	// pipeline was running. They are written to config.toml immediately but
+	// applied to the process only when the next meeting starts.
+	pendingMu     sync.Mutex
+	pendingConfig bool
 	store         *store.Store
 	recorder      *recording.Manager
 	pipeline      *pipeline.Runner

@@ -380,5 +380,7 @@
   "replace.count": "Совпадений: {n}",
   "replace.none": "Нет совпадений",
   "replace.replaced": "Заменено: {n}",
-  "replace.invalid": "Неверное выражение"
+  "replace.invalid": "Неверное выражение",
+  "settings.savedDeferred": "Сохранено; применится со следующей встречи",
+  "settings.deferredToast": "Идёт запись или обработка: настройки сохранены и применятся со следующей встречи."
 }

@@ -2286,7 +2286,7 @@ async function saveSettings() {
   try {
     const result = await api("/api/v1/settings", { method: "PUT", json: { values } });
     await loadSettings();
-    $("#settingsDirty").textContent = t("settings.saved");
+    $("#settingsDirty").textContent = result.deferred ? t("settings.savedDeferred") : t("settings.saved");
     $("#settingsRestart").classList.toggle("hidden", !result.restart_required);
     $("#settingsRestart").textContent = result.restart_required
       ? t("settings.restartRequired", { keys: (result.restart_keys || []).join(", ") })
@@ -2296,6 +2296,10 @@ async function saveSettings() {
     }
     if (Object.prototype.hasOwnProperty.call(values, "app.language")) {
       setTimeout(() => window.location.reload(), 500);
+      return;
+    }
+    if (result.deferred) {
+      toast(t("settings.deferredToast"));
       return;
     }
     toast(result.restart_required ? t("settings.savedToastRestart") : t("settings.savedToast"));

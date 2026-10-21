@@ -188,6 +188,12 @@ sudo apt install build-essential pkg-config libx11-dev libayatana-appindicator3-
 
 Для PipeWire нужен PulseAudio-совместимый monitor-источник (`pipewire-pulse`). Точный набор пакетов зависит от дистрибутива и рабочего окружения.
 
+### Изменение настроек
+
+Настройки применяются сразу. Исключение — параметры, которым нужен перезапуск (каталог данных, адрес и порт, каталог логов, значок в трее): приложение перечислит их после сохранения.
+
+Во время записи или обработки менять настройки тоже можно. Они сохраняются в `config.toml`, а к процессу применяются со следующей встречи — текущая остаётся на значениях, с которыми началась. Тема и язык интерфейса применяются сразу, потому что на запись не влияют.
+
 ### Свои модели
 
 Список моделей в настройках не закрыт: любую модель можно прописать в `config.toml`, и она появится в выпадающем списке как «Свой путь: <файл>». Путь может быть абсолютным или относительным к самому `config.toml`.
@@ -541,6 +547,12 @@ sudo apt install build-essential pkg-config libx11-dev libayatana-appindicator3-
 ```
 
 PipeWire needs a PulseAudio-compatible monitor source (`pipewire-pulse`). Exact packages depend on your distribution and desktop environment.
+
+### Changing settings
+
+Settings apply immediately. The exception is parameters that need a restart (data directory, address and port, log directory, tray icon): the application lists them after saving.
+
+Settings can also be changed while a meeting is being recorded or processed. They are saved to `config.toml` and applied to the process from the next meeting, so the current one keeps the values it started with. The interface theme and language apply at once because they do not affect the recording.
 
 ### Custom models
 

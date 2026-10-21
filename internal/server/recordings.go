@@ -53,6 +53,8 @@ func (s *Server) recordings(w http.ResponseWriter, r *http.Request) {
 // the meeting origin ("recorded", "browser" or "detected"); extra entries are merged into
 // the meeting metadata.
 func (s *Server) startMeetingRecording(ctx context.Context, req model.RecordingStart, source string, extra map[string]string) (model.Meeting, error) {
+	// Настройки, сохранённые во время прошлой встречи, вступают в силу здесь.
+	s.applyPendingConfig()
 	now := time.Now()
 	if strings.TrimSpace(req.Title) == "" {
 		req.Title = config.Localized(s.config().App.Language, "Встреча ", "Meeting ") + now.Format("02.01.2006 15:04")
