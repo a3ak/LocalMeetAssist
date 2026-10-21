@@ -414,13 +414,16 @@ type Storage struct {
 	AudioAfterProcessing string
 	// AudioArchiveDays delays archiving the source WAVs: 0 converts right after
 	// a successful pipeline, N converts N days after the meeting finished.
-	AudioArchiveDays    int
-	MP3BitrateKbps      int
-	KeepSourceOnFailure bool
-	DatabasePath        string
-	BackupCount         int
-	EncoderCommand      string
-	OpusBitrateKbps     int
+	AudioArchiveDays int
+	// MeetingRetentionDays deletes meetings older than N days; 0 keeps them
+	// forever.
+	MeetingRetentionDays int
+	MP3BitrateKbps       int
+	KeepSourceOnFailure  bool
+	DatabasePath         string
+	BackupCount          int
+	EncoderCommand       string
+	OpusBitrateKbps      int
 }
 
 // Logging controls the log level and file rotation.
@@ -505,7 +508,7 @@ func Defaults() Config {
 		Summary: Summary{AutoRun: false, Engine: EngineOpenAI, ModelPath: "./models/llm/Qwen3.5-4B-Q4_K_M.gguf",
 			ContextTokens: 8192, MaxTokens: 2048, GPULayers: -1, LocalTimeoutSeconds: 3600,
 			DefaultPrompt: DefaultSummaryPrompt, TimeoutSeconds: 300, MaxRetries: 2, TokenEnv: "MEETING_LLM_TOKEN", TLSVerify: true},
-		Storage:      Storage{FileNameTemplate: "{{date}}_{{time}}_{{title_slug}}_{{uid_short}}_{{artifact_type}}", DateFormat: "2006-01-02", TimeFormat: "15-04-05", AudioAfterProcessing: "wav", MP3BitrateKbps: 96, OpusBitrateKbps: 32, KeepSourceOnFailure: true, DatabasePath: "./data/database/meetings.db", BackupCount: 3},
+		Storage:      Storage{FileNameTemplate: "{{date}}_{{time}}_{{title_slug}}_{{uid_short}}_{{artifact_type}}", DateFormat: "2006-01-02", TimeFormat: "15-04-05", AudioAfterProcessing: "wav", AudioArchiveDays: 3, MeetingRetentionDays: 365, MP3BitrateKbps: 96, OpusBitrateKbps: 32, KeepSourceOnFailure: true, DatabasePath: "./data/database/meetings.db", BackupCount: 3},
 		Logging:      Logging{Level: "info", Directory: "./data/logs", MaxFileMB: 20, MaxFiles: 5},
 		Integrations: Integrations{AuditEnabled: false, Browser: BrowserIntegration{Mode: "auto", TitleTemplate: "{{title}} — {{date}} {{time}}", StopAfterMissedPolls: 4, PollIntervalSeconds: 20}},
 	}
@@ -739,6 +742,9 @@ func Load(path string) (Config, error) {
 	if cfg.Storage.AudioArchiveDays < 0 || cfg.Storage.AudioArchiveDays > 3650 {
 		return cfg, errors.New("storage.audio_archive_days must be between 0 and 3650")
 	}
+	if cfg.Storage.MeetingRetentionDays < 0 || cfg.Storage.MeetingRetentionDays > 36500 {
+		return cfg, errors.New("storage.meeting_retention_days must be between 0 and 36500")
+	}
 	if cfg.Storage.OpusBitrateKbps < 6 || cfg.Storage.OpusBitrateKbps > 256 {
 		return cfg, errors.New("storage.opus_bitrate_kbps must be between 6 and 256")
 	}
@@ -856,7 +862,7 @@ func apply(c *Config, sec, key, raw string) error {
 	if err != nil {
 		return err
 	}
-	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "conference_detection.window_seconds": true, "conference_detection.stop_after_idle_seconds": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "storage.audio_archive_days": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
+	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "conference_detection.window_seconds": true, "conference_detection.stop_after_idle_seconds": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "storage.audio_archive_days": true, "storage.meeting_retention_days": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
 	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "conference_detection.enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
 	floatKeys := map[string]bool{"audio.microphone_gain": true, "audio.system_gain": true, "transcription.echo_text_similarity": true, "transcription.vad_threshold": true, "transcription.min_segment_rms": true, "diarization.cluster_threshold": true}
 	if intKeys[full] {
@@ -1160,6 +1166,8 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Storage.BackupCount, _ = integer(raw)
 	case "storage.audio_archive_days":
 		c.Storage.AudioArchiveDays, _ = integer(raw)
+	case "storage.meeting_retention_days":
+		c.Storage.MeetingRetentionDays, _ = integer(raw)
 	case "storage.encoder_command":
 		c.Storage.EncoderCommand = s
 	case "storage.opus_bitrate_kbps":

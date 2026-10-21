@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"localmeetassist/internal/config"
 	"localmeetassist/internal/recording"
@@ -53,7 +54,22 @@ func newBrowserServer(t *testing.T, mode string) *Server {
 	}
 	t.Cleanup(func() { _ = st.Close() })
 	recorder := recording.NewManagerWithBackend(cfg.Audio, log.New(io.Discard, "", 0), serverSyntheticBackend{})
-	return NewWithRecorder(cfg, st, log.New(io.Discard, "", 0), recorder)
+	s := NewWithRecorder(cfg, st, log.New(io.Discard, "", 0), recorder)
+	// Обработка после остановки записи идёт в фоне и дописывает файлы; без
+	// ожидания TempDir иногда удалялся, пока пайплайн ещё работал.
+	t.Cleanup(func() {
+		quiet := 0
+		deadline := time.Now().Add(5 * time.Second)
+		for time.Now().Before(deadline) && quiet < 3 {
+			if s.pipeline.AnyRunning() {
+				quiet = 0
+			} else {
+				quiet++
+			}
+			time.Sleep(20 * time.Millisecond)
+		}
+	})
+	return s
 }
 
 func createToken(t *testing.T, h http.Handler, s *Server, kind, name string) (string, string) {

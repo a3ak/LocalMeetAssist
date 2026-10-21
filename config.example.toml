@@ -174,7 +174,10 @@ time_format = "15-04-05"
 audio_after_processing = "wav"
 # Через сколько дней после встречи конвертировать WAV в выбранный формат.
 # 0 — сразу после успешной обработки; N — хранить WAV N дней.
-audio_archive_days = 0
+audio_archive_days = 3
+# Сколько дней хранить встречи. 0 — бессрочно; встречи старше N дней удаляются
+# вместе с аудио, расшифровкой и протоколом.
+meeting_retention_days = 365
 mp3_bitrate_kbps = 96
 opus_bitrate_kbps = 32
 keep_source_on_failure = true
