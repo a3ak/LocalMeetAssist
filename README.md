@@ -35,6 +35,7 @@ LocalMeetAssist записывает встречу с микрофона и с�
 - отделяет речь от тишины (Silero VAD) — обработка идёт быстрее, а повторов меньше;
 - разделяет удалённых участников по голосам (PyAnnote + WeSpeaker);
 - позволяет указать число участников, переименовывать спикеров, объединять их и переносить реплики — по одной или пачкой: Shift-клик выделяет диапазон подряд идущих фрагментов, а «Новый спикер» добавляет участника, которого система не нашла;
+- ищет и заменяет текст в транскрипте и протоколе — обычной строкой или регулярным выражением, с подсчётом совпадений и учётом регистра;
 - показывает прогресс по каждому этапу и даёт повторить или отменить любой из них.
 
 **Архив и поиск**
@@ -395,6 +396,7 @@ The application captures audio itself, while the control interface opens in a br
 - separates speech from silence (Silero VAD), which speeds up processing and reduces repetitions;
 - separates remote participants by voice (PyAnnote + WeSpeaker);
 - lets you set the participant count, rename speakers, merge them, and move lines — one by one or in bulk: Shift-click selects a range of consecutive fragments, and “New speaker” adds a participant the system missed;
+- finds and replaces text in the transcript and the minutes — as plain text or a regular expression, with a match count and case sensitivity;
 - reports progress for every stage and lets you retry or cancel any of them.
 
 **Archive and search**

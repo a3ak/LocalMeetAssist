@@ -784,3 +784,12 @@ main{grid-template-columns:minmax(0,1fr) minmax(260px,340px)!important}
 .hidden.hidden,
 .setting-field.hidden,
 .settings-section-title.hidden{display:none!important}
+
+/* Поиск и замена в транскрипте и протоколе. Панель занимает одну строку и
+   переносится на узких экранах, счётчик совпадений прижат вправо. */
+.find-replace{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-bottom:10px}
+.find-replace input[type=text]{flex:1 1 140px;min-width:110px}
+.find-replace .find-option{display:inline-flex;align-items:center;gap:4px;font-size:12px;color:var(--muted);white-space:nowrap}
+.find-replace .find-option input{width:auto;margin:0}
+.find-replace .find-count{font-size:12px;color:var(--muted);margin-left:auto;white-space:nowrap}
+.find-replace.find-invalid .find-input{border-color:var(--danger)}

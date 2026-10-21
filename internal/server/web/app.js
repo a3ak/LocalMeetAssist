@@ -2392,6 +2392,127 @@ $("#discardSpeakerChanges").onclick = () => {
 };
 $("#moveSelectedSpeakerFragments").onclick = () => moveSpeakerFragments(state.speakerEditor ? [...state.speakerEditor.selected] : [], $("#speakerMoveTarget").value);
 $("#addSpeaker").onclick = () => addSpeakerDraft();
+setupFindReplace();
+
+// setupFindReplace wires the find/replace panel of the transcript and summary
+// tabs. Plain text is matched literally and case-insensitively unless the case
+// box is ticked; the regex box switches to a JavaScript expression.
+function setupFindReplace() {
+  $$(".find-replace").forEach((panel) => {
+    const target = document.getElementById(panel.dataset.target);
+    if (!target) return;
+    const findInput = panel.querySelector(".find-input");
+    const replaceInput = panel.querySelector(".replace-input");
+    const regexToggle = panel.querySelector(".find-regex");
+    const caseToggle = panel.querySelector(".find-case");
+    const countLabel = panel.querySelector(".find-count");
+    let pattern = null;
+
+    const setCount = (text) => { countLabel.textContent = text; };
+    const build = () => {
+      pattern = null;
+      panel.classList.remove("find-invalid");
+      const query = findInput.value;
+      if (!query) return false;
+      const source = regexToggle.checked ? query : query.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      try {
+        pattern = new RegExp(source, caseToggle.checked ? "g" : "gi");
+      } catch (error) {
+        panel.classList.add("find-invalid");
+        setCount(t("replace.invalid"));
+        return false;
+      }
+      return true;
+    };
+    const matches = () => {
+      if (!pattern) return [];
+      const found = [];
+      const text = target.value;
+      pattern.lastIndex = 0;
+      let match;
+      while ((match = pattern.exec(text)) !== null) {
+        if (match[0] === "") { pattern.lastIndex++; continue; }
+        found.push({ index: match.index, length: match[0].length });
+      }
+      pattern.lastIndex = 0;
+      return found;
+    };
+    const refresh = () => {
+      if (!build()) {
+        if (!findInput.value) setCount("");
+        return [];
+      }
+      const found = matches();
+      setCount(found.length ? t("replace.count", { n: found.length }) : t("replace.none"));
+      return found;
+    };
+    // typedText имитирует пользовательский ввод, чтобы работала отмена (Ctrl+Z).
+    const typedText = (text, start, end) => {
+      target.focus();
+      target.setSelectionRange(start, end);
+      // execCommand сохраняет отмену в браузерах, но он устарел и есть не везде.
+      let inserted = false;
+      if (typeof document.execCommand === "function") {
+        try { inserted = document.execCommand("insertText", false, text); } catch { inserted = false; }
+      }
+      if (!inserted) target.setRangeText(text, start, end, "end");
+      target.dispatchEvent(new Event("input", { bubbles: true }));
+    };
+    const scrollToSelection = (index) => {
+      const style = window.getComputedStyle(target);
+      const lineHeight = parseFloat(style.lineHeight) || 20;
+      const line = target.value.slice(0, index).split("\n").length - 1;
+      const top = line * lineHeight;
+      if (top < target.scrollTop || top > target.scrollTop + target.clientHeight - lineHeight * 2) {
+        target.scrollTop = Math.max(0, top - target.clientHeight / 3);
+      }
+    };
+    const selectMatch = (match) => {
+      target.focus();
+      target.setSelectionRange(match.index, match.index + match.length);
+      scrollToSelection(match.index);
+    };
+    const nextMatch = () => {
+      const found = refresh();
+      if (!found.length) return null;
+      const cursor = target.selectionEnd || 0;
+      const next = found.find((item) => item.index >= cursor) || found[0];
+      selectMatch(next);
+      return next;
+    };
+
+    panel.querySelector(".find-next").onclick = () => { nextMatch(); };
+    panel.querySelector(".replace-one").onclick = () => {
+      if (!pattern) return;
+      const start = target.selectionStart;
+      const length = target.selectionEnd - target.selectionStart;
+      const current = matches().find((item) => item.index === start && item.length === length);
+      if (!current) { nextMatch(); return; }
+      const replacement = regexToggle.checked
+        ? target.value.slice(current.index, current.index + current.length).replace(pattern, replaceInput.value)
+        : replaceInput.value;
+      typedText(replacement, current.index, current.index + current.length);
+      const found = refresh();
+      if (found.length) {
+        const next = found.find((item) => item.index >= current.index) || found[0];
+        selectMatch(next);
+      }
+    };
+    panel.querySelector(".replace-all").onclick = () => {
+      const found = refresh();
+      if (!found.length) return;
+      const text = regexToggle.checked
+        ? target.value.replace(pattern, replaceInput.value)
+        : found.reduceRight((value, item) => value.slice(0, item.index) + replaceInput.value + value.slice(item.index + item.length), target.value);
+      typedText(text, 0, target.value.length);
+      setCount(t("replace.replaced", { n: found.length }));
+      toast(t("replace.replaced", { n: found.length }));
+    };
+    findInput.addEventListener("input", refresh);
+    regexToggle.addEventListener("change", refresh);
+    caseToggle.addEventListener("change", refresh);
+  });
+}
 
 // Плееры файлов и встреч вставлены в DOM, поэтому их запуск перехватывается
 // здесь: старт одного останавливает остальные и голосовой фрагмент.

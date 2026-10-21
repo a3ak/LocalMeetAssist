@@ -369,5 +369,16 @@
   "speakers.newSpeakerName": "Спикер {n}",
   "speakers.newSpeakerHint": "Новый спикер: выделите фрагменты и нажмите «Переместить выбранные»",
   "speakers.noFragments": "Нет фрагментов",
-  "detail.audioRestoredFromMixed": "Аудио восстановлено из общего потока: раздельные дорожки микрофона и системного звука недоступны. Транскрипт сохранён."
+  "detail.audioRestoredFromMixed": "Аудио восстановлено из общего потока: раздельные дорожки микрофона и системного звука недоступны. Транскрипт сохранён.",
+  "replace.find": "Найти",
+  "replace.with": "Заменить на",
+  "replace.regex": "Регулярное выражение",
+  "replace.case": "Учитывать регистр",
+  "replace.next": "Найти далее",
+  "replace.one": "Заменить",
+  "replace.all": "Заменить все",
+  "replace.count": "Совпадений: {n}",
+  "replace.none": "Нет совпадений",
+  "replace.replaced": "Заменено: {n}",
+  "replace.invalid": "Неверное выражение"
 }

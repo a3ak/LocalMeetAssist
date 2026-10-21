@@ -369,5 +369,16 @@
   "speakers.newSpeakerName": "Speaker {n}",
   "speakers.newSpeakerHint": "New speaker: select fragments and press “Move selected”",
   "speakers.noFragments": "No fragments",
-  "detail.audioRestoredFromMixed": "Audio was restored from the mixed stream: the separate microphone and system tracks are unavailable. The transcript is kept."
+  "detail.audioRestoredFromMixed": "Audio was restored from the mixed stream: the separate microphone and system tracks are unavailable. The transcript is kept.",
+  "replace.find": "Find",
+  "replace.with": "Replace with",
+  "replace.regex": "Regular expression",
+  "replace.case": "Match case",
+  "replace.next": "Find next",
+  "replace.one": "Replace",
+  "replace.all": "Replace all",
+  "replace.count": "Matches: {n}",
+  "replace.none": "No matches",
+  "replace.replaced": "Replaced: {n}",
+  "replace.invalid": "Invalid expression"
 }
