@@ -176,6 +176,7 @@ func main() {
 	}()
 	detectionCtx, stopDetection := context.WithCancel(context.Background())
 	app.StartConferenceDetection(detectionCtx)
+	app.StartAudioArchiver(detectionCtx)
 
 	ch := make(chan os.Signal, 1)
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)

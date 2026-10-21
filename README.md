@@ -45,7 +45,7 @@ LocalMeetAssist записывает встречу с микрофона и с�
 - фильтры по спикерам, содержанию и датам;
 - карточка встречи: транскрипт, спикеры, саммари, аудио и связанные файлы;
 - импорт готовых записей WAV, MP3 и Opus — приложение само приведёт их к нужному формату;
-- сжатие аудио в Opus после обработки, чтобы архив занимал меньше места.
+- сжатие аудио в Opus после обработки, чтобы архив занимал меньше места; конвертацию можно отложить на N дней после встречи, а до этого WAV остаются для повторной обработки с раздельными дорожками.
 
 **Ещё**
 
@@ -413,7 +413,7 @@ The application captures audio itself, while the control interface opens in a br
 - filters by speakers, content, and dates;
 - a meeting card with the transcript, speakers, summary, audio, and related files;
 - import of existing WAV, MP3, and Opus recordings — the application converts them itself;
-- optional Opus compression after processing to keep the archive small.
+- optional Opus compression after processing to keep the archive small; the conversion can be delayed by N days after the meeting, and the WAVs stay available for reprocessing with separate tracks until then.
 
 **Also**
 

@@ -586,9 +586,20 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 		return r.fail(&m, "encoding", ctx.Err())
 	}
 	policy := strings.ToLower(strings.TrimSpace(r.cfg.Storage.AudioAfterProcessing))
+	archiveDays := r.cfg.Storage.AudioArchiveDays
 	if !plan.encoding {
+		// Повтор отдельного этапа восстановил WAV из архива. Если архив уже
+		// есть и отложенного хранения нет, эти файлы были нужны только сейчас.
+		if (policy == "opus" || policy == "mp3") && archiveDays <= 0 && r.hasArchivedAudio(uid) {
+			r.removeArtifactFiles(uid, micPath, sysPath, mixedPath)
+			r.job(uid, "encoding", "skipped", "restored WAV files were removed again; the archived audio already exists")
+		} else {
+			r.preserveSourceWAVs(uid, micPath, sysPath, mixedPath)
+			r.job(uid, "encoding", "skipped", "another stage was started manually; source WAV files were kept")
+		}
+	} else if (policy == "opus" || policy == "mp3") && archiveDays > 0 {
 		r.preserveSourceWAVs(uid, micPath, sysPath, mixedPath)
-		r.job(uid, "encoding", "skipped", "another stage was started manually; source WAV files were kept")
+		r.job(uid, "encoding", "skipped", "source WAV files are kept until the archive delay")
 	} else if policy == "delete" && len(warnings) > 0 {
 		r.preserveSourceWAVs(uid, micPath, sysPath, mixedPath)
 		r.job(uid, "encoding", "skipped", "source WAV files were kept because of processing warnings")
@@ -602,37 +613,17 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 			return r.fail(&m, "encoding", err)
 		}
 		r.jobProgress(uid, "encoding", 45)
-		if policy == "opus" {
-			opusPath := strings.TrimSuffix(mixedPath, filepath.Ext(mixedPath)) + ".opus"
-			if err := atomicfile.Generate(opusPath, func(candidate string) error {
-				return audio.EncodeWAVToOggOpusContext(ctx, mixedPath, candidate, uid, r.cfg.Storage.OpusBitrateKbps)
-			}); err != nil {
-				return r.fail(&m, "encoding", err)
-			}
-			if _, err := r.addArtifact(uid, "mixed_opus", opusPath, "audio/ogg", "generated"); err != nil {
+		if policy == "opus" || policy == "mp3" {
+			if _, err := r.encodeArchive(ctx, &m, mixedPath); err != nil {
 				return r.fail(&m, "encoding", err)
 			}
 			r.jobProgress(uid, "encoding", 90)
-			if len(warnings) == 0 {
-				r.removeArtifactFiles(uid, mixedPath, micPath, sysPath)
-			} else {
-				r.preserveSourceWAVs(uid, micPath, sysPath, mixedPath)
+			// Архив создан — исходные WAV больше не нужны, даже если обработка
+			// закончилась предупреждениями: иначе рядом с Opus оставался WAV.
+			if len(warnings) > 0 {
+				r.logger.Printf("encoding removed source WAV files despite %d warnings uid=%s", len(warnings), uid)
 			}
-		} else if policy == "mp3" {
-			mp3Path := strings.TrimSuffix(mixedPath, filepath.Ext(mixedPath)) + ".mp3"
-			if err := atomicfile.Generate(mp3Path, func(candidate string) error {
-				return r.encodeMP3(ctx, m, mixedPath, candidate)
-			}); err != nil {
-				return r.fail(&m, "encoding", err)
-			}
-			if _, err := r.addArtifact(uid, "mixed_mp3", mp3Path, "audio/mpeg", "generated"); err != nil {
-				return r.fail(&m, "encoding", err)
-			}
-			if len(warnings) == 0 {
-				r.removeArtifactFiles(uid, mixedPath, micPath, sysPath)
-			} else {
-				r.preserveSourceWAVs(uid, micPath, sysPath, mixedPath)
-			}
+			r.removeArtifactFiles(uid, mixedPath, micPath, sysPath)
 		} else {
 			if _, err := r.addArtifact(uid, "mixed_wav", mixedPath, "audio/wav", "generated"); err != nil {
 				return r.fail(&m, "encoding", err)
@@ -898,6 +889,149 @@ func (r *Runner) addArtifact(meetingUID, kind, path, mime, source string) (model
 	a := model.Artifact{UID: uuidv7.New(), MeetingUID: meetingUID, Type: kind, Path: path, MIMEType: mime, SizeBytes: size, SHA256: hex.EncodeToString(h.Sum(nil)), Source: source, CreatedAt: time.Now()}
 	_, _ = r.store.DeleteArtifactsByPaths(meetingUID, path)
 	return a, r.store.SaveArtifact(a)
+}
+
+// encodeArchive converts the mixed WAV into the configured archive format and
+// registers the artifact. It returns the created file, or an empty path when the
+// policy does not archive audio.
+func (r *Runner) encodeArchive(ctx context.Context, m *model.Meeting, mixedPath string) (string, error) {
+	policy := strings.ToLower(strings.TrimSpace(r.cfg.Storage.AudioAfterProcessing))
+	switch policy {
+	case "opus":
+		opusPath := strings.TrimSuffix(mixedPath, filepath.Ext(mixedPath)) + ".opus"
+		if err := atomicfile.Generate(opusPath, func(candidate string) error {
+			return audio.EncodeWAVToOggOpusContext(ctx, mixedPath, candidate, m.UID, r.cfg.Storage.OpusBitrateKbps)
+		}); err != nil {
+			return "", err
+		}
+		if _, err := r.addArtifact(m.UID, "mixed_opus", opusPath, "audio/ogg", "generated"); err != nil {
+			return "", err
+		}
+		return opusPath, nil
+	case "mp3":
+		mp3Path := strings.TrimSuffix(mixedPath, filepath.Ext(mixedPath)) + ".mp3"
+		if err := atomicfile.Generate(mp3Path, func(candidate string) error {
+			return r.encodeMP3(ctx, *m, mixedPath, candidate)
+		}); err != nil {
+			return "", err
+		}
+		if _, err := r.addArtifact(m.UID, "mixed_mp3", mp3Path, "audio/mpeg", "generated"); err != nil {
+			return "", err
+		}
+		return mp3Path, nil
+	}
+	return "", nil
+}
+
+// hasArchivedAudio reports whether a meeting already has a compressed archive.
+func (r *Runner) hasArchivedAudio(meetingUID string) bool {
+	artifacts, err := r.store.Artifacts(meetingUID)
+	if err != nil {
+		return false
+	}
+	for _, artifact := range artifacts {
+		if artifact.Type != "mixed_opus" && artifact.Type != "mixed_mp3" {
+			continue
+		}
+		if info, statErr := os.Stat(artifact.Path); statErr == nil && info.Size() > 0 {
+			return true
+		}
+	}
+	return false
+}
+
+// ArchiveDue converts the audio of meetings that finished longer ago than the
+// configured delay. It is a no-op when archiving is immediate or the format is
+// WAV.
+func (r *Runner) ArchiveDue(ctx context.Context, now time.Time) {
+	policy := strings.ToLower(strings.TrimSpace(r.cfg.Storage.AudioAfterProcessing))
+	days := r.cfg.Storage.AudioArchiveDays
+	if days <= 0 || (policy != "opus" && policy != "mp3") {
+		return
+	}
+	meetings, err := r.store.ListMeetings(nil, nil)
+	if err != nil {
+		r.logger.Printf("audio archive: cannot list meetings: %v", err)
+		return
+	}
+	for _, meeting := range meetings {
+		if ctx.Err() != nil {
+			return
+		}
+		if meeting.Status != "completed" && meeting.Status != "warning" {
+			continue
+		}
+		finished := meeting.StartedAt
+		if meeting.FinishedAt != nil {
+			finished = *meeting.FinishedAt
+		}
+		if now.Sub(finished) < time.Duration(days)*24*time.Hour {
+			continue
+		}
+		r.mu.Lock()
+		_, busy := r.running[meeting.UID]
+		r.mu.Unlock()
+		if busy {
+			continue
+		}
+		if err := r.archiveStoredAudio(ctx, meeting); err != nil {
+			r.logger.Printf("audio archive failed uid=%s error=%v", meeting.UID, err)
+		}
+	}
+}
+
+// archiveStoredAudio encodes a meeting whose WAVs outlived the archive delay.
+func (r *Runner) archiveStoredAudio(ctx context.Context, meeting model.Meeting) error {
+	dir := r.meetingDir(meeting)
+	micPath, sysPath := filepath.Join(dir, "audio", "microphone.wav"), filepath.Join(dir, "audio", "system.wav")
+	mixedPath := filepath.Join(dir, "audio", r.name(meeting, "mixed")+".wav")
+	artifacts, err := r.store.Artifacts(meeting.UID)
+	if err != nil {
+		return err
+	}
+	hasWAV := false
+	for _, artifact := range artifacts {
+		if artifact.Type != "mic_wav" && artifact.Type != "system_wav" && artifact.Type != "mixed_wav" {
+			continue
+		}
+		if info, statErr := os.Stat(artifact.Path); statErr == nil && info.Size() > 44 {
+			hasWAV = true
+			break
+		}
+	}
+	if !hasWAV {
+		return nil
+	}
+	if !validCanonicalWAV(mixedPath) {
+		switch {
+		case validCanonicalWAV(micPath) && validCanonicalWAV(sysPath):
+			if err := audio.MixPCM16WAV(micPath, sysPath, mixedPath, r.cfg.Audio.MicrophoneGain, r.cfg.Audio.SystemGain); err != nil {
+				return err
+			}
+		case validCanonicalWAV(micPath):
+			if err := audio.CreateSilentPCM16WAVLike(micPath, mixedPath); err != nil {
+				return err
+			}
+		case validCanonicalWAV(sysPath):
+			if err := audio.CreateSilentPCM16WAVLike(sysPath, mixedPath); err != nil {
+				return err
+			}
+		default:
+			return nil
+		}
+	}
+	if _, err := r.encodeArchive(ctx, &meeting, mixedPath); err != nil {
+		return err
+	}
+	if meeting.Metadata == nil {
+		meeting.Metadata = make(map[string]string)
+	}
+	meeting.Metadata["audio_archived_at"] = time.Now().UTC().Format(time.RFC3339)
+	r.removeArtifactFiles(meeting.UID, mixedPath, micPath, sysPath)
+	_ = r.store.SaveMeeting(meeting)
+	_ = writeMetadata(filepath.Join(dir, "metadata.json"), meeting)
+	r.logger.Printf("audio archived uid=%s policy=%s", meeting.UID, r.cfg.Storage.AudioAfterProcessing)
+	return nil
 }
 
 func (r *Runner) removeArtifactFiles(meetingUID string, paths ...string) {

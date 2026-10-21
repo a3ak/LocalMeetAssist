@@ -412,12 +412,15 @@ type Storage struct {
 	DateFormat           string
 	TimeFormat           string
 	AudioAfterProcessing string
-	MP3BitrateKbps       int
-	KeepSourceOnFailure  bool
-	DatabasePath         string
-	BackupCount          int
-	EncoderCommand       string
-	OpusBitrateKbps      int
+	// AudioArchiveDays delays archiving the source WAVs: 0 converts right after
+	// a successful pipeline, N converts N days after the meeting finished.
+	AudioArchiveDays    int
+	MP3BitrateKbps      int
+	KeepSourceOnFailure bool
+	DatabasePath        string
+	BackupCount         int
+	EncoderCommand      string
+	OpusBitrateKbps     int
 }
 
 // Logging controls the log level and file rotation.
@@ -733,6 +736,9 @@ func Load(path string) (Config, error) {
 	default:
 		return cfg, errors.New("storage.audio_after_processing must be wav, opus, mp3 or delete")
 	}
+	if cfg.Storage.AudioArchiveDays < 0 || cfg.Storage.AudioArchiveDays > 3650 {
+		return cfg, errors.New("storage.audio_archive_days must be between 0 and 3650")
+	}
 	if cfg.Storage.OpusBitrateKbps < 6 || cfg.Storage.OpusBitrateKbps > 256 {
 		return cfg, errors.New("storage.opus_bitrate_kbps must be between 6 and 256")
 	}
@@ -850,7 +856,7 @@ func apply(c *Config, sec, key, raw string) error {
 	if err != nil {
 		return err
 	}
-	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "conference_detection.window_seconds": true, "conference_detection.stop_after_idle_seconds": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
+	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "conference_detection.window_seconds": true, "conference_detection.stop_after_idle_seconds": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "storage.audio_archive_days": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
 	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "conference_detection.enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
 	floatKeys := map[string]bool{"audio.microphone_gain": true, "audio.system_gain": true, "transcription.echo_text_similarity": true, "transcription.vad_threshold": true, "transcription.min_segment_rms": true, "diarization.cluster_threshold": true}
 	if intKeys[full] {
@@ -1152,6 +1158,8 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Storage.DatabasePath = s
 	case "storage.backup_count":
 		c.Storage.BackupCount, _ = integer(raw)
+	case "storage.audio_archive_days":
+		c.Storage.AudioArchiveDays, _ = integer(raw)
 	case "storage.encoder_command":
 		c.Storage.EncoderCommand = s
 	case "storage.opus_bitrate_kbps":
