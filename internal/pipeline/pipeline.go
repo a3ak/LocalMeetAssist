@@ -985,21 +985,24 @@ func (r *Runner) archiveStoredAudio(ctx context.Context, meeting model.Meeting) 
 	dir := r.meetingDir(meeting)
 	micPath, sysPath := filepath.Join(dir, "audio", "microphone.wav"), filepath.Join(dir, "audio", "system.wav")
 	mixedPath := filepath.Join(dir, "audio", r.name(meeting, "mixed")+".wav")
-	artifacts, err := r.store.Artifacts(meeting.UID)
-	if err != nil {
-		return err
-	}
+	// Файлы проверяем на диске, а не только по артефактам: у старых встреч
+	// записи об артефактах могли не сохраниться, а WAV остались.
 	hasWAV := false
-	for _, artifact := range artifacts {
-		if artifact.Type != "mic_wav" && artifact.Type != "system_wav" && artifact.Type != "mixed_wav" {
-			continue
-		}
-		if info, statErr := os.Stat(artifact.Path); statErr == nil && info.Size() > 44 {
+	for _, path := range []string{micPath, sysPath, mixedPath} {
+		if info, statErr := os.Stat(path); statErr == nil && info.Size() > 44 {
 			hasWAV = true
 			break
 		}
 	}
 	if !hasWAV {
+		return nil
+	}
+	// Архив уже есть: это остатки после сбоя или повторной обработки, их
+	// достаточно удалить — перекодировать Opus заново не нужно.
+	if r.hasArchivedAudio(meeting.UID) {
+		r.removeArtifactFiles(meeting.UID, mixedPath, micPath, sysPath)
+		r.markArchived(&meeting, dir)
+		r.logger.Printf("leftover WAV files removed, archive already exists uid=%s", meeting.UID)
 		return nil
 	}
 	if !validCanonicalWAV(mixedPath) {
@@ -1023,15 +1026,20 @@ func (r *Runner) archiveStoredAudio(ctx context.Context, meeting model.Meeting) 
 	if _, err := r.encodeArchive(ctx, &meeting, mixedPath); err != nil {
 		return err
 	}
+	r.removeArtifactFiles(meeting.UID, mixedPath, micPath, sysPath)
+	r.markArchived(&meeting, dir)
+	r.logger.Printf("audio archived uid=%s policy=%s", meeting.UID, r.cfg.Storage.AudioAfterProcessing)
+	return nil
+}
+
+// markArchived records the archiving date and keeps metadata.json in sync.
+func (r *Runner) markArchived(meeting *model.Meeting, dir string) {
 	if meeting.Metadata == nil {
 		meeting.Metadata = make(map[string]string)
 	}
 	meeting.Metadata["audio_archived_at"] = time.Now().UTC().Format(time.RFC3339)
-	r.removeArtifactFiles(meeting.UID, mixedPath, micPath, sysPath)
-	_ = r.store.SaveMeeting(meeting)
-	_ = writeMetadata(filepath.Join(dir, "metadata.json"), meeting)
-	r.logger.Printf("audio archived uid=%s policy=%s", meeting.UID, r.cfg.Storage.AudioAfterProcessing)
-	return nil
+	_ = r.store.SaveMeeting(*meeting)
+	_ = writeMetadata(filepath.Join(dir, "metadata.json"), *meeting)
 }
 
 func (r *Runner) removeArtifactFiles(meetingUID string, paths ...string) {

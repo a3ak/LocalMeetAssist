@@ -127,3 +127,59 @@ func TestArchiveDueIgnoresImmediatePolicy(t *testing.T) {
 		t.Fatalf("the archiver ran with an immediate policy: %v", err)
 	}
 }
+
+// TestArchiveDueRemovesLeftoversWithoutReencoding keeps an existing archive as
+// is: only the stray WAV files disappear.
+func TestArchiveDueRemovesLeftoversWithoutReencoding(t *testing.T) {
+	runner, st, meeting, audioDir := archiveFixture(t, 7, time.Now().Add(-10*24*time.Hour))
+	defer st.Close()
+
+	mixedPath := filepath.Join(audioDir, runner.name(meeting, "mixed")+".wav")
+	opusPath := filepath.Join(audioDir, runner.name(meeting, "mixed")+".opus")
+	if err := audio.EncodeWAVToOggOpus(mixedPath, opusPath, meeting.UID, 32); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.SaveArtifact(model.Artifact{UID: "opus", MeetingUID: meeting.UID, Type: "mixed_opus", Path: opusPath, MIMEType: "audio/ogg", Source: "generated", CreatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(opusPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	runner.ArchiveDue(context.Background(), time.Now())
+
+	after, err := os.Stat(opusPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.ModTime().Equal(before.ModTime()) || after.Size() != before.Size() {
+		t.Fatal("the existing Opus archive was re-encoded")
+	}
+	for _, name := range []string{"microphone.wav", "system.wav", runner.name(meeting, "mixed") + ".wav"} {
+		if _, err := os.Stat(filepath.Join(audioDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("the leftover WAV %s was kept: %v", name, err)
+		}
+	}
+}
+
+// TestArchiveDueFindsWAVsWithoutArtifacts covers old meetings whose artifact
+// records are gone while the files are still on disk.
+func TestArchiveDueFindsWAVsWithoutArtifacts(t *testing.T) {
+	runner, st, meeting, audioDir := archiveFixture(t, 7, time.Now().Add(-10*24*time.Hour))
+	defer st.Close()
+
+	mixedPath := filepath.Join(audioDir, runner.name(meeting, "mixed")+".wav")
+	if _, err := st.DeleteArtifactsByPaths(meeting.UID, filepath.Join(audioDir, "microphone.wav"), filepath.Join(audioDir, "system.wav"), mixedPath); err != nil {
+		t.Fatal(err)
+	}
+
+	runner.ArchiveDue(context.Background(), time.Now())
+
+	if info, err := os.Stat(filepath.Join(audioDir, runner.name(meeting, "mixed")+".opus")); err != nil || info.Size() == 0 {
+		t.Fatalf("the archive was not created: %v", err)
+	}
+	if _, err := os.Stat(mixedPath); !os.IsNotExist(err) {
+		t.Fatalf("the mixed WAV was kept: %v", err)
+	}
+}
