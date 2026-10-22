@@ -24,6 +24,7 @@ const state = {
   modelTab: "runtime",
   searchMatches: null,
   searchSpeakers: [],
+  peopleExpanded: new Set(),
   searchTimer: null,
   searchRequest: 0,
   conferenceCandidate: null,
@@ -2797,6 +2798,7 @@ $("#importForm").onsubmit = async (event) => {
 // --- Known speakers -------------------------------------------------------
 
 let peopleAudio = null;
+let peopleAudioButton = null;
 
 async function showPeople() {
   $("#peopleDialog").showModal();
@@ -2816,18 +2818,41 @@ async function refreshPeople() {
 
 function renderPeople(items) {
   const root = $("#peopleList");
+  stopVoiceClip();
   if (!items.length) {
     root.innerHTML = `<div class="hint people-empty">${t("people.empty")}</div>`;
     return;
   }
+  const ids = new Set(items.map((person) => person.id));
+  for (const id of [...state.peopleExpanded]) {
+    if (!ids.has(id)) state.peopleExpanded.delete(id);
+  }
   root.innerHTML = items.map((person) => {
+    const sampleCount = (person.samples || []).length;
+    const expanded = sampleCount > 0 && state.peopleExpanded.has(person.id);
     const samples = (person.samples || []).map((sample) => `<div class="person-sample"><button type="button" class="ghost small play-person-sample" data-url="${esc(sample.clip_url || "")}" aria-label="${t("people.play")}">▶</button><span class="person-sample-time">${clockMS(sample.start_ms)}–${clockMS(sample.end_ms)}</span><span class="meta">${esc(sample.source || "")} · ${Math.round((sample.quality?.score || 0) * 100)}%</span><button type="button" class="ghost small danger delete-person-sample" data-sample-id="${esc(sample.id)}" aria-label="${t("people.deleteSample")}">×</button></div>`).join("");
     const qualifier = person.needs_qualifier ? `<span class="voice-badge warn">${t("people.needsQualifier")}</span>` : "";
-    return `<div class="person-row" data-person-id="${esc(person.id)}"><div class="person-head"><input class="person-name" value="${esc(person.name)}" data-original="${esc(person.name)}" aria-label="${t("people.nameLabel")}">${qualifier}<span class="meta person-meta">${t("people.sampleCount", { n: (person.samples || []).length })} · ${t("people.meetingCount", { n: person.meeting_count || 0 })}</span><button type="button" class="ghost small danger delete-person">${t("common.delete")}</button></div><div class="person-samples">${samples || `<div class="hint">${t("people.noSamples")}</div>`}</div></div>`;
+    const toggle = sampleCount > 0
+      ? `<button type="button" class="ghost small person-toggle" aria-expanded="${expanded}" aria-controls="person-samples-${esc(person.id)}">${expanded ? "▾" : "▸"} ${t("people.samplesToggle", { n: sampleCount })}</button>`
+      : "";
+    const samplesHidden = sampleCount > 0 && !expanded ? " hidden" : "";
+    return `<div class="person-row" data-person-id="${esc(person.id)}"><div class="person-head"><input class="person-name" value="${esc(person.name)}" data-original="${esc(person.name)}" aria-label="${t("people.nameLabel")}">${qualifier}<span class="meta person-meta">${t("people.meetingCount", { n: person.meeting_count || 0 })}</span>${toggle}<button type="button" class="ghost small danger delete-person">${t("common.delete")}</button></div><div class="person-samples${samplesHidden}" id="person-samples-${esc(person.id)}">${samples || `<div class="hint">${t("people.noSamples")}</div>`}</div></div>`;
   }).join("");
   root.querySelectorAll(".person-row").forEach((row) => {
     const personID = row.dataset.personId;
     const nameInput = row.querySelector(".person-name");
+    const toggle = row.querySelector(".person-toggle");
+    if (toggle) {
+      toggle.onclick = () => {
+        const open = !state.peopleExpanded.has(personID);
+        if (open) state.peopleExpanded.add(personID);
+        else state.peopleExpanded.delete(personID);
+        row.querySelector(".person-samples").classList.toggle("hidden", !open);
+        toggle.setAttribute("aria-expanded", String(open));
+        toggle.textContent = `${open ? "▾" : "▸"} ${t("people.samplesToggle", { n: row.querySelectorAll(".play-person-sample").length })}`;
+        if (!open && row.querySelector(".play-person-sample.playing")) stopVoiceClip();
+      };
+    }
     nameInput.addEventListener("change", async () => {
       const name = nameInput.value.trim();
       if (!name || name === nameInput.dataset.original) {
@@ -2865,18 +2890,36 @@ function renderPeople(items) {
   });
 }
 
-function playVoiceClip(url, button) {
-  if (!url) return;
+function stopVoiceClip() {
   if (peopleAudio) {
     peopleAudio.pause();
-    peopleAudio = null;
+    peopleAudio.removeAttribute("src");
+    peopleAudio.load();
   }
+  if (peopleAudioButton?.isConnected) {
+    peopleAudioButton.textContent = "▶";
+    peopleAudioButton.classList.remove("playing");
+    peopleAudioButton.setAttribute("aria-label", t("people.play"));
+  }
+  peopleAudio = null;
+  peopleAudioButton = null;
+}
+
+function playVoiceClip(url, button) {
+  if (!url) return;
+  if (peopleAudio && peopleAudioButton === button) {
+    stopVoiceClip();
+    return;
+  }
+  stopVoiceClip();
   const audio = new Audio(url);
   peopleAudio = audio;
+  peopleAudioButton = button;
   button.textContent = "■";
+  button.classList.add("playing");
+  button.setAttribute("aria-label", t("people.stop"));
   const reset = () => {
-    button.textContent = "▶";
-    if (peopleAudio === audio) peopleAudio = null;
+    if (peopleAudio === audio) stopVoiceClip();
   };
   audio.addEventListener("ended", reset, { once: true });
   audio.addEventListener("error", reset, { once: true });
@@ -2888,12 +2931,10 @@ function playVoiceClip(url, button) {
 
 $("#peopleBtn").onclick = showPeople;
 $("#closePeople").onclick = () => {
-  if (peopleAudio) {
-    peopleAudio.pause();
-    peopleAudio = null;
-  }
+  stopVoiceClip();
   closeDialog("#peopleDialog");
 };
+$("#peopleDialog").addEventListener("close", stopVoiceClip);
 $("#deleteAllPeople").onclick = async () => {
   if (!confirm(t("people.deleteAllConfirm"))) return;
   try {

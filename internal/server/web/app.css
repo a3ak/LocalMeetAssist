@@ -205,6 +205,8 @@ main{padding:10px}
 .person-sample{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
 .person-sample-time{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .person-sample .meta{flex:1}
+.play-person-sample.playing{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,var(--line))}
+.person-toggle{white-space:nowrap}
 .speaker-samples{display:grid;grid-template-columns:repeat(2,minmax(250px,1fr));gap:8px;margin-top:10px}
 .voice-sample{padding:7px 9px;border:1px solid var(--line);border-radius:9px;background:var(--surface)}
 .voice-sample span{display:block;color:var(--muted);font-size:11px}
