@@ -836,14 +836,19 @@ function shiftCalendar(direction) {
   loadMeetings().catch((error) => toast(error.message));
 }
 
-// setCalendarView switches between the month grid and the week timeline.
-function setCalendarView(view) {
-  state.calendarView = view === "week" ? "week" : "month";
+// setCalendarView switches between the month grid and the week timeline. The
+// fetch window differs (a week vs a whole month), so the meetings must be
+// reloaded; otherwise the month view would show only the week loaded before.
+function setCalendarView(view, reload = true) {
+  const next = view === "week" ? "week" : "month";
+  const changed = state.calendarView !== next;
+  state.calendarView = next;
   localStorage.setItem("localmeetassist-calendar-view", state.calendarView);
   $$("#calendarView button").forEach((button) => {
     button.classList.toggle("active", button.dataset.view === state.calendarView);
   });
-  renderCalendar();
+  if (!changed) return;
+  if (reload) loadMeetings().catch((error) => toast(error.message));
 }
 
 // toggleSearchPanel reveals the filter row behind the funnel icon.
@@ -2805,12 +2810,32 @@ async function showPeople() {
   await refreshPeople();
 }
 
-async function refreshPeople() {
+async function refreshPeople(focusPersonID = "") {
   const root = $("#peopleList");
+  const previousScrollTop = root.scrollTop;
+  let previousRowTop = null;
+  if (focusPersonID) {
+    const row = root.querySelector(`.person-row[data-person-id="${CSS.escape(focusPersonID)}"]`);
+    if (row) previousRowTop = row.getBoundingClientRect().top - root.getBoundingClientRect().top;
+  }
   root.innerHTML = `<div class="hint">${t("common.loading")}</div>`;
   try {
     const items = await api("/api/v1/people");
     renderPeople(Array.isArray(items) ? items : []);
+    // Re-rendering replaces the list and resets its scroll. Restore the same
+    // person at the same viewport position so deleting a sample does not jump
+    // back to the first speaker.
+    if (focusPersonID) {
+      const row = root.querySelector(`.person-row[data-person-id="${CSS.escape(focusPersonID)}"]`);
+      if (row && previousRowTop !== null) {
+        const currentTop = row.getBoundingClientRect().top - root.getBoundingClientRect().top;
+        root.scrollTop += currentTop - previousRowTop;
+      } else {
+        root.scrollTop = Math.max(0, Math.min(previousScrollTop, root.scrollHeight - root.clientHeight));
+      }
+    } else {
+      root.scrollTop = Math.max(0, Math.min(previousScrollTop, root.scrollHeight - root.clientHeight));
+    }
   } catch (error) {
     root.innerHTML = `<div class="hint">${esc(error.message)}</div>`;
   }
@@ -2876,7 +2901,7 @@ function renderPeople(items) {
         if (!confirm(t("people.deleteSampleConfirm"))) return;
         try {
           await api(`/api/v1/people/${encodeURIComponent(personID)}/samples/${encodeURIComponent(button.dataset.sampleId)}`, { method: "DELETE" });
-          await refreshPeople();
+          await refreshPeople(personID);
         } catch (error) { toast(error.message); }
       };
     });
@@ -3450,7 +3475,7 @@ async function bootstrap() {
     // config.toml stays the source of truth for the theme; the cached value only
     // avoids flashing the wrong colours on the first paint.
     applyTheme(state.serverTheme);
-    setCalendarView(localStorage.getItem("localmeetassist-calendar-view") || "month");
+    setCalendarView(localStorage.getItem("localmeetassist-calendar-view") || "month", false);
     // After the language is loaded, so the tooltip is translated.
     applyAppVersion();
     try {
