@@ -25,6 +25,8 @@ var (
 	bSegments    = []byte("transcript_segments")
 	bTokens      = []byte("tokens")
 	bIntegration = []byte("integration_state")
+	bPeople      = []byte("people")
+	bVoice       = []byte("voice_samples")
 )
 
 // Store is a bbolt-backed repository. All access goes through short
@@ -42,12 +44,12 @@ func Open(path string) (*Store, error) {
 	}
 	s := &Store{db: db}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, name := range [][]byte{bMeta, bMeetings, bArtifacts, bJobs, bSpeakers, bSegments, bTokens, bIntegration} {
+		for _, name := range [][]byte{bMeta, bMeetings, bArtifacts, bJobs, bSpeakers, bSegments, bTokens, bIntegration, bPeople, bVoice} {
 			if _, e := tx.CreateBucketIfNotExists(name); e != nil {
 				return e
 			}
 		}
-		return tx.Bucket(bMeta).Put([]byte("schema_version"), []byte("2"))
+		return tx.Bucket(bMeta).Put([]byte("schema_version"), []byte("3"))
 	})
 	if err != nil {
 		db.Close()
@@ -604,4 +606,201 @@ func (s *Store) MergeMeetingState(meeting model.Meeting, artifacts []model.Artif
 		return nil
 	})
 	return removed, err
+}
+
+// SavePerson inserts or replaces a known speaker profile.
+func (s *Store) SavePerson(p model.Person) error {
+	if p.ID == "" {
+		return errors.New("person id is empty")
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return putJSON(tx.Bucket(bPeople), p.ID, p)
+	})
+}
+
+// Person loads one known speaker profile.
+func (s *Store) Person(id string) (model.Person, error) {
+	var out model.Person
+	err := s.db.View(func(tx *bolt.Tx) error {
+		var e error
+		out, e = getJSON[model.Person](tx.Bucket(bPeople), id)
+		return e
+	})
+	return out, err
+}
+
+// People returns every known speaker ordered by name and ID.
+func (s *Store) People() ([]model.Person, error) {
+	out := make([]model.Person, 0)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bPeople).ForEach(func(_, v []byte) error {
+			var p model.Person
+			if err := json.Unmarshal(v, &p); err != nil {
+				return err
+			}
+			out = append(out, p)
+			return nil
+		})
+	})
+	sort.Slice(out, func(i, j int) bool {
+		if strings.EqualFold(out[i].Name, out[j].Name) {
+			return out[i].ID < out[j].ID
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out, err
+}
+
+// DeletePerson removes a profile and its labeled samples. Reference clips are
+// files owned by the caller and must be removed separately.
+func (s *Store) DeletePerson(id string) error {
+	if id == "" {
+		return os.ErrNotExist
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := tx.Bucket(bPeople).Delete([]byte(id)); err != nil {
+			return err
+		}
+		return deletePrefix(tx.Bucket(bVoice), id+"/")
+	})
+}
+
+// DeletePeople removes every known speaker profile and all samples.
+func (s *Store) DeletePeople() error {
+	return s.db.Update(func(tx *bolt.Tx) error {
+		if err := deletePrefix(tx.Bucket(bPeople), ""); err != nil {
+			return err
+		}
+		return deletePrefix(tx.Bucket(bVoice), "")
+	})
+}
+
+// SaveVoiceSample inserts or replaces one enrolled voice sample.
+func (s *Store) SaveVoiceSample(v model.VoiceSample) error {
+	if v.PersonID == "" || v.ID == "" {
+		return errors.New("voice sample needs person and sample ids")
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return putJSON(tx.Bucket(bVoice), v.PersonID+"/"+v.ID, v)
+	})
+}
+
+// VoiceSamples returns the samples of one person, oldest first.
+func (s *Store) VoiceSamples(personID string) ([]model.VoiceSample, error) {
+	out := make([]model.VoiceSample, 0)
+	if personID == "" {
+		return out, nil
+	}
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bVoice).ForEach(func(k, v []byte) error {
+			if !strings.HasPrefix(string(k), personID+"/") {
+				return nil
+			}
+			var sample model.VoiceSample
+			if err := json.Unmarshal(v, &sample); err != nil {
+				return err
+			}
+			out = append(out, sample)
+			return nil
+		})
+	})
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, err
+}
+
+// AllVoiceSamples returns every enrolled sample. It is used by matching and by
+// the people list, so a single pass over the bucket is enough.
+func (s *Store) AllVoiceSamples() ([]model.VoiceSample, error) {
+	out := make([]model.VoiceSample, 0)
+	err := s.db.View(func(tx *bolt.Tx) error {
+		return tx.Bucket(bVoice).ForEach(func(_, v []byte) error {
+			var sample model.VoiceSample
+			if err := json.Unmarshal(v, &sample); err != nil {
+				return err
+			}
+			out = append(out, sample)
+			return nil
+		})
+	})
+	return out, err
+}
+
+// DeleteVoiceSample removes one sample by person and sample ID.
+func (s *Store) DeleteVoiceSample(personID, sampleID string) error {
+	if personID == "" || sampleID == "" {
+		return os.ErrNotExist
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bVoice)
+		key := []byte(personID + "/" + sampleID)
+		if bucket.Get(key) == nil {
+			return os.ErrNotExist
+		}
+		return bucket.Delete(key)
+	})
+}
+
+// DeleteVoiceSamplesForPerson removes every sample of one person.
+func (s *Store) DeleteVoiceSamplesForPerson(personID string) error {
+	if personID == "" {
+		return nil
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		return deletePrefix(tx.Bucket(bVoice), personID+"/")
+	})
+}
+
+// UnlinkPerson clears profile links in meeting speaker cards when a profile is
+// deleted. Display names stay as historical records.
+func (s *Store) UnlinkPerson(personID string) error {
+	if personID == "" {
+		return nil
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		bucket := tx.Bucket(bSpeakers)
+		type update struct {
+			key     []byte
+			speaker model.Speaker
+		}
+		var updates []update
+		if err := bucket.ForEach(func(k, v []byte) error {
+			var speaker model.Speaker
+			if err := json.Unmarshal(v, &speaker); err != nil {
+				return err
+			}
+			changed := false
+			if speaker.PersonID == personID {
+				speaker.PersonID = ""
+				speaker.MatchScore = 0
+				speaker.NameSource = ""
+				changed = true
+			}
+			// Suggestions may point at a deleted profile without being linked.
+			if len(speaker.MatchCandidates) > 0 {
+				filtered := speaker.MatchCandidates[:0]
+				for _, candidate := range speaker.MatchCandidates {
+					if candidate.PersonID != personID {
+						filtered = append(filtered, candidate)
+					}
+				}
+				if len(filtered) != len(speaker.MatchCandidates) {
+					speaker.MatchCandidates = filtered
+					changed = true
+				}
+			}
+			if !changed {
+				return nil
+			}
+			updates = append(updates, update{key: append([]byte(nil), k...), speaker: speaker})
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, item := range updates {
+			if err := putJSON(bucket, string(item.key), item.speaker); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }

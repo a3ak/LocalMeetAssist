@@ -12,6 +12,7 @@
     <div class="brand"><span class="brand-mark"><span class="logo">LMA</span><span id="appVersion" class="brand-version hidden"></span></span><div><strong>LocalMeetAssist</strong><small data-i18n="app.tagline">Локальные протоколы встреч</small></div></div>
     <div class="record-actions">
       <button id="settingsBtn" class="ghost" data-i18n="nav.settings">Настройки</button>
+      <button id="peopleBtn" class="ghost" data-i18n="nav.speakers">Спикеры</button>
       <button id="modelsBtn" class="ghost" data-i18n="nav.models">Модели</button>
       <button id="diagBtn" class="ghost"><span data-i18n="nav.diagnostics">Диагностика</span><span id="diagBadge" class="nav-badge hidden" aria-hidden="true">!</span></button>
       <button id="integrationsBtn" class="ghost" data-i18n="nav.integrations">Интеграции</button>
@@ -117,6 +118,13 @@
       <div class="models-toolbar"><button id="downloadRecommended" type="button" class="icon-action" aria-label="Установить все рекомендованные модели" data-tip="Установить все рекомендованные модели" data-i18n-tip="models.downloadRecommended"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 20h16"/></svg></button><button id="refreshModels" type="button" class="icon-action" aria-label="Обновить статусы" data-tip="Обновить статусы" data-i18n-tip="models.refreshStatuses"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6"/><path d="M20 4v4h-4"/></svg></button><button id="deleteAllModels" type="button" class="icon-action danger" aria-label="Удалить все сохранённые модели" data-tip="Удалить все сохранённые модели" data-i18n-tip="models.deleteAll"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M6 6l1 14a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l1-14"/></svg></button></div>
       <div class="pills model-tabs" id="modelTabs"><button type="button" data-mgroup="runtime" class="active" data-i18n="models.tabRuntime">Runtime</button><button type="button" data-mgroup="transcription" data-i18n="models.tabTranscription">Транскрибация</button><button type="button" data-mgroup="speakers" data-i18n="models.tabSpeakers">Спикеры</button><button type="button" data-mgroup="minutes" data-i18n="models.tabMinutes">Протоколы</button></div>
       <div id="modelsList" class="models-list"></div>
+    </div>
+  </dialog>
+
+  <dialog id="peopleDialog">
+    <div class="dialog-card people-card">
+      <div class="dialog-head"><div><h2 data-i18n="people.title">Спикеры</h2><div class="meta" data-i18n="people.meta">Сохранённые голоса. Здесь можно прослушать образцы, уточнить имя и удалить ошибочные записи.</div></div><div class="dialog-head-actions"><button id="deleteAllPeople" type="button" class="danger ghost small" data-i18n="people.deleteAll">Удалить всех</button><button id="closePeople" type="button" class="icon-btn">×</button></div></div>
+      <div id="peopleList" class="people-list"></div>
     </div>
   </dialog>
 

@@ -332,3 +332,29 @@ func TestResolvePathsReadsPromptFile(t *testing.T) {
 		t.Fatal("без файла должен использоваться встроенный шаблон")
 	}
 }
+
+func TestLoadVoiceMemorySettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "voice.toml")
+	data := []byte("[diarization]\nremember_speakers = true\nvoice_auto_threshold = 0.90\nvoice_suggest_threshold = 0.70\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Diarization.RememberSpeakers || cfg.Diarization.VoiceAutoThreshold != 0.90 || cfg.Diarization.VoiceSuggestThreshold != 0.70 {
+		t.Fatalf("unexpected voice memory config: %+v", cfg.Diarization)
+	}
+}
+
+func TestVoiceThresholdsMustBeOrdered(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "voice-bad.toml")
+	data := []byte("[diarization]\nvoice_auto_threshold = 0.50\nvoice_suggest_threshold = 0.70\n")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Load(path); err == nil {
+		t.Fatal("expected an error when the automatic threshold is below the suggestion threshold")
+	}
+}

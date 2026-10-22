@@ -271,6 +271,13 @@ type Diarization struct {
 	MaxAutoSpeakers   int
 	NumThreads        int
 	GigaAMBackend     string
+	// RememberSpeakers enrolls clean voice samples after the user names a
+	// speaker. It is off by default because the samples are biometric data.
+	RememberSpeakers bool
+	// VoiceAutoThreshold is the confidence needed to fill a name automatically;
+	// VoiceSuggestThreshold only shows a clickable suggestion.
+	VoiceAutoThreshold    float64
+	VoiceSuggestThreshold float64
 }
 
 // Models contains download locations for model files only. Executables are
@@ -482,6 +489,7 @@ func Defaults() Config {
 			AutoRun: false, Engine: "pyannote-wespeaker-onnx",
 			SegmentationModel: "./models/diarization/pyannote-segmentation-3/model.onnx", EmbeddingModel: "./models/diarization/wespeaker-resnet34-lm/voxceleb_resnet34_LM.onnx",
 			NumSpeakers: 0, ClusterThreshold: 0.60, TimeoutSeconds: 3600, MaxAutoSpeakers: 16, NumThreads: 4, GigaAMBackend: "onnx",
+			RememberSpeakers: false, VoiceAutoThreshold: 0.80, VoiceSuggestThreshold: 0.62,
 		},
 		Models: Models{DownloadTimeoutSeconds: 7200,
 			GigaAMEncoderURL:    "https://huggingface.co/istupakov/gigaam-v3-onnx/resolve/main/v3_e2e_rnnt_encoder.int8.onnx",
@@ -693,6 +701,15 @@ func Load(path string) (Config, error) {
 	if cfg.Diarization.NumThreads < 0 || cfg.Diarization.NumThreads > 128 {
 		return cfg, errors.New("diarization.num_threads must be between 0 and 128")
 	}
+	if cfg.Diarization.VoiceSuggestThreshold <= 0 || cfg.Diarization.VoiceSuggestThreshold > 1 {
+		return cfg, errors.New("diarization.voice_suggest_threshold must be in (0, 1]")
+	}
+	if cfg.Diarization.VoiceAutoThreshold <= 0 || cfg.Diarization.VoiceAutoThreshold > 1 {
+		return cfg, errors.New("diarization.voice_auto_threshold must be in (0, 1]")
+	}
+	if cfg.Diarization.VoiceAutoThreshold < cfg.Diarization.VoiceSuggestThreshold {
+		return cfg, errors.New("diarization.voice_auto_threshold must not be below voice_suggest_threshold")
+	}
 	if strings.TrimSpace(cfg.Inference.LlamaRuntimePath) == "" {
 		// A configuration written before the local summarization runtime existed
 		// keeps the library next to whisper.cpp, which is where the runtime card
@@ -863,8 +880,8 @@ func apply(c *Config, sec, key, raw string) error {
 		return err
 	}
 	intKeys := map[string]bool{".config_version": true, "app.listen_port": true, "audio.sample_rate": true, "audio.channels": true, "audio.block_ms": true, "audio.echo_delay_ms": true, "conference_detection.window_seconds": true, "conference_detection.stop_after_idle_seconds": true, "transcription.threads": true, "transcription.timeout_seconds": true, "transcription.chunk_seconds": true, "transcription.echo_time_tolerance_ms": true, "transcription.vad_min_speech_ms": true, "transcription.vad_min_silence_ms": true, "diarization.num_speakers": true, "diarization.timeout_seconds": true, "diarization.max_auto_speakers": true, "diarization.num_threads": true, "models.download_timeout_seconds": true, "summary.timeout_seconds": true, "summary.max_retries": true, "storage.mp3_bitrate_kbps": true, "storage.opus_bitrate_kbps": true, "storage.backup_count": true, "storage.audio_archive_days": true, "storage.meeting_retention_days": true, "logging.max_file_mb": true, "logging.max_files": true, "integrations.browser.stop_after_missed_polls": true, "integrations.browser.poll_interval_seconds": true}
-	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "conference_detection.enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
-	floatKeys := map[string]bool{"audio.microphone_gain": true, "audio.system_gain": true, "transcription.echo_text_similarity": true, "transcription.vad_threshold": true, "transcription.min_segment_rms": true, "diarization.cluster_threshold": true}
+	boolKeys := map[string]bool{"app.open_browser": true, "audio.normalize": true, "desktop.tray_enabled": true, "conference_detection.enabled": true, "inference.auto_download": true, "transcription.auto_run": true, "transcription.echo_dedup_enabled": true, "transcription.vad_enabled": true, "transcription.suppress_non_speech": true, "transcription.no_fallback": true, "transcription.silence_filter": true, "transcription.mixed_fallback_enabled": true, "transcription.gigaam_tls_verify": true, "diarization.auto_run": true, "diarization.microphone_enabled": true, "diarization.remember_speakers": true, "summary.auto_run": true, "summary.tls_verify": true, "storage.keep_source_on_failure": true, "integrations.audit_enabled": true, "integrations.browser.enabled": true}
+	floatKeys := map[string]bool{"audio.microphone_gain": true, "audio.system_gain": true, "transcription.echo_text_similarity": true, "transcription.vad_threshold": true, "transcription.min_segment_rms": true, "diarization.cluster_threshold": true, "diarization.voice_auto_threshold": true, "diarization.voice_suggest_threshold": true}
 	if intKeys[full] {
 		if _, err := integer(raw); err != nil {
 			return err
@@ -1060,6 +1077,12 @@ func apply(c *Config, sec, key, raw string) error {
 		c.Diarization.MaxAutoSpeakers, _ = integer(raw)
 	case "diarization.num_threads":
 		c.Diarization.NumThreads, _ = integer(raw)
+	case "diarization.remember_speakers":
+		c.Diarization.RememberSpeakers, _ = boolean(raw)
+	case "diarization.voice_auto_threshold":
+		c.Diarization.VoiceAutoThreshold, _ = decimal(raw)
+	case "diarization.voice_suggest_threshold":
+		c.Diarization.VoiceSuggestThreshold, _ = decimal(raw)
 	case "diarization.gigaam_backend":
 		c.Diarization.GigaAMBackend = s
 	case "models.download_timeout_seconds":

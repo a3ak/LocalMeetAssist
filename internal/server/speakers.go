@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -43,6 +44,12 @@ type speakerBatchRequest struct {
 	// participants were detected as one voice. Fragments are moved into them in
 	// the same request, so a new card is never created empty by accident.
 	Create []speakerCreate `json:"create"`
+	// Voice memory actions. PersonIDs explicitly links a speaker to a known
+	// profile (clicked suggestion or namesake choice), Confirm accepts the
+	// automatic name and enrolls the voice, Reject removes an automatic match.
+	PersonIDs map[string]string `json:"person_ids"`
+	Confirm   []string          `json:"confirm"`
+	Reject    []string          `json:"reject"`
 }
 
 // speakerCreate is one speaker to add to a meeting.
@@ -63,7 +70,7 @@ func (s *Server) updateSpeakers(w http.ResponseWriter, r *http.Request, uid stri
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if len(req.Names)+len(req.Assignments)+len(req.Merges) > 10000 {
+	if len(req.Names)+len(req.Assignments)+len(req.Merges)+len(req.PersonIDs)+len(req.Confirm)+len(req.Reject) > 10000 {
 		writeError(w, http.StatusBadRequest, "too many changes")
 		return
 	}
@@ -203,6 +210,56 @@ func (s *Server) updateSpeakers(w http.ResponseWriter, r *http.Request, uid stri
 		speaker.DisplayName = name
 		byID[id] = speaker
 	}
+	// Voice memory actions are applied before the cards are rebuilt, so the
+	// rebuilt speaker keeps the chosen link instead of the old automatic one.
+	for id := range req.PersonIDs {
+		if _, ok := byID[id]; !ok {
+			writeError(w, http.StatusBadRequest, "unknown speaker: "+id)
+			return
+		}
+	}
+	for _, id := range req.Confirm {
+		if _, ok := byID[id]; !ok {
+			writeError(w, http.StatusBadRequest, "unknown speaker: "+id)
+			return
+		}
+	}
+	for _, id := range req.Reject {
+		speaker, ok := byID[id]
+		if !ok {
+			writeError(w, http.StatusBadRequest, "unknown speaker: "+id)
+			return
+		}
+		speaker.PersonID = ""
+		speaker.MatchScore = 0
+		speaker.MatchCandidates = nil
+		speaker.NameSource = ""
+		if _, named := req.Names[id]; !named {
+			speaker.DisplayName = speaker.ID
+		}
+		byID[id] = speaker
+	}
+	for id, personID := range req.PersonIDs {
+		person, err := s.store.Person(personID)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "unknown person for speaker: "+id)
+			return
+		}
+		speaker := byID[id]
+		speaker.PersonID = person.ID
+		speaker.NameSource = "manual"
+		speaker.MatchCandidates = nil
+		if strings.TrimSpace(speaker.DisplayName) == "" || speaker.DisplayName == id || strings.HasPrefix(speaker.DisplayName, "SPEAKER_") {
+			speaker.DisplayName = person.Name
+		}
+		byID[id] = speaker
+	}
+	for _, id := range req.Confirm {
+		speaker := byID[id]
+		speaker.NameSource = "manual"
+		speaker.MatchCandidates = nil
+		byID[id] = speaker
+	}
 
 	var speakers []model.Speaker
 	if len(segments) > 0 {
@@ -225,6 +282,39 @@ func (s *Server) updateSpeakers(w http.ResponseWriter, r *http.Request, uid stri
 		}
 	}
 	sort.Slice(speakers, func(i, j int) bool { return speakers[i].ID < speakers[j].ID })
+	confirm := make(map[string]bool, len(req.Confirm))
+	for _, id := range req.Confirm {
+		confirm[id] = true
+	}
+	manual := make(map[string]bool, len(req.Names))
+	previousPersonIDs := make(map[string]string, len(req.Names))
+	for index := range speakers {
+		speaker := &speakers[index]
+		if speaker.ID == "microphone_owner" || speaker.Source == "microphone" {
+			continue
+		}
+		name := strings.TrimSpace(speaker.DisplayName)
+		if name == "" || name == speaker.ID || strings.HasPrefix(name, "SPEAKER_") {
+			continue
+		}
+		_, named := req.Names[speaker.ID]
+		changed := named && name != strings.TrimSpace(oldNames[speaker.ID])
+		if changed || confirm[speaker.ID] || req.PersonIDs[speaker.ID] != "" {
+			manual[speaker.ID] = true
+			speaker.NameSource = "manual"
+			speaker.MatchCandidates = nil
+		}
+		// A changed name is a correction, not necessarily a different person.
+		// Keep the previous automatic link for enrollment: if the voice matches,
+		// the profile is renamed; if not, enrollment resolves another person.
+		if changed && !confirm[speaker.ID] && req.PersonIDs[speaker.ID] == "" {
+			if speaker.PersonID != "" {
+				previousPersonIDs[speaker.ID] = speaker.PersonID
+			}
+			speaker.PersonID = ""
+			speaker.MatchScore = 0
+		}
+	}
 	names := make(map[string]string, len(speakers))
 	for _, speaker := range speakers {
 		names[speaker.ID] = speaker.DisplayName
@@ -252,8 +342,23 @@ func (s *Server) updateSpeakers(w http.ResponseWriter, r *http.Request, uid stri
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.logger.Printf("speaker edits saved meeting_uid=%s names=%d assignments=%d merges=%d created=%d", uid, len(req.Names), len(req.Assignments), len(req.Merges), len(created))
-	writeJSON(w, http.StatusOK, map[string]any{"saved": true, "speakers": speakers, "transcript": meeting.Transcript, "summary_stale": meeting.Metadata["summary_stale"] == "true"})
+	var enrollment voiceEnrollmentResult
+	if len(manual) > 0 && s.config().Diarization.RememberSpeakers {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+		enrollment = s.enrollSpeakers(ctx, meeting, segments, speakers, manual, req.PersonIDs, previousPersonIDs)
+		cancel()
+		for index := range speakers {
+			if enrollment.Updated[speakers[index].ID] {
+				speakers[index] = enrollment.Speakers[speakers[index].ID]
+			}
+		}
+	}
+	s.logger.Printf("speaker edits saved meeting_uid=%s names=%d assignments=%d merges=%d created=%d voice_added=%d", uid, len(req.Names), len(req.Assignments), len(req.Merges), len(created), enrollment.Added)
+	response := map[string]any{"saved": true, "speakers": speakers, "transcript": meeting.Transcript, "summary_stale": meeting.Metadata["summary_stale"] == "true"}
+	if len(manual) > 0 {
+		response["voice_enrollment"] = enrollment.Summary
+	}
+	writeJSON(w, http.StatusOK, response)
 }
 
 // speaker renames a single speaker.
@@ -368,12 +473,21 @@ func buildSpeakersFromSegments(meetingUID string, segments []model.Segment, prev
 		speaker := grouped[segment.SpeakerID]
 		if speaker == nil {
 			displayName := segment.SpeakerID
-			if old, ok := previous[segment.SpeakerID]; ok && strings.TrimSpace(old.DisplayName) != "" {
+			old, known := previous[segment.SpeakerID]
+			if known && strings.TrimSpace(old.DisplayName) != "" {
 				displayName = old.DisplayName
 			} else if segment.SpeakerID == "microphone_owner" {
 				displayName = defaultOwnerName
 			}
 			speaker = &model.Speaker{MeetingUID: meetingUID, ID: segment.SpeakerID, DisplayName: displayName, Source: segment.Source}
+			if known {
+				// Voice links are not derivable from segments; they must survive
+				// every rebuild of the speaker cards.
+				speaker.PersonID = old.PersonID
+				speaker.MatchScore = old.MatchScore
+				speaker.MatchCandidates = old.MatchCandidates
+				speaker.NameSource = old.NameSource
+			}
 			grouped[segment.SpeakerID] = speaker
 		}
 		fragment := model.Sample{ID: segment.ID, StartMS: segment.StartMS, EndMS: segment.EndMS, Source: segment.Source, Text: segment.Text}

@@ -14,3 +14,6 @@
 # Собираются CI (npm run package), в репозитории не хранятся.
 /browser-extension/artifacts/
 /browser-extension/packages/
+
+# Локальный кэш Go, когда стандартный каталог недоступен.
+/.gocache/

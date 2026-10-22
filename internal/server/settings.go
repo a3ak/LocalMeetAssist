@@ -274,6 +274,7 @@ func settingsSchema(cfg config.Config, modelChoices map[string][]settingOption) 
 		}},
 		{ID: "diarization", Title: "Диаризация", Description: "PyAnnote Segmentation 3 + WeSpeaker и кластеризация голосов на Go.", Fields: []settingField{
 			boolSetting("diarization.auto_run", "Выполнять автоматически", "Автоматически разделять удалённых участников на спикеров. Ручной запуск доступен всегда.", cfg.Diarization.AutoRun),
+			boolSetting("diarization.remember_speakers", "Запоминать спикеров", "После ручного переименования сохранять до 10 чистых образцов голоса. Это биометрические данные: они остаются только на этом компьютере. Запоминание работает, пока аудио встречи не архивировано.", cfg.Diarization.RememberSpeakers),
 			selectSetting("diarization.engine", "Движок", "Выполняется в процессе LocalMeetAssist без CLI.", cfg.Diarization.Engine, option("pyannote-wespeaker-onnx", "PyAnnote + WeSpeaker ONNX")),
 			modelField("diarization.segmentation_model", "Модель сегментации", "Скачанные модели сегментации; серые пункты ещё не загружены.", cfg.Diarization.SegmentationModel, modelChoices["diarization.segmentation_model"]),
 			modelField("diarization.embedding_model", "Модель голосовых признаков", "Скачанные модели голосовых признаков; серые пункты ещё не загружены. На разных записях точнее разделяют разные модели.", cfg.Diarization.EmbeddingModel, modelChoices["diarization.embedding_model"]),

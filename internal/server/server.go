@@ -30,6 +30,7 @@ import (
 	"localmeetassist/internal/recording"
 	"localmeetassist/internal/store"
 	"localmeetassist/internal/version"
+	"localmeetassist/internal/voice"
 )
 
 //go:embed web
@@ -47,6 +48,7 @@ type Server struct {
 	store         *store.Store
 	recorder      *recording.Manager
 	pipeline      *pipeline.Runner
+	voiceprints   *voice.Service
 	models        *modelmanager.Manager
 	token         string
 	nonces        *uiNonceState
@@ -105,7 +107,7 @@ func NewWithLogging(cfg config.Config, st *store.Store, logger *log.Logger, leve
 
 // NewWithRecorder creates a Server with an injected recorder (used by tests).
 func NewWithRecorder(cfg config.Config, st *store.Store, logger *log.Logger, recorder *recording.Manager) *Server {
-	s := &Server{cfg: cfg, store: st, recorder: recorder, pipeline: pipeline.NewWithLogger(cfg, st, logger), models: modelmanager.New(cfg, logger), token: randomToken(), nonces: &uiNonceState{}, browser: newBrowserSession(), recording: &recordingTracker{}, conference: &conferenceDetectionState{}, activity: nativeaudio.New(), logger: logger, events: make(map[chan []byte]struct{})}
+	s := &Server{cfg: cfg, store: st, recorder: recorder, pipeline: pipeline.NewWithLogger(cfg, st, logger), voiceprints: voice.New(st, logger), models: modelmanager.New(cfg, logger), token: randomToken(), nonces: &uiNonceState{}, browser: newBrowserSession(), recording: &recordingTracker{}, conference: &conferenceDetectionState{}, activity: nativeaudio.New(), logger: logger, events: make(map[chan []byte]struct{})}
 	// A recording cannot survive a restart, so the persisted revision has to be
 	// reconciled before the first plugin connects.
 	s.normaliseRecordingState()
@@ -179,6 +181,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/models/", s.modelPath)
 	mux.HandleFunc("/api/v1/meetings", s.meetings)
 	mux.HandleFunc("/api/v1/meetings/", s.meetingPath)
+	mux.HandleFunc("/api/v1/people", s.people)
+	mux.HandleFunc("/api/v1/people/", s.personPath)
 	mux.HandleFunc("/api/v1/recordings", s.recordings)
 	mux.HandleFunc("/api/v1/recordings/", s.recordingPath)
 	mux.HandleFunc("/api/v1/conference-detection", s.conferenceDetection)

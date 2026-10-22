@@ -92,7 +92,7 @@ func (r *Runner) retryDiarization(ctx context.Context, uid string) error {
 	if useMixed {
 		numSpeakers = participantCount(m.Metadata)
 	}
-	turns, err := diarizeWithEngine(ctx, r.cfg.Inference, r.cfg.Diarization, audioPath, numSpeakers, func(percent int) {
+	turns, candidates, centroids, err := diarizeWithEngine(ctx, r.cfg.Inference, r.cfg.Diarization, audioPath, numSpeakers, func(percent int) {
 		r.jobProgress(uid, "diarizing", percent)
 	})
 	if ctx.Err() != nil {
@@ -125,12 +125,21 @@ func (r *Runner) retryDiarization(ctx context.Context, uid string) error {
 		return r.fail(&m, "diarizing", errors.New("no transcript segments left after diarization"))
 	}
 
+	matches := r.matchVoiceProfiles(centroids)
+	if m.Metadata == nil {
+		m.Metadata = make(map[string]string)
+	}
+	source := "system"
+	if useMixed {
+		source = "mixed"
+	}
+	m.Metadata["diarization_source"] = source
 	path := filepath.Join(dir, "transcript", r.name(m, "diarization")+".json")
-	if err := writeJSONArtifact(path, map[string]any{"schema_version": 1, "meeting_uid": uid, "artifact_type": "diarization", "turns": turns}); err != nil {
+	if err := writeJSONArtifact(path, map[string]any{"schema_version": 2, "meeting_uid": uid, "artifact_type": "diarization", "audio_source": source, "turns": turns, "candidates": candidates}); err != nil {
 		return r.fail(&m, "diarizing", err)
 	}
 	_, _ = r.addArtifact(uid, "diarization_json", path, "application/json", "generated")
-	names, err := r.saveSpeakers(uid, merged, samples)
+	names, err := r.saveSpeakers(uid, merged, samples, matches)
 	if err != nil {
 		return r.fail(&m, "diarizing", err)
 	}

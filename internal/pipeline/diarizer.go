@@ -14,15 +14,12 @@ import (
 
 	"localmeetassist/internal/config"
 	"localmeetassist/internal/inference"
+	"localmeetassist/internal/model"
 	"localmeetassist/internal/modelmanager"
 )
 
 // SpeakerTurn is one diarized speech interval assigned to a speaker.
-type SpeakerTurn struct {
-	StartMS   int64  `json:"start_ms"`
-	EndMS     int64  `json:"end_ms"`
-	SpeakerID string `json:"speaker_id"`
-}
+type SpeakerTurn = model.SpeakerTurn
 
 type segmentationWindow struct {
 	startSample int
@@ -36,25 +33,25 @@ type speakerObservation struct {
 	valid         bool
 }
 
-func diarizeWithEngine(ctx context.Context, runtimeConfig config.Inference, cfg config.Diarization, audioPath string, numSpeakers int, progress func(int)) ([]SpeakerTurn, error) {
+func diarizeWithEngine(ctx context.Context, runtimeConfig config.Inference, cfg config.Diarization, audioPath string, numSpeakers int, progress func(int)) ([]SpeakerTurn, []model.VoiceCandidate, map[string][]float32, error) {
 	if strings.EqualFold(strings.TrimSpace(cfg.Engine), "mock") {
-		return []SpeakerTurn{{StartMS: 0, EndMS: 1500, SpeakerID: "SPEAKER_00"}, {StartMS: 1500, EndMS: 60000, SpeakerID: "SPEAKER_01"}}, nil
+		return []SpeakerTurn{{StartMS: 0, EndMS: 1500, SpeakerID: "SPEAKER_00"}, {StartMS: 1500, EndMS: 60000, SpeakerID: "SPEAKER_01"}}, nil, nil, nil
 	}
 	runtimePath := modelmanager.ResolveRuntimeLibrary(runtimeConfig.RuntimePath, runtimeConfig.RuntimeVersion)
 	if override := strings.TrimSpace(os.Getenv("LOCALMEETASSIST_ONNXRUNTIME_PATH")); override != "" {
 		runtimePath = override
 	}
 	if err := inference.EnsureRuntime(runtimePath); err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	for name, path := range map[string]string{"PyAnnote Segmentation": cfg.SegmentationModel, "WeSpeaker": cfg.EmbeddingModel} {
 		if _, err := os.Stat(path); err != nil {
-			return nil, fmt.Errorf("%s model is unavailable: %w", name, err)
+			return nil, nil, nil, fmt.Errorf("%s model is unavailable: %w", name, err)
 		}
 	}
 	audio, err := inference.LoadWAV16kMono(audioPath)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	windows, err := runSegmentation(ctx, cfg.SegmentationModel, audio, func(done, total int) {
 		if progress != nil {
@@ -62,7 +59,7 @@ func diarizeWithEngine(ctx context.Context, runtimeConfig config.Inference, cfg 
 		}
 	})
 	if err != nil {
-		return nil, fmt.Errorf("PyAnnote Segmentation: %w", err)
+		return nil, nil, nil, fmt.Errorf("PyAnnote Segmentation: %w", err)
 	}
 	observations, err := runEmbeddings(ctx, cfg.EmbeddingModel, audio, windows, func(done, total int) {
 		if progress != nil {
@@ -70,14 +67,47 @@ func diarizeWithEngine(ctx context.Context, runtimeConfig config.Inference, cfg 
 		}
 	})
 	if err != nil {
-		return nil, fmt.Errorf("WeSpeaker: %w", err)
+		return nil, nil, nil, fmt.Errorf("WeSpeaker: %w", err)
 	}
 	labels := clusterSpeakerEmbeddings(observations, numSpeakers, cfg.ClusterThreshold)
 	turns := reconstructTurns(windows, labels, len(audio))
+	candidates := cleanVoiceCandidates(windows, labels, len(audio))
+	centroids := speakerCentroids(observations, labels)
 	if progress != nil {
 		progress(100)
 	}
-	return turns, nil
+	return turns, candidates, centroids, nil
+}
+
+// speakerCentroids averages the clean observations of each reconstructed
+// speaker. The centroids are compared with the saved voice profiles.
+func speakerCentroids(observations []speakerObservation, labels []int) map[string][]float32 {
+	sums := make(map[string][]float32)
+	counts := make(map[string]int)
+	for index, observation := range observations {
+		if !observation.valid || index >= len(labels) || labels[index] < 0 {
+			continue
+		}
+		speaker := fmt.Sprintf("SPEAKER_%02d", labels[index])
+		if sums[speaker] == nil {
+			sums[speaker] = make([]float32, len(observation.embedding))
+		}
+		for i, value := range observation.embedding {
+			if i < len(sums[speaker]) {
+				sums[speaker][i] += value
+			}
+		}
+		counts[speaker]++
+	}
+	result := make(map[string][]float32, len(sums))
+	for speaker, sum := range sums {
+		if counts[speaker] == 0 {
+			continue
+		}
+		normalizeVector(sum)
+		result[speaker] = sum
+	}
+	return result
 }
 
 func runSegmentation(ctx context.Context, modelPath string, audio []float32, report func(int, int)) ([]segmentationWindow, error) {
@@ -396,6 +426,132 @@ func reconstructTurns(windows []segmentationWindow, labels []int, audioSamples i
 		return turns[i].StartMS < turns[j].StartMS
 	})
 	return mergeAdjacentSpeakerTurns(turns)
+}
+
+// cleanVoiceCandidates returns continuous intervals where one speaker clearly
+// dominates. They are cheap to store (time codes only), stay in the diarization
+// artifact and are later used to enroll voiceprints without re-running the
+// segmentation model.
+func cleanVoiceCandidates(windows []segmentationWindow, labels []int, audioSamples int) []model.VoiceCandidate {
+	if audioSamples <= 0 || len(labels) == 0 {
+		return nil
+	}
+	type run struct {
+		start, end int
+		scoreSum   float64
+		frames     int
+	}
+	bySpeaker := make(map[string][]run)
+	for windowIndex, window := range windows {
+		for local := 0; local < 3; local++ {
+			if windowIndex*3+local >= len(labels) {
+				continue
+			}
+			label := labels[windowIndex*3+local]
+			if label < 0 {
+				continue
+			}
+			speaker := fmt.Sprintf("SPEAKER_%02d", label)
+			active := false
+			current := run{}
+			flush := func() {
+				if !active {
+					return
+				}
+				if current.end-current.start >= 24000 { // 1.5 s at 16 kHz
+					bySpeaker[speaker] = append(bySpeaker[speaker], current)
+				}
+				active = false
+			}
+			for frame := 0; frame < window.frames; frame++ {
+				start := window.startSample + frame*270
+				end := min(start+270, audioSamples)
+				if start >= audioSamples {
+					break
+				}
+				probability := window.probability[frame*3+local]
+				clean := probability >= 0.60
+				if clean {
+					for other := 0; other < 3; other++ {
+						if other != local && window.probability[frame*3+other] >= 0.45 {
+							clean = false
+							break
+						}
+					}
+				}
+				if clean {
+					if !active {
+						current = run{start: start}
+						active = true
+					}
+					current.end = end
+					current.scoreSum += float64(probability)
+					current.frames++
+					continue
+				}
+				flush()
+			}
+			flush()
+		}
+	}
+	const mergeGap = 4800 // 300 ms
+	result := make([]model.VoiceCandidate, 0, 16)
+	for speaker, runs := range bySpeaker {
+		sort.Slice(runs, func(i, j int) bool { return runs[i].start < runs[j].start })
+		merged := make([]run, 0, len(runs))
+		for _, item := range runs {
+			last := len(merged) - 1
+			if last >= 0 && item.start <= merged[last].end+mergeGap {
+				if item.end > merged[last].end {
+					merged[last].end = item.end
+				}
+				merged[last].scoreSum += item.scoreSum
+				merged[last].frames += item.frames
+				continue
+			}
+			merged = append(merged, item)
+		}
+		for _, item := range merged {
+			duration := item.end - item.start
+			if duration < 24000 {
+				continue
+			}
+			if duration > 160000 { // the reference clip is at most 10 s
+				item.end = item.start + 160000
+				duration = 160000
+			}
+			average := item.scoreSum / float64(max(1, item.frames))
+			// Longer clean runs are more useful, but a single very long run
+			// should not drown out several good shorter ones.
+			score := average * math.Min(1, float64(duration)/96000)
+			result = append(result, model.VoiceCandidate{
+				SpeakerID: speaker,
+				StartMS:   int64(item.start) * 1000 / 16000,
+				EndMS:     int64(item.end) * 1000 / 16000,
+				Score:     score,
+			})
+		}
+	}
+	sort.SliceStable(result, func(i, j int) bool {
+		if result[i].SpeakerID == result[j].SpeakerID {
+			if result[i].Score == result[j].Score {
+				return result[i].StartMS < result[j].StartMS
+			}
+			return result[i].Score > result[j].Score
+		}
+		return result[i].SpeakerID < result[j].SpeakerID
+	})
+	// Keep a bounded set per speaker; enrollment only needs a handful.
+	perSpeaker := make(map[string]int)
+	limited := result[:0]
+	for _, item := range result {
+		if perSpeaker[item.SpeakerID] >= 12 {
+			continue
+		}
+		perSpeaker[item.SpeakerID]++
+		limited = append(limited, item)
+	}
+	return limited
 }
 
 func exp32(value float32) float32 { return float32(math.Exp(float64(value))) }

@@ -1084,6 +1084,11 @@ function renderSpeakers(items, artifacts, uid) {
     // Спикеры, добавленные вручную и ещё не сохранённые: они живут только в
     // редакторе, пока не нажато «Сохранить все изменения».
     creates: new Map(),
+    // Голосовые действия: явная привязка к человеку, подтверждение авто-имени
+    // и отказ от него. Отправляются вместе с остальными правками.
+    personIDs: new Map(),
+    confirm: new Set(),
+    reject: new Set(),
     selected: new Set(),
     // Якорь Shift-выделения: фрагмент, от которого считается диапазон.
     anchor: null,
@@ -1099,6 +1104,35 @@ function renderSpeakers(items, artifacts, uid) {
   $("#speakerBulkActions").classList.toggle("hidden", !items.length);
   updateSpeakerEditorStatus();
   items.forEach((speaker) => root.appendChild(speakerCard(speaker)));
+}
+
+// speakerVoiceHTML renders the automatic name badge, confirmation actions and
+// profile suggestions under the name input.
+function speakerVoiceHTML(speaker) {
+  const auto = speaker.name_source === "auto" && speaker.person_id;
+  const saved = speaker.name_source === "manual" && speaker.person_id;
+  const missing = speaker.name_source === "manual" && !speaker.person_id;
+  const suggestions = Array.isArray(speaker.match_candidates) ? speaker.match_candidates.filter((item) => item && item.person_id) : [];
+  if (!auto && !saved && !missing && !suggestions.length) return "";
+  const parts = [`<div class="speaker-voice">`];
+  if (auto) {
+    parts.push(`<span class="voice-badge auto">${t("speakers.autoName")}</span>`);
+    if (speaker.match_score) parts.push(`<span class="voice-score">${Math.round(speaker.match_score * 100)}%</span>`);
+    parts.push(`<button type="button" class="ghost small" data-voice-action="confirm">${t("speakers.confirmVoice")}</button>`);
+    parts.push(`<button type="button" class="ghost small danger" data-voice-action="reject">${t("speakers.notThisPerson")}</button>`);
+  } else if (saved) {
+    parts.push(`<span class="voice-badge saved">${t("speakers.voiceSaved")}</span>`);
+  } else if (missing) {
+    parts.push(`<span class="voice-badge muted">${t("speakers.voiceMissing")}</span>`);
+  }
+  if (!auto && suggestions.length) {
+    parts.push(`<span class="voice-hint">${t("speakers.possibleSpeakers")}</span>`);
+    for (const suggestion of suggestions.slice(0, 3)) {
+      parts.push(`<button type="button" class="voice-suggestion" data-person-id="${esc(suggestion.person_id)}" data-person-name="${esc(suggestion.name)}">${esc(suggestion.name)} <span>${Math.round((suggestion.score || 0) * 100)}%</span></button>`);
+    }
+  }
+  parts.push(`</div>`);
+  return parts.join("");
 }
 
 // speakerCard строит карточку одного спикера вместе с обработчиками. Тем же
@@ -1129,12 +1163,53 @@ function speakerCard(speaker) {
         return `<div class="speaker-fragment" draggable="true" data-fragment-id="${esc(fragment.id)}" data-source-speaker="${esc(speaker.id)}"><input class="fragment-select" type="checkbox" aria-label="${t("speakers.fragmentSelect")}"><button type="button" class="ghost play-fragment" data-url="${esc(url)}" data-start="${start}" data-end="${end}" ${url ? "" : "disabled"}>▶</button><div><div class="fragment-time">${clockMS(fragment.start_ms)}–${clockMS(fragment.end_ms)}</div><div class="fragment-text" title="${esc(fragment.text || "")}">${esc(fragment.text || t("speakers.noText"))}</div></div></div>`;
       }).join("")}</div>`
     : `<div class="hint speaker-hint">${emptyHint}</div><div class="speaker-fragments"></div>`;
-  node.innerHTML = `<div class="speaker-info"><strong class="speaker-card-title" draggable="true" title="${t("speakers.dragTitle")}">${esc(speaker.id)}</strong><div class="meta">${esc(speaker.source)}</div>${fragmentHTML}</div><div class="speaker-name"><input value="${esc(speaker.display_name)}" aria-label="${t("speakers.nameLabel", { id: esc(speaker.id) })}"></div>`;
+  node.innerHTML = `<div class="speaker-info"><strong class="speaker-card-title" draggable="true" title="${t("speakers.dragTitle")}">${esc(speaker.id)}</strong><div class="meta">${esc(speaker.source)}</div>${fragmentHTML}</div><div class="speaker-name"><input value="${esc(speaker.display_name)}" aria-label="${t("speakers.nameLabel", { id: esc(speaker.id) })}">${speakerVoiceHTML(speaker)}</div>`;
   const nameInput = node.querySelector(".speaker-name input");
+  const originalName = speaker.display_name;
   nameInput.addEventListener("input", () => {
-    state.speakerEditor.names.set(speaker.id, nameInput.value);
+    const editor = state.speakerEditor;
+    if (!editor) return;
+    editor.names.set(speaker.id, nameInput.value);
+    // An explicit suggestion link and an automatic confirmation belong to the
+    // old value; a manual edit re-resolves the profile on the server.
+    editor.personIDs.delete(speaker.id);
+    if (nameInput.value !== originalName) editor.confirm.delete(speaker.id);
     markSpeakerEditorDirty();
     refreshSpeakerTargetNames();
+  });
+  node.querySelectorAll("[data-voice-action]").forEach((button) => {
+    button.onclick = () => {
+      const editor = state.speakerEditor;
+      if (!editor) return;
+      if (button.dataset.voiceAction === "confirm") {
+        editor.confirm.add(speaker.id);
+        editor.reject.delete(speaker.id);
+        button.disabled = true;
+        button.textContent = t("speakers.confirmed");
+      } else {
+        editor.reject.add(speaker.id);
+        editor.confirm.delete(speaker.id);
+        editor.personIDs.delete(speaker.id);
+        nameInput.value = speaker.id;
+        editor.names.set(speaker.id, speaker.id);
+        refreshSpeakerTargetNames();
+      }
+      markSpeakerEditorDirty();
+    };
+  });
+  node.querySelectorAll(".voice-suggestion").forEach((button) => {
+    button.onclick = () => {
+      const editor = state.speakerEditor;
+      if (!editor) return;
+      const name = button.dataset.personName || "";
+      editor.names.set(speaker.id, name);
+      editor.personIDs.set(speaker.id, button.dataset.personId || "");
+      editor.reject.delete(speaker.id);
+      editor.confirm.delete(speaker.id);
+      nameInput.value = name;
+      markSpeakerEditorDirty();
+      refreshSpeakerTargetNames();
+    };
   });
   node.querySelectorAll(".speaker-fragment").forEach((fragment) => {
     const checkbox = fragment.querySelector(".fragment-select");
@@ -1338,7 +1413,7 @@ function markSpeakerEditorDirty() {
 function updateSpeakerEditorStatus() {
   const editor = state.speakerEditor;
   if (!editor) return;
-  const changes = editor.assignments.size + editor.merges.size + editor.creates.size + [...editor.names].filter(([id, name]) => editor.items.find((item) => item.id === id)?.display_name !== name).length;
+  const changes = editor.assignments.size + editor.merges.size + editor.creates.size + editor.confirm.size + editor.reject.size + editor.personIDs.size + [...editor.names].filter(([id, name]) => editor.items.find((item) => item.id === id)?.display_name !== name).length;
   $("#speakerDirtyText").textContent = changes ? t("speakers.dirtyCount", { n: changes }) : t("speakers.selectedCount", { n: editor.selected.size });
   $("#saveSpeakerChanges").disabled = changes === 0;
   $("#discardSpeakerChanges").disabled = changes === 0;
@@ -1476,12 +1551,27 @@ async function saveSpeakerChanges() {
   const assignments = Object.fromEntries(editor.assignments.entries());
   const merges = Object.fromEntries(editor.merges.entries());
   const create = [...editor.creates.values()];
+  const person_ids = Object.fromEntries(editor.personIDs.entries());
+  const confirm = [...editor.confirm];
+  const reject = [...editor.reject];
   const button = $("#saveSpeakerChanges");
   button.disabled = true;
   try {
-    await api(`/api/v1/meetings/${editor.uid}/speakers`, { method: "PATCH", json: { names, assignments, merges, create } });
+    const result = await api(`/api/v1/meetings/${editor.uid}/speakers`, { method: "PATCH", json: { names, assignments, merges, create, person_ids, confirm, reject }, timeoutMs: 120000 });
     await openDetail(editor.uid, true);
-    toast(t("speakers.saved"));
+    let message = t("speakers.saved");
+    const enrollment = result?.voice_enrollment;
+    if (enrollment?.added) message += " · " + t("speakers.voicesSaved", { n: enrollment.added });
+    if (enrollment?.skipped && enrollment.reason === "audio_archived") {
+      message += " · " + t("speakers.audioArchived");
+    } else if (Array.isArray(enrollment?.warnings) && enrollment.warnings.length) {
+      const translated = enrollment.warnings.map((code) => {
+        const key = "speakers.warn." + code;
+        return t(key);
+      }).filter(Boolean);
+      if (translated.length) message += " · " + translated.join("; ");
+    }
+    toast(message);
   } catch (error) {
     toast(error.message);
     button.disabled = false;
@@ -2691,6 +2781,115 @@ $("#importForm").onsubmit = async (event) => {
     await api(`/api/v1/meetings/${state.detail.meeting.uid}/artifacts`, { method: "POST", body: form });
     await openDetail(state.detail.meeting.uid);
     toast(t("import.attached"));
+  } catch (error) { toast(error.message); }
+};
+
+// --- Known speakers -------------------------------------------------------
+
+let peopleAudio = null;
+
+async function showPeople() {
+  $("#peopleDialog").showModal();
+  await refreshPeople();
+}
+
+async function refreshPeople() {
+  const root = $("#peopleList");
+  root.innerHTML = `<div class="hint">${t("common.loading")}</div>`;
+  try {
+    const items = await api("/api/v1/people");
+    renderPeople(Array.isArray(items) ? items : []);
+  } catch (error) {
+    root.innerHTML = `<div class="hint">${esc(error.message)}</div>`;
+  }
+}
+
+function renderPeople(items) {
+  const root = $("#peopleList");
+  if (!items.length) {
+    root.innerHTML = `<div class="hint people-empty">${t("people.empty")}</div>`;
+    return;
+  }
+  root.innerHTML = items.map((person) => {
+    const samples = (person.samples || []).map((sample) => `<div class="person-sample"><button type="button" class="ghost small play-person-sample" data-url="${esc(sample.clip_url || "")}" aria-label="${t("people.play")}">▶</button><span class="person-sample-time">${clockMS(sample.start_ms)}–${clockMS(sample.end_ms)}</span><span class="meta">${esc(sample.source || "")} · ${Math.round((sample.quality?.score || 0) * 100)}%</span><button type="button" class="ghost small danger delete-person-sample" data-sample-id="${esc(sample.id)}" aria-label="${t("people.deleteSample")}">×</button></div>`).join("");
+    const qualifier = person.needs_qualifier ? `<span class="voice-badge warn">${t("people.needsQualifier")}</span>` : "";
+    return `<div class="person-row" data-person-id="${esc(person.id)}"><div class="person-head"><input class="person-name" value="${esc(person.name)}" data-original="${esc(person.name)}" aria-label="${t("people.nameLabel")}">${qualifier}<span class="meta person-meta">${t("people.sampleCount", { n: (person.samples || []).length })} · ${t("people.meetingCount", { n: person.meeting_count || 0 })}</span><button type="button" class="ghost small danger delete-person">${t("common.delete")}</button></div><div class="person-samples">${samples || `<div class="hint">${t("people.noSamples")}</div>`}</div></div>`;
+  }).join("");
+  root.querySelectorAll(".person-row").forEach((row) => {
+    const personID = row.dataset.personId;
+    const nameInput = row.querySelector(".person-name");
+    nameInput.addEventListener("change", async () => {
+      const name = nameInput.value.trim();
+      if (!name || name === nameInput.dataset.original) {
+        nameInput.value = nameInput.dataset.original;
+        return;
+      }
+      try {
+        await api(`/api/v1/people/${encodeURIComponent(personID)}`, { method: "PATCH", json: { name } });
+        nameInput.dataset.original = name;
+        toast(t("people.renamed"));
+      } catch (error) {
+        toast(error.message);
+        nameInput.value = nameInput.dataset.original;
+      }
+    });
+    row.querySelectorAll(".play-person-sample").forEach((button) => {
+      button.onclick = () => playVoiceClip(button.dataset.url, button);
+    });
+    row.querySelectorAll(".delete-person-sample").forEach((button) => {
+      button.onclick = async () => {
+        if (!confirm(t("people.deleteSampleConfirm"))) return;
+        try {
+          await api(`/api/v1/people/${encodeURIComponent(personID)}/samples/${encodeURIComponent(button.dataset.sampleId)}`, { method: "DELETE" });
+          await refreshPeople();
+        } catch (error) { toast(error.message); }
+      };
+    });
+    row.querySelector(".delete-person").onclick = async () => {
+      if (!confirm(t("people.deleteConfirm"))) return;
+      try {
+        await api(`/api/v1/people/${encodeURIComponent(personID)}`, { method: "DELETE" });
+        await refreshPeople();
+      } catch (error) { toast(error.message); }
+    };
+  });
+}
+
+function playVoiceClip(url, button) {
+  if (!url) return;
+  if (peopleAudio) {
+    peopleAudio.pause();
+    peopleAudio = null;
+  }
+  const audio = new Audio(url);
+  peopleAudio = audio;
+  button.textContent = "■";
+  const reset = () => {
+    button.textContent = "▶";
+    if (peopleAudio === audio) peopleAudio = null;
+  };
+  audio.addEventListener("ended", reset, { once: true });
+  audio.addEventListener("error", reset, { once: true });
+  audio.play().catch(() => {
+    reset();
+    toast(t("people.playFailed"));
+  });
+}
+
+$("#peopleBtn").onclick = showPeople;
+$("#closePeople").onclick = () => {
+  if (peopleAudio) {
+    peopleAudio.pause();
+    peopleAudio = null;
+  }
+  closeDialog("#peopleDialog");
+};
+$("#deleteAllPeople").onclick = async () => {
+  if (!confirm(t("people.deleteAllConfirm"))) return;
+  try {
+    const result = await api("/api/v1/people", { method: "DELETE" });
+    toast(t("people.deletedAll", { n: Number(result?.deleted || 0) }));
+    await refreshPeople();
   } catch (error) { toast(error.message); }
 };
 

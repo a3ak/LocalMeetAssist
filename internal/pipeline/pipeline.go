@@ -31,15 +31,17 @@ import (
 	"localmeetassist/internal/store"
 	"localmeetassist/internal/transcript"
 	"localmeetassist/internal/uuidv7"
+	"localmeetassist/internal/voice"
 )
 
 // Runner executes and tracks the processing pipeline for each meeting.
 type Runner struct {
-	cfg     config.Config
-	store   *store.Store
-	logger  *log.Logger
-	mu      sync.Mutex
-	running map[string]context.CancelFunc
+	cfg         config.Config
+	store       *store.Store
+	logger      *log.Logger
+	voiceprints *voice.Service
+	mu          sync.Mutex
+	running     map[string]context.CancelFunc
 }
 
 type runPlan struct {
@@ -68,7 +70,7 @@ func NewWithLogger(cfg config.Config, st *store.Store, logger *log.Logger) *Runn
 	if logger == nil {
 		logger = log.New(io.Discard, "", 0)
 	}
-	return &Runner{cfg: cfg, store: st, logger: logger, running: make(map[string]context.CancelFunc)}
+	return &Runner{cfg: cfg, store: st, logger: logger, voiceprints: voice.New(st, logger), running: make(map[string]context.CancelFunc)}
 }
 
 // Start launches the automatic pipeline for a meeting.
@@ -221,6 +223,8 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 	}
 	var segments []model.Segment
 	var diarizationSamples map[string][]model.Sample
+	var voiceCandidates []model.VoiceCandidate
+	var speakerMatches map[string]speakerMatch
 	if plan.transcription {
 		if mode := strings.ToLower(strings.TrimSpace(r.cfg.Audio.EchoCancellation)); mode != "off" {
 			cleanPath := filepath.Join(dir, "audio", r.name(m, "microphone_clean")+".wav")
@@ -445,16 +449,25 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 		}
 		if len(diarizationSegments) > 0 && plan.diarization {
 			m.ProcessingStage, m.UpdatedAt = "diarizing", time.Now()
+			if m.Metadata == nil {
+				m.Metadata = make(map[string]string)
+			}
+			if useMixed {
+				m.Metadata["diarization_source"] = "mixed"
+			} else {
+				m.Metadata["diarization_source"] = "system"
+			}
 			_ = r.store.SaveMeeting(m)
 			r.job(uid, "diarizing", "processing", "")
 			r.logger.Printf("diarization start uid=%s path=%q", uid, diarizationPath)
 			var turns []SpeakerTurn
+			var centroids map[string][]float32
 			var diarizationErr error
 			numSpeakers := remoteSpeakerCount(m.Metadata)
 			if useMixed {
 				numSpeakers = participantCount(m.Metadata)
 			}
-			turns, diarizationErr = diarizeWithEngine(ctx, r.cfg.Inference, r.cfg.Diarization, diarizationPath, numSpeakers, func(percent int) {
+			turns, voiceCandidates, centroids, diarizationErr = diarizeWithEngine(ctx, r.cfg.Inference, r.cfg.Diarization, diarizationPath, numSpeakers, func(percent int) {
 				r.jobProgress(uid, "diarizing", percent)
 			})
 			if ctx.Err() != nil {
@@ -465,10 +478,15 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 			} else {
 				diarizationSegments = assignSystemSpeakers(diarizationSegments, turns)
 				diarizationSamples = selectSpeakerSamples(turns, 3)
+				speakerMatches = r.matchVoiceProfiles(centroids)
 				r.job(uid, "diarizing", "completed", "")
-				r.logger.Printf("diarization completed uid=%s turns=%d speakers=%d", uid, len(turns), countTurnSpeakers(turns))
+				r.logger.Printf("diarization completed uid=%s turns=%d speakers=%d matches=%d", uid, len(turns), countTurnSpeakers(turns), len(speakerMatches))
 				path := filepath.Join(dir, "transcript", r.name(m, "diarization")+".json")
-				if artifactErr := writeJSONArtifact(path, map[string]any{"schema_version": 1, "meeting_uid": uid, "artifact_type": "diarization", "turns": turns}); artifactErr != nil {
+				source := "system"
+				if useMixed {
+					source = "mixed"
+				}
+				if artifactErr := writeJSONArtifact(path, map[string]any{"schema_version": 2, "meeting_uid": uid, "artifact_type": "diarization", "audio_source": source, "turns": turns, "candidates": voiceCandidates}); artifactErr != nil {
 					warnings = append(warnings, "could not save the diarization result: "+artifactErr.Error())
 				} else {
 					_, _ = r.addArtifact(uid, "diarization_json", path, "application/json", "generated")
@@ -515,7 +533,7 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 		_ = r.store.SaveMeeting(m)
 		r.job(uid, "merging", "processing", "")
 		r.jobProgress(uid, "merging", 25)
-		names, speakerErr := r.saveSpeakers(uid, segments, diarizationSamples)
+		names, speakerErr := r.saveSpeakers(uid, segments, diarizationSamples, speakerMatches)
 		if speakerErr != nil {
 			return r.fail(&m, "merging", speakerErr)
 		}
@@ -1060,7 +1078,7 @@ func (r *Runner) saveSegments(m model.Meeting, artifactType string, segments []m
 	return path, err
 }
 
-func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diarizationSamples map[string][]model.Sample) (map[string]string, error) {
+func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diarizationSamples map[string][]model.Sample, matches map[string]speakerMatch) (map[string]string, error) {
 	ownerName := config.DefaultMicrophoneOwnerName(r.cfg.App.Language)
 	if meeting, loadErr := r.store.Meeting(meetingUID); loadErr == nil {
 		if configured := strings.TrimSpace(meeting.Metadata["microphone_owner_name"]); configured != "" {
@@ -1072,8 +1090,10 @@ func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diari
 		return nil, err
 	}
 	existingNames := make(map[string]string, len(existing))
+	existingByID := make(map[string]model.Speaker, len(existing))
 	for _, speaker := range existing {
 		existingNames[speaker.ID] = speaker.DisplayName
+		existingByID[speaker.ID] = speaker
 	}
 	speakers := make(map[string]*model.Speaker)
 	for index := range segments {
@@ -1094,6 +1114,31 @@ func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diari
 				}
 			}
 			speaker = &model.Speaker{MeetingUID: meetingUID, ID: segment.SpeakerID, DisplayName: displayName, Source: segment.Source}
+			if old, ok := existingByID[segment.SpeakerID]; ok {
+				speaker.PersonID = old.PersonID
+				speaker.MatchScore = old.MatchScore
+				speaker.MatchCandidates = old.MatchCandidates
+				speaker.NameSource = old.NameSource
+			}
+			// Meetings processed before voice memory existed have no NameSource.
+			// A custom display name is still a manual edit and must win over a
+			// new automatic match on retry.
+			if speaker.NameSource == "" && segment.SpeakerID != "microphone_owner" && displayName != segment.SpeakerID && !strings.HasPrefix(displayName, "SPEAKER_") {
+				speaker.NameSource = "manual"
+			}
+			if match, ok := matches[segment.SpeakerID]; ok {
+				if len(match.Candidates) > 0 && speaker.NameSource != "manual" {
+					speaker.MatchCandidates = match.Candidates
+					speaker.MatchScore = match.Score
+				}
+				// A manual name always wins over a new automatic match.
+				if match.Auto && speaker.NameSource != "manual" {
+					speaker.DisplayName = match.Name
+					speaker.PersonID = match.PersonID
+					speaker.MatchScore = match.Score
+					speaker.NameSource = "auto"
+				}
+			}
 			speakers[segment.SpeakerID] = speaker
 		}
 		speaker.Fragments = append(speaker.Fragments, model.Sample{ID: segment.ID, StartMS: segment.StartMS, EndMS: segment.EndMS, Source: segment.Source, Text: segment.Text})

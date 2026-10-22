@@ -159,6 +159,7 @@ var settingFieldsEN = map[string]settingTextEN{
 
 	// Diarization
 	"diarization.auto_run":           {"Run automatically", "Automatically separate remote participants into speakers. Manual start is always available."},
+	"diarization.remember_speakers":  {"Remember speakers", "After a manual rename, keep up to 10 clean voice samples. These are biometric data and stay on this computer. Enrollment works until the meeting audio is archived."},
 	"diarization.engine":             {"Engine", "Runs inside the LocalMeetAssist process without a CLI."},
 	"diarization.segmentation_model": {"Segmentation model", "Downloaded segmentation models; grey entries are not downloaded yet."},
 	"diarization.embedding_model":    {"Voice embedding model", "Downloaded voice embedding models; grey entries are not downloaded yet. Different models separate speakers better on different recordings."},
