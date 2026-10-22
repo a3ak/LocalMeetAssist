@@ -234,7 +234,7 @@ func (s *Server) retryJob(w http.ResponseWriter, r *http.Request, uid string, pa
 	}
 	stage := parts[2]
 	switch stage {
-	case "all", "transcribing", "diarizing", "summarizing", "encoding":
+	case "all", "transcribing", "diarizing", "matching", "enrolling", "summarizing", "encoding":
 	default:
 		writeError(w, http.StatusBadRequest, "unknown processing stage")
 		return

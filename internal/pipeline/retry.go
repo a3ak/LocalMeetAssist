@@ -125,7 +125,6 @@ func (r *Runner) retryDiarization(ctx context.Context, uid string) error {
 		return r.fail(&m, "diarizing", errors.New("no transcript segments left after diarization"))
 	}
 
-	matches := r.matchVoiceProfiles(centroids)
 	if m.Metadata == nil {
 		m.Metadata = make(map[string]string)
 	}
@@ -135,11 +134,11 @@ func (r *Runner) retryDiarization(ctx context.Context, uid string) error {
 	}
 	m.Metadata["diarization_source"] = source
 	path := filepath.Join(dir, "transcript", r.name(m, "diarization")+".json")
-	if err := writeJSONArtifact(path, map[string]any{"schema_version": 2, "meeting_uid": uid, "artifact_type": "diarization", "audio_source": source, "turns": turns, "candidates": candidates}); err != nil {
+	if err := writeJSONArtifact(path, map[string]any{"schema_version": 3, "meeting_uid": uid, "artifact_type": "diarization", "audio_source": source, "embedding_model": r.cfg.Diarization.EmbeddingModel, "turns": turns, "candidates": candidates, "centroids": centroids}); err != nil {
 		return r.fail(&m, "diarizing", err)
 	}
 	_, _ = r.addArtifact(uid, "diarization_json", path, "application/json", "generated")
-	names, err := r.saveSpeakers(uid, merged, samples, matches)
+	names, err := r.saveSpeakers(uid, merged, samples)
 	if err != nil {
 		return r.fail(&m, "diarizing", err)
 	}
@@ -151,6 +150,10 @@ func (r *Runner) retryDiarization(ctx context.Context, uid string) error {
 	}
 	_, _ = r.addArtifact(uid, "transcript", transcriptPath, "text/markdown", "generated")
 	r.job(uid, "diarizing", "completed", "")
+	r.job(uid, "matching", "processing", "")
+	if err := r.runRecognition(ctx, &m, diarizationVoiceData{AudioSource: source, Turns: turns, Candidates: candidates, Centroids: centroids}); err != nil {
+		r.logger.Printf("speaker recognition after diarization failed uid=%s error=%v", uid, err)
+	}
 	m.Status, m.ProcessingStage, m.LastError, m.UpdatedAt = "completed", "completed", "", time.Now()
 	if m.Summary != "" {
 		m.SummaryStatus = "pending"

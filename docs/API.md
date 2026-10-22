@@ -31,7 +31,7 @@
 | GET/DELETE | `/api/v1/meetings/{uid}/artifacts/{artifact_uid}` | Открыть или удалить отдельный файл |
 | POST | `/api/v1/meetings/{uid}/artifacts` | Импортировать файл; multipart-поля `file` и `type` |
 | POST | `/api/v1/meetings/{uid}/jobs/all/retry` | Повторно запустить обработку подготовленного аудио |
-| POST | `/api/v1/meetings/{uid}/jobs/{stage}/retry` | Вручную запустить конкретный этап независимо от его `auto_run` |
+| POST | `/api/v1/meetings/{uid}/jobs/{stage}/retry` | Вручную запустить этап (`transcribing`, `diarizing`, `matching`, `enrolling`, `summarizing`, `encoding`) независимо от `auto_run` |
 | GET | `/api/v1/meetings/{uid}/jobs` | Лёгкий статус этапов и прогресс для UI |
 | POST | `/api/v1/meetings/{uid}/jobs/cancel` | Остановить активную обработку, сохранив исходные WAV |
 | GET | `/api/v1/models` | Состояние файлов моделей и прогресс загрузки |
@@ -44,6 +44,8 @@
 | POST | `/api/v1/integrations/tokens/{id}/regenerate` | Перегенерировать токен (секрет показывается один раз) |
 | DELETE | `/api/v1/integrations/tokens/{id}` | Отозвать токен |
 | GET/PUT | `/api/v1/integrations/audit` | Последние записи аудита / включение аудита |
+
+Этапы обработки выполняются в порядке `transcribing`, `diarizing`, `deduplicating`, `merging`, `matching`, `summarizing`, `enrolling`, `encoding`. `matching` (распознавание спикеров) не требует исходного WAV и работает по сохранённым центроидам; для старых встреч без центроидов он вычисляет их из чистых интервалов, пока WAV доступен. `enrolling` (запоминание спикеров) требует WAV и хотя бы одного спикера, названного вручную; иначе этап завершается со статусом `skipped`.
 
 Тело запуска:
 

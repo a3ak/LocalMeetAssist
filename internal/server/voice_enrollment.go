@@ -16,10 +16,12 @@ import (
 // The candidates are time codes only; no audio or biometric data is stored in
 // the artifact.
 type diarizationArtifact struct {
-	SchemaVersion int                    `json:"schema_version"`
-	AudioSource   string                 `json:"audio_source"`
-	Turns         []model.SpeakerTurn    `json:"turns"`
-	Candidates    []model.VoiceCandidate `json:"candidates"`
+	SchemaVersion  int                    `json:"schema_version"`
+	AudioSource    string                 `json:"audio_source"`
+	EmbeddingModel string                 `json:"embedding_model"`
+	Turns          []model.SpeakerTurn    `json:"turns"`
+	Candidates     []model.VoiceCandidate `json:"candidates"`
+	Centroids      map[string][]float32   `json:"centroids"`
 }
 
 // voiceEnrollmentSummary is returned to the UI. Reason and Warnings are stable
@@ -183,4 +185,22 @@ func (s *Server) voiceAudioPath(meeting model.Meeting, source string) (string, e
 		return path, nil
 	}
 	return "", os.ErrNotExist
+}
+
+func voiceEnrollmentJobMessage(summary voiceEnrollmentSummary) string {
+	if summary.Skipped {
+		switch summary.Reason {
+		case "audio_archived":
+			return "audio is archived; voice enrollment is unavailable"
+		case "disabled":
+			return "speaker memory is disabled"
+		case "no_diarization":
+			return "no diarization result; enrollment is unavailable"
+		case "":
+			return ""
+		default:
+			return summary.Reason
+		}
+	}
+	return strings.Join(summary.Warnings, ", ")
 }

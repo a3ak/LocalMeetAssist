@@ -1623,7 +1623,7 @@ function renderAudioConversion(items) {
 function renderJobs(items) {
   const root = $("#jobsList");
   root.innerHTML = "";
-  const retryable = new Set(["transcribing", "diarizing", "summarizing", "encoding"]);
+  const retryable = new Set(["transcribing", "diarizing", "matching", "enrolling", "summarizing", "encoding"]);
   // merging и completed — служебные отметки: первая дублирует транскрибацию,
   // вторая просто повторяет статус встречи и своей информации не несёт.
   const visibleItems = items.filter((job) => job.stage !== "merging" && job.stage !== "completed");
@@ -1632,9 +1632,16 @@ function renderJobs(items) {
   if (!visibleItems.some((job) => job.stage === "encoding")) {
     visibleItems.push({ stage: "encoding", status: "not_started", progress: 0, last_error: "" });
   }
+  for (const stage of ["matching", "enrolling"]) {
+    if (!visibleItems.some((job) => job.stage === stage)) {
+      visibleItems.push({ stage, status: "not_started", progress: 0, last_error: "" });
+    }
+  }
   // Порядок этапов фиксирован: при повторном запуске сервер обновляет
   // CreatedAt, и сортировка по времени заставляла строку «падать» вниз под курсор.
-  const stageOrder = ["transcribing", "diarizing", "summarizing", "encoding"];
+  // Порядок совпадает с processingStageOrder в pipeline; merging скрыт и
+  // сворачивается в строку транскрибации, поэтому здесь его нет.
+  const stageOrder = ["transcribing", "diarizing", "deduplicating", "matching", "summarizing", "enrolling", "encoding"];
   visibleItems.sort((left, right) => {
     const leftIndex = stageOrder.indexOf(left.stage);
     const rightIndex = stageOrder.indexOf(right.stage);
@@ -1651,6 +1658,7 @@ function renderJobs(items) {
       transcription.progress = 85 + Math.round(Math.max(0, Math.min(100, Number(merging.progress || 0))) * 0.15);
     }
   }
+  const hasWAV = (state.detail?.artifacts || []).some((artifact) => ["system_wav", "mixed_wav", "imported_mixed_wav"].includes(artifact.type));
   visibleItems.forEach((job) => {
     const node = document.createElement("div");
     node.className = "job";
@@ -1658,10 +1666,12 @@ function renderJobs(items) {
       ? 100
       : Math.max(0, Math.min(99, Number(job.progress || 0)));
     const progress = `<progress class="job-progress ${esc(job.status)}" max="100" value="${progressValue}"></progress><small class="job-progress-text">${progressValue}%</small>`;
+    const enrollmentUnavailable = job.stage === "enrolling" && !hasWAV;
     const retry = retryable.has(job.stage)
-      ? `<button type="button" class="ghost small retry-stage" data-stage="${esc(job.stage)}" ${state.detail?.processing_active ? "disabled" : ""}>${t(job.status === "not_started" ? "jobs.runStage" : "jobs.retryStage")}</button>`
+      ? `<button type="button" class="ghost small retry-stage" data-stage="${esc(job.stage)}" ${(state.detail?.processing_active || enrollmentUnavailable) ? "disabled" : ""}${enrollmentUnavailable ? ` title="${esc(t("jobs.enrollmentArchived"))}"` : ""}>${t(job.status === "not_started" ? "jobs.runStage" : "jobs.retryStage")}</button>`
       : "";
-    node.innerHTML = `<div class="job-main"><strong>${esc(stageText(job.stage))}</strong><small>${esc(job.last_error || "")}</small>${progress}</div><div class="job-actions"><span class="badge ${job.status}">${esc(statusText(job.status))}</span>${retry}</div>`;
+    const note = job.last_error || (enrollmentUnavailable && !["completed", "skipped"].includes(job.status) ? t("jobs.enrollmentArchived") : "");
+    node.innerHTML = `<div class="job-main"><strong>${esc(stageText(job.stage))}</strong><small>${esc(note)}</small>${progress}</div><div class="job-actions"><span class="badge ${job.status}">${esc(statusText(job.status))}</span>${retry}</div>`;
     const button = node.querySelector(".retry-stage");
     if (button) button.onclick = () => retryProcessing(button.dataset.stage, button);
     root.appendChild(node);

@@ -273,6 +273,61 @@ func (s *Service) Match(cfg config.Config, centroids map[string][]float32) map[s
 	return result
 }
 
+// Centroids computes a per-speaker centroid from the clean intervals of a
+// meeting. It is used by the recognition stage when an older diarization
+// artifact has no stored centroids but the WAV is still available.
+func (s *Service) Centroids(ctx context.Context, cfg config.Config, audioPath string, speakerIDs []string, candidates []model.VoiceCandidate, turns []model.SpeakerTurn) (map[string][]float32, error) {
+	if strings.TrimSpace(audioPath) == "" {
+		return nil, ErrAudioUnavailable
+	}
+	if _, err := os.Stat(audioPath); err != nil {
+		return nil, ErrAudioUnavailable
+	}
+	result := make(map[string][]float32, len(speakerIDs))
+	for _, speakerID := range speakerIDs {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		selected := selectCandidates(candidates, turns, speakerID)
+		if len(selected) == 0 {
+			continue
+		}
+		var sum []float32
+		count := 0
+		for _, candidate := range selected {
+			if count >= 3 {
+				break
+			}
+			tempPath, vector, quality, err := s.embedCandidate(ctx, cfg, audioPath, candidate)
+			if err != nil {
+				continue
+			}
+			_ = os.Remove(tempPath)
+			if !qualityAcceptable(quality) {
+				continue
+			}
+			if sum == nil {
+				sum = make([]float32, len(vector))
+			}
+			for index, value := range vector {
+				if index < len(sum) {
+					sum[index] += value
+				}
+			}
+			count++
+		}
+		if count == 0 {
+			continue
+		}
+		normalizeVector(sum)
+		result[speakerID] = sum
+	}
+	if len(result) == 0 {
+		return nil, errors.New("no usable speaker embeddings")
+	}
+	return result, nil
+}
+
 // Enroll extracts clean samples for one manually named speaker, resolves the
 // profile and stores the vectors and clips. It is idempotent per meeting,
 // speaker and interval.

@@ -81,10 +81,17 @@ func TestSaveSpeakersAppliesAutoNameAndKeepsManual(t *testing.T) {
 	}
 	segments := []model.Segment{{ID: "fragment-1", StartMS: 0, EndMS: 5000, SpeakerID: "SPEAKER_00", Source: "system", Text: "Реплика"}}
 	runner := New(config.Defaults(), st)
+	if _, err := runner.saveSpeakers(meeting.UID, segments, nil); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := st.Meeting(meeting.UID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	matches := map[string]speakerMatch{
 		"SPEAKER_00": {PersonID: "person-1", Name: "Иван", Score: 0.93, Auto: true},
 	}
-	if _, err := runner.saveSpeakers(meeting.UID, segments, nil, matches); err != nil {
+	if err := runner.applySpeakerMatches(&loaded, matches); err != nil {
 		t.Fatal(err)
 	}
 	speaker, err := st.Speaker(meeting.UID, "SPEAKER_00")
@@ -99,10 +106,14 @@ func TestSaveSpeakersAppliesAutoNameAndKeepsManual(t *testing.T) {
 	if err := st.SaveSpeaker(speaker); err != nil {
 		t.Fatal(err)
 	}
+	loaded, err = st.Meeting(meeting.UID)
+	if err != nil {
+		t.Fatal(err)
+	}
 	other := map[string]speakerMatch{
 		"SPEAKER_00": {PersonID: "person-2", Name: "Пётр", Score: 0.99, Auto: true},
 	}
-	if _, err := runner.saveSpeakers(meeting.UID, segments, nil, other); err != nil {
+	if err := runner.applySpeakerMatches(&loaded, other); err != nil {
 		t.Fatal(err)
 	}
 	speaker, err = st.Speaker(meeting.UID, "SPEAKER_00")

@@ -352,6 +352,13 @@ func (s *Server) updateSpeakers(w http.ResponseWriter, r *http.Request, uid stri
 				speakers[index] = enrollment.Speakers[speakers[index].ID]
 			}
 		}
+		status := "completed"
+		if enrollment.Summary.Skipped || (enrollment.Added == 0 && len(enrollment.Summary.Warnings) > 0) {
+			status = "skipped"
+		}
+		if s.pipeline != nil {
+			s.pipeline.RecordStage(uid, "enrolling", status, voiceEnrollmentJobMessage(enrollment.Summary))
+		}
 	}
 	s.logger.Printf("speaker edits saved meeting_uid=%s names=%d assignments=%d merges=%d created=%d voice_added=%d", uid, len(req.Names), len(req.Assignments), len(req.Merges), len(created), enrollment.Added)
 	response := map[string]any{"saved": true, "speakers": speakers, "transcript": meeting.Transcript, "summary_stale": meeting.Metadata["summary_stale"] == "true"}

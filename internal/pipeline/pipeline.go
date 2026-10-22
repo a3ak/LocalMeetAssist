@@ -34,6 +34,10 @@ import (
 	"localmeetassist/internal/voice"
 )
 
+// processingStageOrder is the order in which the automatic chain runs and the
+// order shown in the “Processing” tab. Keep the Web UI stageOrder in sync.
+var processingStageOrder = []string{"transcribing", "diarizing", "deduplicating", "merging", "matching", "summarizing", "enrolling", "encoding"}
+
 // Runner executes and tracks the processing pipeline for each meeting.
 type Runner struct {
 	cfg         config.Config
@@ -81,7 +85,7 @@ func (r *Runner) Start(meetingUID string) error {
 // StartStage launches one stage, or the full pipeline when stage is "all".
 func (r *Runner) StartStage(meetingUID, stage string) error {
 	switch stage {
-	case "all", "transcribing", "diarizing", "summarizing", "encoding":
+	case "all", "transcribing", "diarizing", "matching", "enrolling", "summarizing", "encoding":
 	default:
 		return fmt.Errorf("unsupported retry stage %q", stage)
 	}
@@ -93,8 +97,8 @@ func (r *Runner) StartStage(meetingUID, stage string) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	r.running[meetingUID] = cancel
 	r.mu.Unlock()
-	if stage == "all" || stage == "transcribing" {
-		for _, queuedStage := range []string{"transcribing", "diarizing", "deduplicating", "merging", "summarizing", "encoding"} {
+	if stage == "all" {
+		for _, queuedStage := range processingStageOrder {
 			r.job(meetingUID, queuedStage, "queued", "")
 		}
 	} else {
@@ -111,6 +115,10 @@ func (r *Runner) StartStage(meetingUID, stage string) error {
 		switch stage {
 		case "diarizing":
 			err = r.retryDiarization(ctx, meetingUID)
+		case "matching":
+			err = r.retryRecognition(ctx, meetingUID)
+		case "enrolling":
+			err = r.retryEnrollment(ctx, meetingUID)
 		case "summarizing":
 			err = r.retrySummarization(ctx, meetingUID)
 		case "encoding":
@@ -125,6 +133,12 @@ func (r *Runner) StartStage(meetingUID, stage string) error {
 		}
 	}()
 	return nil
+}
+
+// RecordStage writes a stage status without starting the pipeline. It is used
+// by the server after the synchronous enrollment that follows a speaker save.
+func (r *Runner) RecordStage(meetingUID, stage, status, message string) {
+	r.job(meetingUID, stage, status, message)
 }
 
 // IsRunning reports whether a pipeline is active for the meeting.
@@ -224,7 +238,7 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 	var segments []model.Segment
 	var diarizationSamples map[string][]model.Sample
 	var voiceCandidates []model.VoiceCandidate
-	var speakerMatches map[string]speakerMatch
+	var voiceData diarizationVoiceData
 	if plan.transcription {
 		if mode := strings.ToLower(strings.TrimSpace(r.cfg.Audio.EchoCancellation)); mode != "off" {
 			cleanPath := filepath.Join(dir, "audio", r.name(m, "microphone_clean")+".wav")
@@ -478,15 +492,15 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 			} else {
 				diarizationSegments = assignSystemSpeakers(diarizationSegments, turns)
 				diarizationSamples = selectSpeakerSamples(turns, 3)
-				speakerMatches = r.matchVoiceProfiles(centroids)
 				r.job(uid, "diarizing", "completed", "")
-				r.logger.Printf("diarization completed uid=%s turns=%d speakers=%d matches=%d", uid, len(turns), countTurnSpeakers(turns), len(speakerMatches))
+				r.logger.Printf("diarization completed uid=%s turns=%d speakers=%d", uid, len(turns), countTurnSpeakers(turns))
 				path := filepath.Join(dir, "transcript", r.name(m, "diarization")+".json")
 				source := "system"
 				if useMixed {
 					source = "mixed"
 				}
-				if artifactErr := writeJSONArtifact(path, map[string]any{"schema_version": 2, "meeting_uid": uid, "artifact_type": "diarization", "audio_source": source, "turns": turns, "candidates": voiceCandidates}); artifactErr != nil {
+				voiceData = diarizationVoiceData{AudioSource: source, Turns: turns, Candidates: voiceCandidates, Centroids: centroids}
+				if artifactErr := writeJSONArtifact(path, map[string]any{"schema_version": 3, "meeting_uid": uid, "artifact_type": "diarization", "audio_source": source, "embedding_model": r.cfg.Diarization.EmbeddingModel, "turns": turns, "candidates": voiceCandidates, "centroids": centroids}); artifactErr != nil {
 					warnings = append(warnings, "could not save the diarization result: "+artifactErr.Error())
 				} else {
 					_, _ = r.addArtifact(uid, "diarization_json", path, "application/json", "generated")
@@ -533,7 +547,7 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 		_ = r.store.SaveMeeting(m)
 		r.job(uid, "merging", "processing", "")
 		r.jobProgress(uid, "merging", 25)
-		names, speakerErr := r.saveSpeakers(uid, segments, diarizationSamples, speakerMatches)
+		names, speakerErr := r.saveSpeakers(uid, segments, diarizationSamples)
 		if speakerErr != nil {
 			return r.fail(&m, "merging", speakerErr)
 		}
@@ -548,6 +562,26 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 			return r.fail(&m, "merging", err)
 		}
 		r.job(uid, "merging", "completed", "")
+		if plan.diarization && (len(voiceData.Centroids) > 0 || len(voiceData.Turns) > 0) {
+			m.ProcessingStage, m.UpdatedAt = "matching", time.Now()
+			_ = r.store.SaveMeeting(m)
+			r.job(uid, "matching", "processing", "")
+			if ctx.Err() != nil {
+				return r.fail(&m, "matching", ctx.Err())
+			}
+			if err := r.runRecognition(ctx, &m, voiceData); err != nil {
+				r.logger.Printf("speaker recognition failed uid=%s error=%v", uid, err)
+			}
+		} else {
+			reason := "diarization did not run"
+			if plan.diarization {
+				reason = "diarization produced no speakers"
+			}
+			r.job(uid, "matching", "skipped", reason)
+		}
+	} else {
+		r.job(uid, "matching", "skipped", "transcript is empty")
+		r.job(uid, "enrolling", "skipped", "transcript is empty")
 	}
 
 	if plan.summary && m.Transcript != "" {
@@ -596,6 +630,18 @@ func (r *Runner) runWithPlan(ctx context.Context, uid string, plan runPlan) erro
 			reason = "the final transcript is missing"
 		}
 		r.job(uid, "summarizing", "skipped", reason)
+	}
+
+	if len(segments) > 0 {
+		m.ProcessingStage, m.UpdatedAt = "enrolling", time.Now()
+		_ = r.store.SaveMeeting(m)
+		r.job(uid, "enrolling", "processing", "")
+		if ctx.Err() != nil {
+			return r.fail(&m, "enrolling", ctx.Err())
+		}
+		if _, err := r.runEnrollmentStage(ctx, &m, voiceData); err != nil {
+			r.logger.Printf("speaker enrollment failed uid=%s error=%v", uid, err)
+		}
 	}
 
 	m.ProcessingStage = "encoding"
@@ -1078,7 +1124,7 @@ func (r *Runner) saveSegments(m model.Meeting, artifactType string, segments []m
 	return path, err
 }
 
-func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diarizationSamples map[string][]model.Sample, matches map[string]speakerMatch) (map[string]string, error) {
+func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diarizationSamples map[string][]model.Sample) (map[string]string, error) {
 	ownerName := config.DefaultMicrophoneOwnerName(r.cfg.App.Language)
 	if meeting, loadErr := r.store.Meeting(meetingUID); loadErr == nil {
 		if configured := strings.TrimSpace(meeting.Metadata["microphone_owner_name"]); configured != "" {
@@ -1125,19 +1171,6 @@ func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diari
 			// new automatic match on retry.
 			if speaker.NameSource == "" && segment.SpeakerID != "microphone_owner" && displayName != segment.SpeakerID && !strings.HasPrefix(displayName, "SPEAKER_") {
 				speaker.NameSource = "manual"
-			}
-			if match, ok := matches[segment.SpeakerID]; ok {
-				if len(match.Candidates) > 0 && speaker.NameSource != "manual" {
-					speaker.MatchCandidates = match.Candidates
-					speaker.MatchScore = match.Score
-				}
-				// A manual name always wins over a new automatic match.
-				if match.Auto && speaker.NameSource != "manual" {
-					speaker.DisplayName = match.Name
-					speaker.PersonID = match.PersonID
-					speaker.MatchScore = match.Score
-					speaker.NameSource = "auto"
-				}
 			}
 			speakers[segment.SpeakerID] = speaker
 		}
