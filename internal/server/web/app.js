@@ -939,7 +939,7 @@ async function stopRecording() {
   $("#stopBtn").disabled = true;
   clearInterval(state.timer);
   try {
-    await api(`/api/v1/recordings/${uid}/stop`, { method: "POST" });
+    await api(`/api/v1/recordings/${uid}/stop`, { method: "POST", timeoutMs: 30000 });
     toast(t("record.saved", { title }));
   } catch (error) {
     toast(error.message);
