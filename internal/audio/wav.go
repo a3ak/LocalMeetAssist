@@ -347,6 +347,52 @@ func ReadWAVInfo(f *os.File) (WAVInfo, error) {
 	}
 }
 
+// RepairPCM16WAV fills the RIFF and data chunk sizes of a PCM16 WAV whose
+// capture was interrupted before the header could be finalized. It never
+// changes audio samples: only the two size fields are rewritten.
+func RepairPCM16WAV(path string) error {
+	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	info, err := ReadWAVInfo(file)
+	if err != nil {
+		return err
+	}
+	if info.BitsPerSample != 16 || info.Channels <= 0 || info.SampleRate <= 0 {
+		return errors.New("WAV repair supports PCM16 WAV only")
+	}
+	stat, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	size := stat.Size()
+	if info.DataOffset <= 0 || size <= info.DataOffset {
+		return errors.New("WAV data chunk is empty")
+	}
+	dataSize := size - info.DataOffset
+	if dataSize > int64(^uint32(0)) {
+		return errors.New("WAV data chunk is too large")
+	}
+	var buffer [4]byte
+	if _, err := file.Seek(4, io.SeekStart); err != nil {
+		return err
+	}
+	binary.LittleEndian.PutUint32(buffer[:], uint32(size-8))
+	if _, err := file.Write(buffer[:]); err != nil {
+		return err
+	}
+	if _, err := file.Seek(info.DataOffset-4, io.SeekStart); err != nil {
+		return err
+	}
+	binary.LittleEndian.PutUint32(buffer[:], uint32(dataSize))
+	if _, err := file.Write(buffer[:]); err != nil {
+		return err
+	}
+	return file.Sync()
+}
+
 // MixPCM16WAV mixes two WAV files into one, applying per-source gain.
 func MixPCM16WAV(micPath, systemPath, outputPath string, micGain, systemGain float64) error {
 	mic, err := os.Open(micPath)

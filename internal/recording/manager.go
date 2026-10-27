@@ -36,6 +36,20 @@ type Backend interface {
 	Start(nativeaudio.StartRequest) (nativeaudio.Session, error)
 }
 
+// Stop requests are idempotent: a second request while the first is still
+// finalizing gets ErrStopInProgress and must not fail the meeting.
+var (
+	ErrNotFound       = errors.New("recording not found")
+	ErrStopInProgress = errors.New("recording is already being stopped")
+	ErrStopTimeout    = errors.New("native audio capture did not stop in time")
+)
+
+// nativeStopTimeout and watchStopTimeout are variables so tests can shorten them.
+var (
+	nativeStopTimeout = 15 * time.Second
+	watchStopTimeout  = 5 * time.Second
+)
+
 // Session is one active recording with its target files.
 type Session struct {
 	MeetingUID   string
@@ -58,6 +72,10 @@ type Session struct {
 	mu                sync.Mutex
 	watchDone         chan struct{}
 	watchOnce         sync.Once
+	watchExited       chan struct{}
+	// stopping is protected by Manager.mu. It makes concurrent stop requests
+	// observe "already stopping" instead of a missing session.
+	stopping bool
 }
 
 // Manager owns the active recording sessions.
@@ -299,8 +317,12 @@ func (m *Manager) Start(uid, dir string, sampleRate, channels int, input, output
 	}
 	session.capture = capture
 	session.watchDone = make(chan struct{})
+	session.watchExited = make(chan struct{})
 	m.active[uid] = session
-	go m.watchSystem(session)
+	go func() {
+		defer close(session.watchExited)
+		m.watchSystem(session)
+	}()
 	return session, nil
 }
 
@@ -391,27 +413,59 @@ func (session *Session) MicrophoneIssue() (string, time.Time) {
 	return session.MicrophoneEvent, session.MicrophoneEventAt
 }
 
-// Stop finalizes the WAV files and validates their headers.
+// Stop finalizes the WAV files and validates their headers. The session stays
+// in active while it is stopping, so a concurrent stop gets ErrStopInProgress
+// instead of a misleading "recording not found".
 func (m *Manager) Stop(uid string) (*Session, error) {
 	m.mu.Lock()
 	session := m.active[uid]
-	if session != nil {
-		delete(m.active, uid)
-	}
-	m.mu.Unlock()
 	if session == nil {
-		return nil, errors.New("recording not found")
+		m.mu.Unlock()
+		return nil, ErrNotFound
 	}
+	if session.stopping {
+		m.mu.Unlock()
+		return session, ErrStopInProgress
+	}
+	session.stopping = true
+	m.mu.Unlock()
+
+	defer func() {
+		m.mu.Lock()
+		delete(m.active, uid)
+		m.mu.Unlock()
+	}()
+
 	if session.watchDone != nil {
 		session.watchOnce.Do(func() { close(session.watchDone) })
 	}
-	if stopErr := session.capture.Stop(); stopErr != nil {
-		// Поток мог быть уже остановлен системой (например, на длинной записи
-		// пайплайн закрывает его сам). Файлы в любом случае закрыты, и
-		// если звук записан, встречу нужно сохранить, а не потерять: раньше
-		// такая ошибка обрывала финализацию, и многочасовая запись оставалась
-		// на диске неоформленной.
-		appLogging.Warnf(m.logger, "native recording stop warning uid=%s error=%v", uid, stopErr)
+	// The health watcher calls into the same native capture object. Wait for it
+	// to leave the C call before stopping devices, otherwise a microphone
+	// restore can race with the stop (the case behind a hung recordings after a
+	// headset change).
+	if session.watchExited != nil {
+		select {
+		case <-session.watchExited:
+		case <-time.After(watchStopTimeout):
+			appLogging.Warnf(m.logger, "native recording health watcher did not stop uid=%s", uid)
+		}
+	}
+
+	stopped := make(chan error, 1)
+	go func() { stopped <- session.capture.Stop() }()
+	select {
+	case stopErr := <-stopped:
+		if stopErr != nil {
+			// Поток мог быть уже остановлен системой (например, на длинной записи
+			// пайплайн закрывает его сам). Файлы в любом случае закрыты, и
+			// если звук записан, встречу нужно сохранить, а не потерять: раньше
+			// такая ошибка обрывала финализацию, и многочасовая запись оставалась
+			// на диске неоформленной.
+			appLogging.Warnf(m.logger, "native recording stop warning uid=%s error=%v", uid, stopErr)
+		}
+	case <-time.After(nativeStopTimeout):
+		appLogging.Errorf(m.logger, "native recording stop timed out uid=%s; the capture may still be writing, restart the application", uid)
+		return session, ErrStopTimeout
 	}
 	micInfo, err := validateWAV(session.MicPath, "microphone", true)
 	if err != nil {

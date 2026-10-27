@@ -191,3 +191,52 @@ func TestSlicePCM16WAV(t *testing.T) {
 		t.Fatalf("first sliced sample=%d want=500", got)
 	}
 }
+
+func TestRepairPCM16WAV(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "interrupted.wav")
+	writer, err := NewWAVWriter(path, 16000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcm := make([]byte, 32000)
+	for index := 0; index < len(pcm); index += 2 {
+		binary.LittleEndian.PutUint16(pcm[index:], uint16(int16(index%1000)))
+	}
+	if err := writer.WritePCM16(pcm); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a capture that stopped before finalizing the header.
+	file, err := os.OpenFile(path, os.O_RDWR, 0o600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{0, 0, 0, 0}, 4); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := file.WriteAt([]byte{0, 0, 0, 0}, 40); err != nil {
+		t.Fatal(err)
+	}
+	_ = file.Close()
+	if err := RepairPCM16WAV(path); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer info.Close()
+	wav, err := ReadWAVInfo(info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stat, _ := info.Stat()
+	if wav.DataSize != stat.Size()-wav.DataOffset {
+		t.Fatalf("data size=%d file=%d offset=%d", wav.DataSize, stat.Size(), wav.DataOffset)
+	}
+	if duration, err := PCM16WAVDurationMS(path); err != nil || duration != 1000 {
+		t.Fatalf("duration=%d error=%v", duration, err)
+	}
+}

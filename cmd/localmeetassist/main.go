@@ -147,6 +147,9 @@ func main() {
 	for _, warning := range reconcile.Warnings {
 		appLogging.Warnf(logger, "meeting files reconciliation warning=%q", warning)
 	}
+	if recovered := app.RecoverInterruptedRecordings(); recovered > 0 {
+		appLogging.Infof(logger, "interrupted recordings recovered count=%d", recovered)
+	}
 	app.PrepareInference()
 	listener, err := app.Listen()
 	if err != nil {

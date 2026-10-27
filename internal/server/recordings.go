@@ -143,12 +143,26 @@ func (s *Server) stopMeetingRecording(uid string) (model.Meeting, error) {
 	}
 	session, err := s.recorder.Stop(uid)
 	now := time.Now()
+	if errors.Is(err, recording.ErrStopInProgress) {
+		// Another request is already finalizing this recording. Do not mark the
+		// meeting failed: the first request will publish the final state.
+		s.logger.Printf("recording stop already in progress uid=%s", uid)
+		return m, nil
+	}
 	if err != nil {
 		m.FinishedAt = &now
 		if session != nil {
 			m.DurationMS = now.Sub(session.StartedAt).Milliseconds()
 		}
-		m.Status, m.LastError, m.UpdatedAt = "failed", err.Error(), now
+		m.Status, m.ProcessingStage, m.UpdatedAt = "failed", "", now
+		switch {
+		case errors.Is(err, recording.ErrStopTimeout):
+			m.LastError = "native audio capture did not stop in time; quit and restart LocalMeetAssist, then recover the WAV files"
+		case errors.Is(err, recording.ErrNotFound):
+			m.LastError = "the recording session was lost; the application may still hold the audio device. Restart LocalMeetAssist and recover the WAV files"
+		default:
+			m.LastError = err.Error()
+		}
 		_ = s.store.SaveMeeting(m)
 		s.publishEvent("recording", recordingState(nil))
 		s.syncRecording()

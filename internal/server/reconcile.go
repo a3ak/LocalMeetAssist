@@ -205,6 +205,9 @@ func (s *Server) reconcileMeetingDirectory(dir, directoryUID, year, month string
 			mixedSegments = append(mixedSegments, file.Segments...)
 		}
 		if strings.EqualFold(filepath.Ext(file.Path), ".wav") {
+			// An interrupted native capture leaves the RIFF/data sizes at zero.
+			// Repairing them makes the duration and later reprocessing usable.
+			_ = audio.RepairPCM16WAV(file.Path)
 			if duration, durationErr := audio.PCM16WAVDurationMS(file.Path); durationErr == nil && duration > maxDuration {
 				maxDuration = duration
 			}

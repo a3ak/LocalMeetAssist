@@ -3,6 +3,7 @@ package recording
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"log"
 	"os"
@@ -42,6 +43,9 @@ type syntheticBackend struct {
 	health []nativeaudio.SystemHealth
 	// microphoneHealth is the same sequence for the microphone.
 	microphoneHealth []nativeaudio.SystemHealth
+	// stopBlock and stopStarted simulate a native stop that hangs.
+	stopBlock   chan struct{}
+	stopStarted chan struct{}
 }
 
 func (syntheticBackend) Name() string { return "synthetic-native-test" }
@@ -59,7 +63,7 @@ func (backend syntheticBackend) Start(request nativeaudio.StartRequest) (nativea
 		_ = microphone.Close()
 		return nil, err
 	}
-	session := &syntheticSession{microphone: microphone, system: system, silentSystem: backend.silentSystem, health: backend.health, microphoneHealth: backend.microphoneHealth, done: make(chan struct{})}
+	session := &syntheticSession{microphone: microphone, system: system, silentSystem: backend.silentSystem, health: backend.health, microphoneHealth: backend.microphoneHealth, stopBlock: backend.stopBlock, stopStarted: backend.stopStarted, done: make(chan struct{})}
 	session.wait.Add(1)
 	go session.write(request.SampleRate, request.Channels)
 	return session, nil
@@ -69,6 +73,8 @@ type syntheticSession struct {
 	microphone       *audio.WAVWriter
 	system           *audio.WAVWriter
 	silentSystem     bool
+	stopBlock        chan struct{}
+	stopStarted      chan struct{}
 	healthMu         sync.Mutex
 	health           []nativeaudio.SystemHealth
 	microphoneHealth []nativeaudio.SystemHealth
@@ -158,6 +164,12 @@ func TestEmptySystemStreamDoesNotFailMeeting(t *testing.T) {
 }
 
 func (s *syntheticSession) Stop() error {
+	if s.stopStarted != nil {
+		close(s.stopStarted)
+	}
+	if s.stopBlock != nil {
+		<-s.stopBlock
+	}
 	s.once.Do(func() { close(s.done) })
 	s.wait.Wait()
 	if err := s.microphone.Close(); err != nil {
@@ -289,4 +301,50 @@ func TestMicrophoneRecoveryIsRecorded(t *testing.T) {
 	if _, err := manager.Stop("meeting-microphone-switch"); err != nil {
 		t.Fatalf("recording with a recreated microphone must still save: %v", err)
 	}
+}
+
+func TestStopIsIdempotentWhileStopping(t *testing.T) {
+	stopBlock := make(chan struct{})
+	stopStarted := make(chan struct{})
+	manager := newManager(config.Defaults().Audio, log.New(io.Discard, "", 0), syntheticBackend{stopBlock: stopBlock, stopStarted: stopStarted})
+	if _, err := manager.Start("meeting-stop", t.TempDir(), 16000, 1, model.Device{ID: "mic", Name: "Test microphone"}, model.Device{ID: "system", Name: "Test system"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(60 * time.Millisecond)
+	done := make(chan error, 1)
+	go func() {
+		_, err := manager.Stop("meeting-stop")
+		done <- err
+	}()
+	<-stopStarted
+	if _, err := manager.Stop("meeting-stop"); !errors.Is(err, ErrStopInProgress) {
+		t.Fatalf("second stop error = %v, want ErrStopInProgress", err)
+	}
+	close(stopBlock)
+	if err := <-done; err != nil {
+		t.Fatalf("first stop failed: %v", err)
+	}
+	if manager.Active("meeting-stop") {
+		t.Fatal("recording must be inactive after stop")
+	}
+}
+
+func TestStopTimeoutReleasesSession(t *testing.T) {
+	old := nativeStopTimeout
+	nativeStopTimeout = 50 * time.Millisecond
+	defer func() { nativeStopTimeout = old }()
+	stopBlock := make(chan struct{})
+	manager := newManager(config.Defaults().Audio, log.New(io.Discard, "", 0), syntheticBackend{stopBlock: stopBlock, stopStarted: make(chan struct{})})
+	if _, err := manager.Start("meeting-timeout", t.TempDir(), 16000, 1, model.Device{ID: "mic", Name: "Test microphone"}, model.Device{ID: "system", Name: "Test system"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(50 * time.Millisecond)
+	if _, err := manager.Stop("meeting-timeout"); !errors.Is(err, ErrStopTimeout) {
+		t.Fatalf("stop error = %v, want ErrStopTimeout", err)
+	}
+	if manager.Active("meeting-timeout") {
+		t.Fatal("session must be released after a stop timeout")
+	}
+	close(stopBlock)
+	time.Sleep(50 * time.Millisecond)
 }
