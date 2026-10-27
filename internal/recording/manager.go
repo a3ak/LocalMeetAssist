@@ -73,6 +73,9 @@ type Session struct {
 	watchDone         chan struct{}
 	watchOnce         sync.Once
 	watchExited       chan struct{}
+	// healthMu serializes native health checks with the native stop. Without it
+	// a microphone restart can race with ma_device_stop and hang the device.
+	healthMu sync.Mutex
 	// stopping is protected by Manager.mu. It makes concurrent stop requests
 	// observe "already stopping" instead of a missing session.
 	stopping bool
@@ -344,7 +347,11 @@ func (m *Manager) watchSystem(session *Session) {
 			return
 		case <-ticker.C:
 		}
-		switch session.capture.SystemHealth() {
+		session.healthMu.Lock()
+		systemHealth := session.capture.SystemHealth()
+		microphoneHealth := session.capture.MicrophoneHealth()
+		session.healthMu.Unlock()
+		switch systemHealth {
 		case nativeaudio.SystemRestored:
 			session.setSystemEvent("restored")
 			m.logger.Printf("native recording system audio restored uid=%s", session.MeetingUID)
@@ -353,7 +360,7 @@ func (m *Manager) watchSystem(session *Session) {
 			appLogging.Warnf(m.logger, "native recording system audio lost uid=%s", session.MeetingUID)
 			systemLost = true
 		}
-		switch session.capture.MicrophoneHealth() {
+		switch microphoneHealth {
 		case nativeaudio.SystemRestored:
 			session.setMicrophoneEvent("restored")
 			m.logger.Printf("native recording microphone restored uid=%s", session.MeetingUID)
@@ -447,9 +454,20 @@ func (m *Manager) Stop(uid string) (*Session, error) {
 		select {
 		case <-session.watchExited:
 		case <-time.After(watchStopTimeout):
-			appLogging.Warnf(m.logger, "native recording health watcher did not stop uid=%s", uid)
+			// The watcher may still be inside a native health call. Freeing the
+			// capture under it would be a use-after-free, so leave the device
+			// alone and ask for an application restart.
+			appLogging.Errorf(m.logger, "native recording health watcher did not stop uid=%s; restart the application", uid)
+			return session, ErrStopTimeout
 		}
 	}
+	// The watcher has exited; this lock is an extra guard against a future
+	// concurrent health caller.
+	if !session.healthMu.TryLock() {
+		appLogging.Errorf(m.logger, "native recording health check is stuck uid=%s; restart the application", uid)
+		return session, ErrStopTimeout
+	}
+	defer session.healthMu.Unlock()
 
 	stopped := make(chan error, 1)
 	go func() { stopped <- session.capture.Stop() }()

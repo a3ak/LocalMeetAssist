@@ -46,6 +46,8 @@ type syntheticBackend struct {
 	// stopBlock and stopStarted simulate a native stop that hangs.
 	stopBlock   chan struct{}
 	stopStarted chan struct{}
+	// healthBlock simulates a stuck native health check.
+	healthBlock chan struct{}
 }
 
 func (syntheticBackend) Name() string { return "synthetic-native-test" }
@@ -63,7 +65,7 @@ func (backend syntheticBackend) Start(request nativeaudio.StartRequest) (nativea
 		_ = microphone.Close()
 		return nil, err
 	}
-	session := &syntheticSession{microphone: microphone, system: system, silentSystem: backend.silentSystem, health: backend.health, microphoneHealth: backend.microphoneHealth, stopBlock: backend.stopBlock, stopStarted: backend.stopStarted, done: make(chan struct{})}
+	session := &syntheticSession{microphone: microphone, system: system, silentSystem: backend.silentSystem, health: backend.health, microphoneHealth: backend.microphoneHealth, stopBlock: backend.stopBlock, stopStarted: backend.stopStarted, healthBlock: backend.healthBlock, done: make(chan struct{})}
 	session.wait.Add(1)
 	go session.write(request.SampleRate, request.Channels)
 	return session, nil
@@ -75,6 +77,7 @@ type syntheticSession struct {
 	silentSystem     bool
 	stopBlock        chan struct{}
 	stopStarted      chan struct{}
+	healthBlock      chan struct{}
 	healthMu         sync.Mutex
 	health           []nativeaudio.SystemHealth
 	microphoneHealth []nativeaudio.SystemHealth
@@ -94,6 +97,9 @@ func (s *syntheticSession) MicrophoneHealth() nativeaudio.SystemHealth {
 }
 
 func (s *syntheticSession) nextHealth(queue *[]nativeaudio.SystemHealth) nativeaudio.SystemHealth {
+	if s.healthBlock != nil {
+		<-s.healthBlock
+	}
 	s.healthMu.Lock()
 	defer s.healthMu.Unlock()
 	if len(*queue) == 0 {
@@ -346,5 +352,25 @@ func TestStopTimeoutReleasesSession(t *testing.T) {
 		t.Fatal("session must be released after a stop timeout")
 	}
 	close(stopBlock)
+	time.Sleep(50 * time.Millisecond)
+}
+
+func TestStopTimeoutWhenHealthWatcherIsStuck(t *testing.T) {
+	oldWatch, oldNative, oldInterval := watchStopTimeout, nativeStopTimeout, systemWatchInterval
+	watchStopTimeout, nativeStopTimeout, systemWatchInterval = 50*time.Millisecond, 50*time.Millisecond, 20*time.Millisecond
+	defer func() { watchStopTimeout, nativeStopTimeout, systemWatchInterval = oldWatch, oldNative, oldInterval }()
+	healthBlock := make(chan struct{})
+	manager := newManager(config.Defaults().Audio, log.New(io.Discard, "", 0), syntheticBackend{healthBlock: healthBlock})
+	if _, err := manager.Start("meeting-health", t.TempDir(), 16000, 1, model.Device{ID: "mic", Name: "Test microphone"}, model.Device{ID: "system", Name: "Test system"}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(80 * time.Millisecond)
+	if _, err := manager.Stop("meeting-health"); !errors.Is(err, ErrStopTimeout) {
+		t.Fatalf("stop error = %v, want ErrStopTimeout", err)
+	}
+	if manager.Active("meeting-health") {
+		t.Fatal("session must be released after a stuck health check")
+	}
+	close(healthBlock)
 	time.Sleep(50 * time.Millisecond)
 }
