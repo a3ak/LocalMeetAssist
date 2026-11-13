@@ -449,6 +449,7 @@ func (s *Service) Enroll(ctx context.Context, cfg config.Config, req EnrollReque
 			Vector:      item.vector,
 			Dim:         len(item.vector),
 			ModelSHA256: modelHash,
+			ModelName:   filepath.Base(cfg.Diarization.EmbeddingModel),
 			Quality:     item.quality,
 			ClipPath:    clipPath,
 			ClipSHA256:  clipHash,

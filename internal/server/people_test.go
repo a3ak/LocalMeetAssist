@@ -199,3 +199,13 @@ func TestAutoNameDoesNotEnrollOnPlainSave(t *testing.T) {
 		t.Fatalf("plain save must not report enrollment: %s", recorder.Body.String())
 	}
 }
+
+func TestVoiceSampleModelLabel(t *testing.T) {
+	sample := model.VoiceSample{ModelName: "wespeaker_resnet34.onnx", ModelSHA256: "0123456789abcdef"}
+	if label := voiceSampleModelLabel(sample); label != "wespeaker_resnet34.onnx · 01234567" {
+		t.Fatalf("unexpected model label %q", label)
+	}
+	if label := voiceSampleModelLabel(model.VoiceSample{ModelSHA256: "abcdef0123456789"}); label != "model · abcdef01" {
+		t.Fatalf("unexpected fallback model label %q", label)
+	}
+}

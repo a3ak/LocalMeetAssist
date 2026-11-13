@@ -277,6 +277,7 @@ func (s *Server) copyMergedSourceArtifacts(sources []model.Meeting, mergedDir, m
 func (s *Server) mergeMeetingSpeakers(sources []model.Meeting, meetingUID string, origin time.Time) ([]model.Speaker, []model.Segment, map[string]string, error) {
 	var speakers []model.Speaker
 	var segments []model.Segment
+	links := make(map[string]*mergedSpeakerLink)
 	names := make(map[string]string)
 	byKey := make(map[string]string)
 	for meetingIndex, source := range sources {
@@ -305,6 +306,7 @@ func (s *Server) mergeMeetingSpeakers(sources []model.Meeting, meetingUID string
 				speakers = append(speakers, model.Speaker{MeetingUID: meetingUID, ID: id, DisplayName: name, Source: speaker.Source})
 				names[id] = name
 			}
+			mergeSpeakerLink(links, id, speaker)
 			mapping[speaker.ID] = id
 			for idx := range speakers {
 				if speakers[idx].ID != id {
@@ -339,7 +341,77 @@ func (s *Server) mergeMeetingSpeakers(sources []model.Meeting, meetingUID string
 		}
 	}
 	sort.SliceStable(segments, func(i, j int) bool { return segments[i].StartMS < segments[j].StartMS })
+	applyMergedSpeakerLinks(speakers, links)
 	return speakers, segments, names, nil
+}
+
+type mergedSpeakerLink struct {
+	personID   string
+	nameSource string
+	score      float64
+	candidates []model.SpeakerMatch
+	conflict   bool
+}
+
+func mergeSpeakerLink(links map[string]*mergedSpeakerLink, id string, speaker model.Speaker) {
+	link := links[id]
+	if link == nil {
+		link = &mergedSpeakerLink{}
+		links[id] = link
+	}
+	if speaker.PersonID != "" {
+		switch {
+		case link.personID == "":
+			link.personID = speaker.PersonID
+		case link.personID != speaker.PersonID:
+			link.conflict = true
+		}
+	}
+	if speaker.NameSource == "manual" {
+		link.nameSource = "manual"
+	} else if link.nameSource == "" {
+		link.nameSource = speaker.NameSource
+	}
+	if speaker.MatchScore > link.score {
+		link.score = speaker.MatchScore
+	}
+	for _, candidate := range speaker.MatchCandidates {
+		found := false
+		for _, existing := range link.candidates {
+			if existing.PersonID == candidate.PersonID {
+				found = true
+				break
+			}
+		}
+		if !found {
+			link.candidates = append(link.candidates, candidate)
+		}
+	}
+}
+
+func applyMergedSpeakerLinks(speakers []model.Speaker, links map[string]*mergedSpeakerLink) {
+	for index := range speakers {
+		link := links[speakers[index].ID]
+		if link == nil {
+			continue
+		}
+		sort.SliceStable(link.candidates, func(i, j int) bool { return link.candidates[i].Score > link.candidates[j].Score })
+		if len(link.candidates) > 3 {
+			link.candidates = link.candidates[:3]
+		}
+		speakers[index].MatchCandidates = link.candidates
+		if link.conflict {
+			// Two source clusters with the same name point at different people.
+			// Keeping either link would silently rename one of them.
+			speakers[index].PersonID = ""
+			speakers[index].NameSource = ""
+			speakers[index].MatchScore = 0
+			continue
+		}
+		speakers[index].PersonID = link.personID
+		speakers[index].NameSource = link.nameSource
+		speakers[index].MatchScore = link.score
+	}
 }
 
 func parseTranscriptSegments(value string) []model.Segment {

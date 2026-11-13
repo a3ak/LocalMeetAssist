@@ -242,6 +242,7 @@ func (s *Server) personView(person model.Person, samples []model.VoiceSample) mo
 			StartMS:    sample.StartMS,
 			EndMS:      sample.EndMS,
 			Quality:    sample.Quality,
+			ModelLabel: voiceSampleModelLabel(sample),
 			ClipURL:    "/api/v1/people/" + person.ID + "/samples/" + sample.ID + "/audio",
 			CreatedAt:  sample.CreatedAt,
 		})
@@ -295,4 +296,22 @@ func (s *Server) removeVoiceClip(path string) {
 		return
 	}
 	_ = os.Remove(path)
+}
+
+// voiceSampleModelLabel identifies the embedding model of a sample. The short
+// hash is stable across model file moves and makes samples from a replaced
+// model visible without re-embedding anything.
+func voiceSampleModelLabel(sample model.VoiceSample) string {
+	name := strings.TrimSpace(sample.ModelName)
+	if name == "" {
+		name = "model"
+	}
+	hash := strings.TrimSpace(sample.ModelSHA256)
+	if len(hash) > 8 {
+		hash = hash[:8]
+	}
+	if hash == "" {
+		return name
+	}
+	return name + " · " + hash
 }

@@ -1124,14 +1124,33 @@ func (r *Runner) saveSegments(m model.Meeting, artifactType string, segments []m
 	return path, err
 }
 
-func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diarizationSamples map[string][]model.Sample) (map[string]string, error) {
+type speakerSaveOptions struct {
+	previous []model.Speaker
+	// aliases maps a new diarization speaker id to the old speaker it overlaps
+	// most. When options are supplied, only aliased old names and links are
+	// inherited; a coincidentally equal SPEAKER_NN id must not move a profile.
+	aliases map[string]string
+}
+
+func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diarizationSamples map[string][]model.Sample, options ...speakerSaveOptions) (map[string]string, error) {
 	ownerName := config.DefaultMicrophoneOwnerName(r.cfg.App.Language)
 	if meeting, loadErr := r.store.Meeting(meetingUID); loadErr == nil {
 		if configured := strings.TrimSpace(meeting.Metadata["microphone_owner_name"]); configured != "" {
 			ownerName = configured
 		}
 	}
-	existing, err := r.store.Speakers(meetingUID)
+	restricted := len(options) > 0
+	var opts speakerSaveOptions
+	if restricted {
+		opts = options[0]
+	}
+	var existing []model.Speaker
+	var err error
+	if restricted {
+		existing = opts.previous
+	} else {
+		existing, err = r.store.Speakers(meetingUID)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1152,7 +1171,18 @@ func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diari
 		}
 		speaker := speakers[segment.SpeakerID]
 		if speaker == nil {
-			displayName := existingNames[segment.SpeakerID]
+			lookupID := segment.SpeakerID
+			usePrevious := !restricted
+			if restricted {
+				if alias, ok := opts.aliases[segment.SpeakerID]; ok {
+					lookupID = alias
+					usePrevious = true
+				}
+			}
+			displayName := ""
+			if usePrevious {
+				displayName = existingNames[lookupID]
+			}
 			if displayName == "" {
 				displayName = segment.SpeakerID
 				if segment.SpeakerID == "microphone_owner" {
@@ -1160,7 +1190,7 @@ func (r *Runner) saveSpeakers(meetingUID string, segments []model.Segment, diari
 				}
 			}
 			speaker = &model.Speaker{MeetingUID: meetingUID, ID: segment.SpeakerID, DisplayName: displayName, Source: segment.Source}
-			if old, ok := existingByID[segment.SpeakerID]; ok {
+			if old, ok := existingByID[lookupID]; ok && usePrevious {
 				speaker.PersonID = old.PersonID
 				speaker.MatchScore = old.MatchScore
 				speaker.MatchCandidates = old.MatchCandidates

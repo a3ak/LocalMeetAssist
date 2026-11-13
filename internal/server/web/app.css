@@ -203,6 +203,7 @@ main{padding:10px}
 .person-meta{margin-left:auto;white-space:nowrap}
 .person-samples{display:flex;flex-direction:column;gap:6px;margin-top:10px}
 .person-sample{display:flex;align-items:center;gap:8px;padding:6px 8px;border:1px solid var(--line);border-radius:8px;background:var(--card)}
+.person-sample-model{font-size:10px;opacity:.75;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .person-sample-time{font-size:11px;color:var(--muted);font-variant-numeric:tabular-nums;white-space:nowrap}
 .person-sample .meta{flex:1}
 .play-person-sample.playing{color:var(--danger);border-color:color-mix(in srgb,var(--danger) 45%,var(--line))}
@@ -704,6 +705,18 @@ main{grid-template-columns:minmax(0,1fr) minmax(260px,340px)!important}
 
 /* Диалог известных спикеров повторяет поведение моделей: фиксированная
    высота, прокручивается только список профилей. */
+#calibrationDialog{max-width:min(560px,calc(100vw - 24px));padding:0}
+.calibration-body{display:flex;flex-direction:column;gap:12px;padding:4px 0 10px}
+.calibration-stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.calibration-stat{padding:10px;border:1px solid var(--line);border-radius:10px;background:var(--panel-2)}
+.calibration-stat span{display:block;color:var(--muted);font-size:11px}
+.calibration-stat b{font-size:18px;font-variant-numeric:tabular-nums}
+.calibration-table{width:100%;border-collapse:collapse;font-size:12px}
+.calibration-table th,.calibration-table td{padding:7px 4px;border-bottom:1px solid var(--line);text-align:left}
+.calibration-table th{color:var(--muted);font-weight:600}
+.calibration-table td:last-child{text-align:right;font-variant-numeric:tabular-nums}
+.calibration-table .calibration-new{color:var(--accent-ink);font-weight:700}
+.calibration-error{color:var(--danger);font-size:12px;margin-right:auto}
 #splitDialog{max-width:min(760px,calc(100vw - 24px));padding:0}
 #splitDialog .split-card{width:100%}
 .split-body{display:flex;flex-direction:column;gap:14px;padding:4px 0 10px}

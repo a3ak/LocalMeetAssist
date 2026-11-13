@@ -465,6 +465,18 @@
 (() => {
   const ns = globalThis.LMA;
   const point = entry => entry && ({ id: entry.id, url: entry.url, glob: entry.glob });
+  const PAGE_CHANGE_DELAY_MS = 3000;
+  const pageKey = value => {
+    try {
+      const url = new URL(value);
+      return url.origin + url.pathname.replace(/\/+$/, '');
+    } catch {
+      return String(value || '').split('#')[0].split('?')[0].replace(/\/+$/, '');
+    }
+  };
+  const matchesGlob = (glob, url) => {
+    try { return !!glob && ns.compilePatterns([glob])[0].test(url); } catch { return false; }
+  };
   ns.MeetingController = class {
     constructor(tracker, now) { this.tracker = tracker; this.now = now; this.data = { active: null, revision: null }; this.rows = []; }
     async init() {
@@ -503,7 +515,10 @@
       const changedSession = d.active === true && revision !== d.revision;
       const ended = d.active === true && (!active || changedSession);
       if (d.active === true && (!active || changedSession)) {
-        this.tracker.invalidate();
+        // Keep the page that replaces the meeting alive across the stop; it is
+        // the next meeting's only candidate.
+        if (d.pageChange) this.tracker.invalidate(d.pageChange.id);
+        else this.tracker.invalidate();
         this.clearControl();
       }
       if (d.origin && !owned) { this.tracker.invalidate(); this.clearControl(); }
@@ -543,6 +558,17 @@
     observe(event) {
       const controller = this.data.controller;
       if (!event || !controller) return;
+      if (event.kind === 'navigation' && event.id === controller.id && this.data.active && this.data.owned && this.data.origin) {
+        const key = pageKey(event.url);
+        const originKey = pageKey(this.data.origin.url);
+        if (key && originKey && key !== originKey && matchesGlob(this.data.origin.glob, event.url)) {
+          if (!this.data.pageChange || this.data.pageChange.url !== event.url) {
+            this.data.pageChange = { id: event.id, url: event.url, glob: this.data.origin.glob, at: Number.isFinite(event.at) ? event.at : this.now() };
+          }
+        } else if (this.data.pageChange && key === originKey) {
+          delete this.data.pageChange;
+        }
+      }
       if (event?.id === controller?.id && (event.kind === 'removed' || (!controller.linked && event.kind === 'navigation' && event.url !== controller.url))) {
         this.data.closedAt = Number.isFinite(event.at) ? event.at : this.now();
       }
@@ -558,7 +584,7 @@
       if (!this.data.active || !this.data.origin || !this.data.switchAt || this.now() > this.data.switchAt) throw new Error('Время выбора управляющей вкладки истекло.');
       if (!Number.isSafeInteger(tab?.id)) throw new Error('Активная вкладка недоступна.');
       this.data.controller = { id: tab.id, url: tab.url || '', glob: this.data.origin.glob, linked: true };
-      delete this.data.switchAt; delete this.data.stopAt; delete this.data.lostAt; delete this.data.closedAt; delete this.data.stopRequested; delete this.data.restartWaiting;
+      delete this.data.switchAt; delete this.data.stopAt; delete this.data.lostAt; delete this.data.closedAt; delete this.data.stopRequested; delete this.data.restartWaiting; delete this.data.pageChange;
       this.data.notice = 'Управление передано. Исходный URL встречи сохранён.';
     }
     collect(tabs, config, expressions, settings) {
@@ -577,8 +603,26 @@
       if (d.active && d.owned && d.origin && config.enabled) {
         const controller = d.controller;
         const live = tabs.find(tab => tab.id === controller?.id);
+        const liveURL = live?.url || '';
+        const originKey = pageKey(d.origin.url);
+        const liveKey = pageKey(liveURL);
+        const pageChanged = !!(live && controller && live.id === controller.id && liveKey && originKey
+          && liveKey !== originKey && matchesGlob(d.origin.glob, liveURL));
+        if (pageChanged) {
+          if (!d.pageChange || d.pageChange.url !== liveURL) {
+            d.pageChange = { id: live.id, url: liveURL, glob: d.origin.glob, at: now };
+            d.notice = 'Страница встречи изменилась. Текущая запись завершится, затем начнётся новая.';
+          }
+          const due = d.pageChange.at + PAGE_CHANGE_DELAY_MS;
+          if (now >= due && !d.stopRequested) { d.stopAt = now; stopDue = true; }
+          if (now < due) deadline = deadline === null ? due : Math.min(deadline, due);
+        } else if (d.pageChange) {
+          delete d.pageChange;
+          d.notice = '';
+        }
+        const pageChanging = !!d.pageChange;
         if (live && controller.linked) controller.url = live.url || '';
-        let valid = !!live && (controller.linked || live.url === controller.url);
+        let valid = pageChanging || (!!live && (controller.linked || live.url === controller.url));
         if (!valid && !d.lostAt) {
           d.lostAt = d.closedAt ?? now;
           const navigated = live && live.url !== controller.url ? live.id : null;
@@ -588,7 +632,7 @@
         // Renewals are admitted immediately: the initial detection delay applies only to a new recording.
         const after = d.switchAt ? d.switchStarted : d.lostAt;
         const until = d.switchAt || d.stopAt;
-        const renew = !d.stopRequested && until !== undefined && rows.map(row=>({...row,...this.tracker.entries.get(row.id)})).find(row => row.glob === d.origin.glob
+        const renew = !pageChanging && !d.stopRequested && until !== undefined && rows.map(row=>({...row,...this.tracker.entries.get(row.id)})).find(row => row.glob === d.origin.glob
           && row.enteredAt !== null && row.enteredAt >= after && row.enteredAt <= until
           && (!d.switchAt || (row.sequence || 0) > d.switchSequence)
           && now - row.enteredAt <= settings.maxAgeSeconds * 1000
@@ -613,9 +657,19 @@
         urls = [d.origin.url];
         for (const at of [d.switchAt,d.stopAt]) if (at !== undefined && at > now) deadline = deadline === null ? at : Math.min(deadline,at);
       } else if (!d.active && config.enabled) {
-        const candidate = choose.find(row => row.id === d.candidate?.id && row.url === d.candidate.url) || choose[0];
+        if (d.pageChange && !tabs.some(tab => tab.id === d.pageChange.id && pageKey(tab.url) === pageKey(d.pageChange.url))) {
+          delete d.pageChange;
+        }
+        let candidate = null;
+        if (d.pageChange) {
+          candidate = choose.find(row => row.id === d.pageChange.id && row.url === d.pageChange.url) || null;
+          if (candidate) delete d.pageChange;
+        } else {
+          candidate = choose.find(row => row.id === d.candidate?.id && row.url === d.candidate.url) || choose[0];
+        }
         d.candidate = point(candidate);
         if (candidate) urls = [candidate.url];
+        else if (d.pageChange) urls = [];
       }
       const freshRows = rows.map(row => ({ ...row, ...this.tracker.entries.get(row.id) }));
       this.rows = freshRows;
@@ -831,7 +885,16 @@
         const tabs=await this.api.queryTabs(); if(epoch!==this.epoch||generation!==client.generation)return;
         if (this.control.data.needsEmpty) {
           this.tracker.collect(tabs,this.expressions,this.settings,this.config.enabled);
-          this.tracker.invalidate(); delete this.control.data.candidate;
+          const nextPage = this.control.data.pageChange;
+          if (nextPage) {
+            // A page change must keep the new page alive while the old recording
+            // is being finalized; otherwise the stop invalidates its only
+            // candidate and the new meeting never starts.
+            this.tracker.invalidate(nextPage.id);
+            delete this.control.data.candidate;
+          } else {
+            this.tracker.invalidate(); delete this.control.data.candidate;
+          }
           if (this.config.enabled && client.hasState && this.recordingKnown && client.sendTabs([])!==null) {
             this.sentSignature='[]'; delete this.control.data.needsEmpty;
           }

@@ -30,6 +30,7 @@ const state = {
   conferenceCandidate: null,
   selectedMeetings: new Set(),
   split: null,
+  calibration: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -2980,6 +2981,64 @@ async function showPeople() {
   await refreshPeople();
 }
 
+async function openVoiceCalibration() {
+  if ($("#calibrationDialog").open) return;
+  $("#calibrationError").textContent = "";
+  $("#applyCalibration").disabled = true;
+  $("#calibrationBody").innerHTML = `<div class="hint">${t("calibration.loading")}</div>`;
+  $("#calibrationDialog").showModal();
+  try {
+    const data = await api("/api/v1/voice/calibration");
+    state.calibration = data;
+    renderVoiceCalibration(data);
+  } catch (error) {
+    $("#calibrationBody").innerHTML = "";
+    $("#calibrationError").textContent = error.message;
+  }
+}
+
+function renderVoiceCalibration(data) {
+  if (!data) return;
+  const value = (number) => Number(number || 0).toFixed(2);
+  const stats = `<div class="calibration-stats">
+    <div class="calibration-stat"><span>${t("calibration.confirmed")}</span><b>${Number(data.positives || 0)}</b></div>
+    <div class="calibration-stat"><span>${t("calibration.rejected")}</span><b>${Number(data.negatives || 0)}</b></div>
+    <div class="calibration-stat"><span>${t("calibration.meetings")}</span><b>${Number(data.meetings || 0)}</b></div>
+  </div>`;
+  const table = `<table class="calibration-table">
+    <thead><tr><th></th><th>${t("calibration.current")}</th><th>${t("calibration.calculated")}</th></tr></thead>
+    <tbody>
+      <tr><td>${t("calibration.auto")}</td><td>${value(data.current_auto)}</td><td class="calibration-new">${value(data.auto)}</td></tr>
+      <tr><td>${t("calibration.suggest")}</td><td>${value(data.current_suggest)}</td><td class="calibration-new">${value(data.suggest)}</td></tr>
+    </tbody>
+  </table>`;
+  const warning = data.reliable ? "" : `<div class="hint">${t("calibration.notEnough", { pos: 10, neg: 5 })}</div>`;
+  $("#calibrationBody").innerHTML = stats + table + warning + `<div class="hint">${t("calibration.note")}</div>`;
+  $("#applyCalibration").disabled = !data.reliable || !(Number(data.auto) > 0);
+}
+
+async function applyVoiceCalibration() {
+  const data = state.calibration;
+  if (!data || !data.reliable) return;
+  const button = $("#applyCalibration");
+  button.disabled = true;
+  $("#calibrationError").textContent = "";
+  try {
+    const result = await api("/api/v1/settings", {
+      method: "PUT",
+      json: { values: {
+        "diarization.voice_auto_threshold": Number(data.auto).toFixed(2),
+        "diarization.voice_suggest_threshold": Number(data.suggest).toFixed(2),
+      } },
+    });
+    closeDialog("#calibrationDialog");
+    toast(result?.deferred ? t("calibration.deferred") : t("calibration.applied"));
+  } catch (error) {
+    $("#calibrationError").textContent = error.message;
+    button.disabled = false;
+  }
+}
+
 async function refreshPeople(focusPersonID = "") {
   const root = $("#peopleList");
   const previousScrollTop = root.scrollTop;
@@ -3025,7 +3084,7 @@ function renderPeople(items) {
   root.innerHTML = items.map((person) => {
     const sampleCount = (person.samples || []).length;
     const expanded = sampleCount > 0 && state.peopleExpanded.has(person.id);
-    const samples = (person.samples || []).map((sample) => `<div class="person-sample"><button type="button" class="ghost small play-person-sample" data-url="${esc(sample.clip_url || "")}" aria-label="${t("people.play")}">▶</button><span class="person-sample-time">${clockMS(sample.start_ms)}–${clockMS(sample.end_ms)}</span><span class="meta">${esc(sample.source || "")} · ${Math.round((sample.quality?.score || 0) * 100)}%</span><button type="button" class="ghost small danger delete-person-sample" data-sample-id="${esc(sample.id)}" aria-label="${t("people.deleteSample")}">×</button></div>`).join("");
+    const samples = (person.samples || []).map((sample) => `<div class="person-sample"><button type="button" class="ghost small play-person-sample" data-url="${esc(sample.clip_url || "")}" aria-label="${t("people.play")}">▶</button><span class="person-sample-time">${clockMS(sample.start_ms)}–${clockMS(sample.end_ms)}</span><span class="meta">${esc(sample.source || "")} · ${Math.round((sample.quality?.score || 0) * 100)}%</span>${sample.model_label ? `<span class="meta person-sample-model" title="${esc(sample.model_label)}">${esc(sample.model_label)}</span>` : ""}<button type="button" class="ghost small danger delete-person-sample" data-sample-id="${esc(sample.id)}" aria-label="${t("people.deleteSample")}">×</button></div>`).join("");
     const qualifier = person.needs_qualifier ? `<span class="voice-badge warn">${t("people.needsQualifier")}</span>` : "";
     const toggle = sampleCount > 0
       ? `<button type="button" class="ghost small person-toggle" aria-expanded="${expanded}" aria-controls="person-samples-${esc(person.id)}">${expanded ? "▾" : "▸"} ${t("people.samplesToggle", { n: sampleCount })}</button>`
@@ -3130,6 +3189,11 @@ $("#closePeople").onclick = () => {
   closeDialog("#peopleDialog");
 };
 $("#peopleDialog").addEventListener("close", stopVoiceClip);
+$("#voiceCalibrationBtn").onclick = openVoiceCalibration;
+$("#closeCalibration").onclick = () => closeDialog("#calibrationDialog");
+$("#cancelCalibration").onclick = () => closeDialog("#calibrationDialog");
+$("#applyCalibration").onclick = applyVoiceCalibration;
+$("#calibrationDialog").addEventListener("close", () => { state.calibration = null; });
 $("#deleteAllPeople").onclick = async () => {
   if (!confirm(t("people.deleteAllConfirm"))) return;
   try {

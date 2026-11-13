@@ -123,8 +123,16 @@
 
   <dialog id="peopleDialog">
     <div class="dialog-card people-card">
-      <div class="dialog-head"><div><h2 data-i18n="people.title">Спикеры</h2><div class="meta" data-i18n="people.meta">Сохранённые голоса. Здесь можно прослушать образцы, уточнить имя и удалить ошибочные записи.</div></div><div class="dialog-head-actions"><button id="deleteAllPeople" type="button" class="danger ghost small" data-i18n="people.deleteAll">Удалить всех</button><button id="closePeople" type="button" class="icon-btn">×</button></div></div>
+      <div class="dialog-head"><div><h2 data-i18n="people.title">Спикеры</h2><div class="meta" data-i18n="people.meta">Сохранённые голоса. Здесь можно прослушать образцы, уточнить имя и удалить ошибочные записи.</div></div><div class="dialog-head-actions"><button id="voiceCalibrationBtn" type="button" class="ghost small" data-i18n="calibration.button">Калибровка</button><button id="deleteAllPeople" type="button" class="danger ghost small" data-i18n="people.deleteAll">Удалить всех</button><button id="closePeople" type="button" class="icon-btn">×</button></div></div>
       <div id="peopleList" class="people-list"></div>
+    </div>
+  </dialog>
+
+  <dialog id="calibrationDialog">
+    <div class="dialog-card calibration-card">
+      <div class="dialog-head"><div><h2 data-i18n="calibration.title">Калибровка порогов</h2><div class="meta" data-i18n="calibration.meta">Пороги рассчитываются по подтверждённым, отклонённым и проигнорированным подсказкам. Применяются вручную.</div></div><button id="closeCalibration" type="button" class="icon-btn" aria-label="Закрыть">×</button></div>
+      <div id="calibrationBody" class="calibration-body"><div class="hint" data-i18n="calibration.loading">Считаю статистику…</div></div>
+      <div class="dialog-actions"><span id="calibrationError" class="calibration-error"></span><button id="cancelCalibration" type="button" class="ghost" data-i18n="common.close">Закрыть</button><button id="applyCalibration" type="button" class="primary" data-i18n="calibration.apply">Применить</button></div>
     </div>
   </dialog>
 

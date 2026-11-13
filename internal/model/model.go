@@ -107,6 +107,7 @@ type VoiceSample struct {
 	Vector      []float32    `json:"vector"`
 	Dim         int          `json:"dim"`
 	ModelSHA256 string       `json:"model_sha256"`
+	ModelName   string       `json:"model_name,omitempty"`
 	Quality     VoiceQuality `json:"quality"`
 	ClipPath    string       `json:"clip_path,omitempty"`
 	ClipSHA256  string       `json:"clip_sha256,omitempty"`
@@ -123,6 +124,7 @@ type VoiceSampleView struct {
 	StartMS    int64        `json:"start_ms"`
 	EndMS      int64        `json:"end_ms"`
 	Quality    VoiceQuality `json:"quality"`
+	ModelLabel string       `json:"model_label,omitempty"`
 	ClipURL    string       `json:"clip_url,omitempty"`
 	CreatedAt  time.Time    `json:"created_at"`
 }

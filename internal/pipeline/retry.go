@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -138,7 +139,24 @@ func (r *Runner) retryDiarization(ctx context.Context, uid string) error {
 		return r.fail(&m, "diarizing", err)
 	}
 	_, _ = r.addArtifact(uid, "diarization_json", path, "application/json", "generated")
-	names, err := r.saveSpeakers(uid, merged, samples)
+	existingSpeakers, _ := r.store.Speakers(uid)
+	aliases := speakerAliasesByOverlap(existingSpeakers, merged)
+	previous := make([]model.Speaker, 0, len(existingSpeakers))
+	for _, old := range existingSpeakers {
+		if old.NameSource == "auto" {
+			// Auto links must be recalculated against the new diarization. Keep
+			// only manual names and confirmed Person links.
+			old.PersonID = ""
+			old.MatchScore = 0
+			old.MatchCandidates = nil
+			old.NameSource = ""
+			if old.ID != "microphone_owner" {
+				old.DisplayName = old.ID
+			}
+		}
+		previous = append(previous, old)
+	}
+	names, err := r.saveSpeakers(uid, merged, samples, speakerSaveOptions{previous: previous, aliases: aliases})
 	if err != nil {
 		return r.fail(&m, "diarizing", err)
 	}
@@ -281,4 +299,80 @@ func (r *Runner) retryEncoding(ctx context.Context, uid string) error {
 	r.job(uid, "encoding", "completed", "")
 	m.Status, m.ProcessingStage, m.LastError, m.UpdatedAt = "completed", "completed", "", time.Now()
 	return r.store.SaveMeeting(m)
+}
+
+// speakerAliasesByOverlap maps a new diarization cluster to the old speaker
+// whose fragments overlap it the most. A name moves only when the overlap is at
+// least half of the new cluster, and one old speaker is inherited at most once.
+func speakerAliasesByOverlap(existing []model.Speaker, segments []model.Segment) map[string]string {
+	if len(existing) == 0 || len(segments) == 0 {
+		return nil
+	}
+	totals := make(map[string]int64)
+	for _, segment := range segments {
+		if duration := segment.EndMS - segment.StartMS; duration > 0 {
+			totals[segment.SpeakerID] += duration
+		}
+	}
+	type candidate struct {
+		newID   string
+		oldID   string
+		overlap int64
+		ratio   float64
+	}
+	best := make(map[string]candidate)
+	for _, old := range existing {
+		intervals := old.Fragments
+		if len(intervals) == 0 {
+			intervals = old.Samples
+		}
+		for _, interval := range intervals {
+			for _, segment := range segments {
+				if segment.StartMS >= interval.EndMS || segment.EndMS <= interval.StartMS {
+					continue
+				}
+				if interval.Source != "" && segment.Source != "" && interval.Source != segment.Source {
+					continue
+				}
+				start, end := interval.StartMS, interval.EndMS
+				if segment.StartMS > start {
+					start = segment.StartMS
+				}
+				if segment.EndMS < end {
+					end = segment.EndMS
+				}
+				if end <= start {
+					continue
+				}
+				overlap := end - start
+				if overlap > best[segment.SpeakerID].overlap {
+					best[segment.SpeakerID] = candidate{newID: segment.SpeakerID, oldID: old.ID, overlap: overlap}
+				}
+			}
+		}
+	}
+	list := make([]candidate, 0, len(best))
+	for _, item := range best {
+		total := totals[item.newID]
+		if total > 0 {
+			item.ratio = float64(item.overlap) / float64(total)
+		}
+		list = append(list, item)
+	}
+	sort.SliceStable(list, func(i, j int) bool {
+		if list[i].ratio == list[j].ratio {
+			return list[i].overlap > list[j].overlap
+		}
+		return list[i].ratio > list[j].ratio
+	})
+	aliases := make(map[string]string)
+	used := make(map[string]bool)
+	for _, item := range list {
+		if item.ratio < 0.5 || used[item.oldID] {
+			continue
+		}
+		aliases[item.newID] = item.oldID
+		used[item.oldID] = true
+	}
+	return aliases
 }

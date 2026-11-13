@@ -158,16 +158,18 @@ var settingFieldsEN = map[string]settingTextEN{
 	"transcription.min_segment_rms":        {"Minimum RMS", "Segments quieter than this value are treated as silence."},
 
 	// Diarization
-	"diarization.auto_run":           {"Run automatically", "Automatically separate remote participants into speakers. Manual start is always available."},
-	"diarization.remember_speakers":  {"Remember speakers", "After a manual rename, keep up to 10 clean voice samples. These are biometric data and stay on this computer. Enrollment works until the meeting audio is archived."},
-	"diarization.engine":             {"Engine", "Runs inside the LocalMeetAssist process without a CLI."},
-	"diarization.segmentation_model": {"Segmentation model", "Downloaded segmentation models; grey entries are not downloaded yet."},
-	"diarization.embedding_model":    {"Voice embedding model", "Downloaded voice embedding models; grey entries are not downloaded yet. Different models separate speakers better on different recordings."},
-	"diarization.cluster_threshold":  {"Cosine distance threshold", "Without a fixed participant count, voices are merged while the distance stays below the threshold."},
-	"diarization.max_auto_speakers":  {"Maximum with auto", "Protection against dozens of false speakers."},
-	"diarization.microphone_enabled": {"Diarize microphone", "Usually off: the owner is identified by the separate stream."},
-	"diarization.timeout_seconds":    {"Timeout, sec", "Maximum diarization time."},
-	"diarization.num_threads":        {"CPU threads", "ONNX Runtime threads for segmentation and embedding extraction; 0 — engine default."},
+	"diarization.auto_run":                {"Run automatically", "Automatically separate remote participants into speakers. Manual start is always available."},
+	"diarization.remember_speakers":       {"Remember speakers", "After a manual rename, keep up to 10 clean voice samples. These are biometric data and stay on this computer. Enrollment works until the meeting audio is archived."},
+	"diarization.engine":                  {"Engine", "Runs inside the LocalMeetAssist process without a CLI."},
+	"diarization.segmentation_model":      {"Segmentation model", "Downloaded segmentation models; grey entries are not downloaded yet."},
+	"diarization.embedding_model":         {"Voice embedding model", "Downloaded voice embedding models; grey entries are not downloaded yet. Different models separate speakers better on different recordings."},
+	"diarization.voice_auto_threshold":    {"Auto-name threshold", "Minimum similarity for filling a name automatically. Calculated from confirmed and rejected suggestions; applied manually."},
+	"diarization.voice_suggest_threshold": {"Suggestion threshold", "Minimum similarity for showing a suggestion without filling the name. Must not exceed the auto-name threshold."},
+	"diarization.cluster_threshold":       {"Cosine distance threshold", "Without a fixed participant count, voices are merged while the distance stays below the threshold."},
+	"diarization.max_auto_speakers":       {"Maximum with auto", "Protection against dozens of false speakers."},
+	"diarization.microphone_enabled":      {"Diarize microphone", "Usually off: the owner is identified by the separate stream."},
+	"diarization.timeout_seconds":         {"Timeout, sec", "Maximum diarization time."},
+	"diarization.num_threads":             {"CPU threads", "ONNX Runtime threads for segmentation and embedding extraction; 0 — engine default."},
 
 	// Summarization
 	"summary.auto_run":              {"Run automatically", "Create the minutes automatically after the transcript is ready. Manual start is always available."},

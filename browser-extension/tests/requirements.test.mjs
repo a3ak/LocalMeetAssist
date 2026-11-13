@@ -33,9 +33,22 @@ test('same-URL reload cannot rescue a previously old matching tab',async()=>{
   const ctx=await active();await remove(ctx,1);await ctx.app.tabEvent({kind:'navigation',id:2,url:b,at:ctx.app.now()});
   assert.equal(ctx.app.control.data.controller.id,1);await ctx.timers.advance(5000);assert.equal(commands(ctx).length,1);
 });
-test('a changed matching URL in the same controller tab is a new variant and resumes without delay',async()=>{
+test('a changed matching URL in the same controller tab starts a new meeting after the debounce',async()=>{
   const ctx=await active({detectionDelaySeconds:3});ctx.api.tabs[0].url=b;await ctx.app.tabEvent({kind:'navigation',id:1,url:b,at:ctx.app.now()});
-  assert.equal(ctx.app.control.data.controller.url,b);assert.equal(ctx.app.control.data.origin.url,a);assert.equal(ctx.app.control.data.stopAt,undefined);
+  assert.equal(ctx.app.control.data.pageChange.url,b);assert.equal(ctx.app.control.data.stopAt,undefined);
+  await ctx.timers.advance(2999);assert.equal(commands(ctx).length,0);
+  await ctx.timers.advance(1);assert(commands(ctx).at(-1).urls.includes(core.CONTROL_URLS.stop));
+  const command=commands(ctx).at(-1);
+  ctx.socket.message({type:'ack',seq:command.seq,command_id:command.command_id,command_result:'applied'});
+  ctx.socket.message(serverState({state:'idle',owner:false,recording_revision:2}));await settle();
+  await ctx.timers.advance(3000);
+  assert(tabsMessages(ctx.socket).at(-1).urls.includes(b));
+});
+test('query-only navigation within the same meeting page does not start a new meeting',async()=>{
+  const ctx=await active({detectionDelaySeconds:3});const withQuery=a+'?authuser=0';
+  ctx.api.tabs[0].url=withQuery;await ctx.app.tabEvent({kind:'navigation',id:1,url:withQuery,at:ctx.app.now()});
+  assert.equal(ctx.app.control.data.pageChange,undefined);
+  await ctx.timers.advance(3000);assert.equal(commands(ctx).length,0);
 });
 test('decline excludes all open pages, a fresh same-GLOB tab is eligible after three seconds',async()=>{
   const ctx=await setup({api:fakeApi({detectionDelaySeconds:3,tabs:[{id:1,url:a},{id:2,url:b}]})});
@@ -121,10 +134,11 @@ test('rejected timed stop is not retried in a tight loop',async()=>{
   for(let i=0;i<3;i++)await ctx.app.snapshot(true);
   assert.equal(commands(ctx).length,1);assert.equal(ctx.app.command,null);assert(ctx.app.publicStatus().commandError);
 });
-test('delayed processing of navigation uses the observed event time for continuation',async()=>{
+test('delayed processing of navigation uses the observed event time for the page-change deadline',async()=>{
   const ctx=await active({detectionDelaySeconds:3});ctx.api.tabs[0].url=b;
-  await ctx.app.tabEvent({kind:'navigation',id:1,url:b,at:ctx.app.now()-10});
-  assert.equal(ctx.app.control.data.controller.url,b);assert.equal(ctx.app.control.data.stopAt,undefined);
+  const observed=ctx.app.now()-10;
+  await ctx.app.tabEvent({kind:'navigation',id:1,url:b,at:observed});
+  assert.equal(ctx.app.control.data.pageChange.url,b);assert.equal(ctx.app.control.data.pageChange.at,observed);
 });
 test('missed end/start while offline drops old controller before an expired stop can affect new recording',async()=>{
   const ctx=await active();ctx.socket.close();await settle();await remove(ctx,1);

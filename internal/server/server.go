@@ -183,6 +183,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/v1/meetings/", s.meetingPath)
 	mux.HandleFunc("/api/v1/people", s.people)
 	mux.HandleFunc("/api/v1/people/", s.personPath)
+	mux.HandleFunc("/api/v1/voice/calibration", s.voiceCalibration)
 	mux.HandleFunc("/api/v1/recordings", s.recordings)
 	mux.HandleFunc("/api/v1/recordings/", s.recordingPath)
 	mux.HandleFunc("/api/v1/conference-detection", s.conferenceDetection)

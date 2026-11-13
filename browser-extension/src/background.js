@@ -140,7 +140,16 @@
         const tabs=await this.api.queryTabs(); if(epoch!==this.epoch||generation!==client.generation)return;
         if (this.control.data.needsEmpty) {
           this.tracker.collect(tabs,this.expressions,this.settings,this.config.enabled);
-          this.tracker.invalidate(); delete this.control.data.candidate;
+          const nextPage = this.control.data.pageChange;
+          if (nextPage) {
+            // A page change must keep the new page alive while the old recording
+            // is being finalized; otherwise the stop invalidates its only
+            // candidate and the new meeting never starts.
+            this.tracker.invalidate(nextPage.id);
+            delete this.control.data.candidate;
+          } else {
+            this.tracker.invalidate(); delete this.control.data.candidate;
+          }
           if (this.config.enabled && client.hasState && this.recordingKnown && client.sendTabs([])!==null) {
             this.sentSignature='[]'; delete this.control.data.needsEmpty;
           }
