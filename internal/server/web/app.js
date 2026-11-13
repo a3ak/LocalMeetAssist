@@ -819,7 +819,7 @@ async function openSplitDialog() {
     toast(t("split.tooShort"));
     return;
   }
-  const artifact = preferredAudioArtifact(detail.artifacts || [], "system");
+  const artifact = preferredAudioArtifact(detail.artifacts || [], "mixed");
   const url = artifact ? audioArtifactURL(uid, artifact) : "";
   state.split = { uid, meeting, duration, splitMS: Math.round((60000 + duration - 60000) / 2 / 1000) * 1000, audioURL: url };
   $("#splitMeta").textContent = `${meeting.title} · ${formatDuration(duration)}`;
@@ -849,6 +849,10 @@ async function openSplitDialog() {
   } else {
     confirm.disabled = true;
     error.textContent = t("split.audioUnavailable");
+  }
+  const hasRemoteAudio = (detail.artifacts || []).some((item) => ["system_wav", "mixed_wav", "imported_mixed_wav", "mixed_opus", "mixed_mp3"].includes(item.type));
+  if (url && !hasRemoteAudio) {
+    error.textContent = t("split.noSystemAudio");
   }
   setSplitPoint(state.split.splitMS, false);
   $("#splitDialog").showModal();

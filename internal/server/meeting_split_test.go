@@ -177,3 +177,86 @@ func TestSplitMeetingKeepsTranscriptAndSpeakerLinks(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitMeetingFallsBackToMixedForMissingSystem(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.App.DataDir = t.TempDir()
+	cfg.Storage.DatabasePath = filepath.Join(cfg.App.DataDir, "database", "meetings.db")
+	st, err := store.Open(cfg.Storage.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	started := time.Now().Add(-3 * time.Minute)
+	finished := started.Add(3 * time.Minute)
+	meeting := model.Meeting{UID: "meeting-mixed-split", Title: "Mixed", StartedAt: started, FinishedAt: &finished, DurationMS: 180000, Status: "completed", CreatedAt: started, UpdatedAt: started}
+	if err := st.SaveMeeting(meeting); err != nil {
+		t.Fatal(err)
+	}
+	audioDir := filepath.Join(cfg.App.DataDir, "meetings", started.Format("2006"), started.Format("01"), meeting.UID, "audio")
+	if err := os.MkdirAll(audioDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name string, amplitude int16) string {
+		path := filepath.Join(audioDir, name)
+		writer, err := audio.NewWAVWriter(path, 16000, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pcm := make([]byte, 180000*32)
+		for index := 0; index < len(pcm); index += 2 {
+			binary.LittleEndian.PutUint16(pcm[index:], uint16(amplitude))
+		}
+		if err := writer.WritePCM16(pcm); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	micPath := write("microphone.wav", 1000)
+	mixedPath := write("mixed.wav", 3000)
+	s := New(cfg, st, log.New(io.Discard, "", 0))
+	if _, err := s.makeArtifact(meeting.UID, "mic_wav", micPath, "audio/wav", "generated"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.makeArtifact(meeting.UID, "mixed_wav", mixedPath, "audio/wav", "generated"); err != nil {
+		t.Fatal(err)
+	}
+	reqBody := bytes.NewBufferString(`{"split_ms":100000}`)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/meetings/"+meeting.UID+"/split", reqBody)
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Meeting-Token", s.token)
+	recorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("split failed: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		First  model.Meeting `json:"first"`
+		Second model.Meeting `json:"second"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	for _, part := range []model.Meeting{response.First, response.Second} {
+		for _, name := range []string{"microphone.wav", "system.wav", "mixed.wav"} {
+			path := filepath.Join(s.meetingDir(part), "audio", name)
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatalf("missing %s for %s: %v", name, part.UID, err)
+			}
+			nonZero := false
+			for _, value := range data[44:] {
+				if value != 0 {
+					nonZero = true
+					break
+				}
+			}
+			if !nonZero {
+				t.Fatalf("%s is silent for %s; mixed fallback was not used", name, part.UID)
+			}
+		}
+	}
+}

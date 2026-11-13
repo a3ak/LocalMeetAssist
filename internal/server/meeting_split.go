@@ -278,18 +278,22 @@ func (s *Server) splitMeetingAudio(original, first, second model.Meeting, splitM
 	micSource := s.splitAudioSource(original, "mic_wav", "microphone.wav")
 	systemSource := s.splitAudioSource(original, "system_wav", "system.wav")
 	mixedSource := s.splitAudioSource(original, "mixed_wav", "mixed.wav")
+	if mixedSource == "" {
+		mixedSource = s.splitAudioSource(original, "imported_mixed_wav", "mixed.wav")
+	}
+	s.logger.Printf("meeting split audio uid=%s mic=%t system=%t mixed=%t", original.UID, micSource != "", systemSource != "", mixedSource != "")
 	cleanup := make([]string, 0)
 	defer func() {
 		for _, path := range cleanup {
 			_ = os.Remove(path)
 		}
 	}()
-	if micSource == "" && systemSource == "" {
-		if mixedSource == "" {
-			archive := s.splitArchiveSource(original)
-			if archive == "" {
-				return nil
-			}
+	// When a separate track is missing (a mixed-source meeting, or an archived
+	// meeting with only mixed.opus), decode the mixed archive to fill the gap.
+	// Otherwise the split would produce a silent system track and the remote
+	// participants would disappear.
+	if mixedSource == "" && (micSource == "" || systemSource == "") {
+		if archive := s.splitArchiveSource(original); archive != "" {
 			temp := filepath.Join(os.TempDir(), "lma-split-"+shortUID(original.UID)+".wav")
 			if err := audio.NormalizeImportedAudio(archive, temp); err != nil {
 				return fmt.Errorf("decode archived audio: %w", err)
@@ -297,6 +301,9 @@ func (s *Server) splitMeetingAudio(original, first, second model.Meeting, splitM
 			mixedSource = temp
 			cleanup = append(cleanup, temp)
 		}
+	}
+	if micSource == "" && systemSource == "" && mixedSource == "" {
+		return nil
 	}
 	for _, part := range []model.Meeting{first, second} {
 		if err := s.splitPartAudio(original, part, splitMS, micSource, systemSource, mixedSource, artifacts); err != nil {
@@ -345,36 +352,30 @@ func (s *Server) splitPartAudio(original, part model.Meeting, splitMS int64, mic
 	micPath := filepath.Join(audioDir, "microphone.wav")
 	systemPath := filepath.Join(audioDir, "system.wav")
 	mixedPath := filepath.Join(audioDir, "mixed.wav")
-	if micSource != "" || systemSource != "" {
-		if err := writeSplitTrack(micSource, micPath, start, duration); err != nil {
+	micInput := micSource
+	systemInput := systemSource
+	if micInput == "" && mixedSource != "" {
+		micInput = mixedSource
+	}
+	if systemInput == "" && mixedSource != "" {
+		systemInput = mixedSource
+	}
+	if micInput != "" || systemInput != "" {
+		if err := writeSplitTrack(micInput, micPath, start, duration); err != nil {
 			return fmt.Errorf("split microphone: %w", err)
 		}
-		if err := writeSplitTrack(systemSource, systemPath, start, duration); err != nil {
+		if err := writeSplitTrack(systemInput, systemPath, start, duration); err != nil {
 			return fmt.Errorf("split system audio: %w", err)
 		}
-		if micSource == "" {
-			if err := audio.CreateSilentPCM16WAVLike(systemPath, micPath); err != nil {
+		if mixedSource != "" {
+			if err := writeSplitTrack(mixedSource, mixedPath, start, duration); err != nil {
+				return fmt.Errorf("split mixed audio: %w", err)
+			}
+		} else {
+			cfg := s.config()
+			if err := audio.MixPCM16WAV(micPath, systemPath, mixedPath, cfg.Audio.MicrophoneGain, cfg.Audio.SystemGain); err != nil {
 				return err
 			}
-		}
-		if systemSource == "" {
-			if err := audio.CreateSilentPCM16WAVLike(micPath, systemPath); err != nil {
-				return err
-			}
-		}
-		cfg := s.config()
-		if err := audio.MixPCM16WAV(micPath, systemPath, mixedPath, cfg.Audio.MicrophoneGain, cfg.Audio.SystemGain); err != nil {
-			return err
-		}
-	} else if mixedSource != "" {
-		if err := writeSplitTrack(mixedSource, mixedPath, start, duration); err != nil {
-			return fmt.Errorf("split mixed audio: %w", err)
-		}
-		if err := audio.CreateSilentPCM16WAVLike(mixedPath, micPath); err != nil {
-			return err
-		}
-		if err := audio.CreateSilentPCM16WAVLike(mixedPath, systemPath); err != nil {
-			return err
 		}
 	} else {
 		return nil
@@ -645,7 +646,7 @@ func splitCandidates(candidates []model.VoiceCandidate, splitMS int64) ([]model.
 
 func (s *Server) copySplitAttachments(original, first, second model.Meeting, artifacts *[]model.Artifact) error {
 	skip := map[string]bool{
-		"mic_wav": true, "system_wav": true, "mixed_wav": true, "mixed_opus": true, "mixed_mp3": true,
+		"mic_wav": true, "system_wav": true, "mixed_wav": true, "imported_mixed_wav": true, "mixed_opus": true, "mixed_mp3": true,
 		"mic_clean_wav": true,
 		"transcript":    true, "microphone_transcript_json": true, "system_transcript_json": true,
 		"mixed_transcript_json": true, "diarization_json": true, "summary": true,
