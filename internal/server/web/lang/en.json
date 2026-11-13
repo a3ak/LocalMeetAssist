@@ -99,6 +99,7 @@
   "split.confirm": "Split",
   "split.tooShort": "A meeting shorter than two minutes cannot be split",
   "split.audioUnavailable": "Meeting audio is unavailable — the meeting cannot be split",
+  "split.preparingAudio": "Preparing a mixed track for playback…",
   "split.noSystemAudio": "The source meeting has no system or mixed audio — the parts will contain the microphone only.",
   "split.invalidTime": "Use the 32:15 or 1:02:15 format",
   "split.titlesRequired": "Fill in both titles",

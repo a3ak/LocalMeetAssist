@@ -317,3 +317,136 @@ func TestBackfillSplitJobs(t *testing.T) {
 		t.Fatalf("second backfill repaired %d meetings, want 0", repaired)
 	}
 }
+
+func TestSplitPreviewBuildsMixedTrack(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.App.DataDir = t.TempDir()
+	cfg.Storage.DatabasePath = filepath.Join(cfg.App.DataDir, "database", "meetings.db")
+	st, err := store.Open(cfg.Storage.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	started := time.Now().Add(-3 * time.Minute)
+	finished := started.Add(3 * time.Minute)
+	meeting := model.Meeting{UID: "meeting-preview", Title: "Preview", StartedAt: started, FinishedAt: &finished, DurationMS: 180000, Status: "completed", CreatedAt: started, UpdatedAt: started}
+	if err := st.SaveMeeting(meeting); err != nil {
+		t.Fatal(err)
+	}
+	audioDir := filepath.Join(cfg.App.DataDir, "meetings", started.Format("2006"), started.Format("01"), meeting.UID, "audio")
+	if err := os.MkdirAll(audioDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, item := range []struct {
+		kind, name string
+		amplitude  int16
+	}{{"mic_wav", "microphone.wav", 1000}, {"system_wav", "system.wav", 2500}} {
+		path := filepath.Join(audioDir, item.name)
+		writer, err := audio.NewWAVWriter(path, 16000, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		pcm := make([]byte, 180000*32)
+		for index := 0; index < len(pcm); index += 2 {
+			binary.LittleEndian.PutUint16(pcm[index:], uint16(item.amplitude))
+		}
+		if err := writer.WritePCM16(pcm); err != nil {
+			t.Fatal(err)
+		}
+		if err := writer.Close(); err != nil {
+			t.Fatal(err)
+		}
+		s := New(cfg, st, log.New(io.Discard, "", 0))
+		if _, err := s.makeArtifact(meeting.UID, item.kind, path, "audio/wav", "generated"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	s := New(cfg, st, log.New(io.Discard, "", 0))
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/meetings/"+meeting.UID+"/preview-audio", nil)
+	req.Header.Set("X-Meeting-Token", s.token)
+	recorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Artifact model.Artifact `json:"artifact"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.Artifact.Type != "mixed_wav" {
+		t.Fatalf("artifact type=%q, want mixed_wav", response.Artifact.Type)
+	}
+	if duration, err := audio.PCM16WAVDurationMS(response.Artifact.Path); err != nil || duration != 180000 {
+		t.Fatalf("preview duration=%d error=%v, want 180000", duration, err)
+	}
+}
+
+func TestSplitPreviewPadsShortSystemToMeetingDuration(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.App.DataDir = t.TempDir()
+	cfg.Storage.DatabasePath = filepath.Join(cfg.App.DataDir, "database", "meetings.db")
+	st, err := store.Open(cfg.Storage.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	started := time.Now().Add(-3 * time.Minute)
+	finished := started.Add(3 * time.Minute)
+	meeting := model.Meeting{UID: "meeting-preview-short", Title: "Short system", StartedAt: started, FinishedAt: &finished, DurationMS: 180000, Status: "completed", CreatedAt: started, UpdatedAt: started}
+	if err := st.SaveMeeting(meeting); err != nil {
+		t.Fatal(err)
+	}
+	audioDir := filepath.Join(cfg.App.DataDir, "meetings", started.Format("2006"), started.Format("01"), meeting.UID, "audio")
+	if err := os.MkdirAll(audioDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	systemPath := filepath.Join(audioDir, "system.wav")
+	writer, err := audio.NewWAVWriter(systemPath, 16000, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pcm := make([]byte, 120000*32)
+	for index := 0; index < len(pcm); index += 2 {
+		binary.LittleEndian.PutUint16(pcm[index:], uint16(int16(2500)))
+	}
+	if err := writer.WritePCM16(pcm); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s := New(cfg, st, log.New(io.Discard, "", 0))
+	if _, err := s.makeArtifact(meeting.UID, "system_wav", systemPath, "audio/wav", "generated"); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/meetings/"+meeting.UID+"/preview-audio", nil)
+	req.Header.Set("X-Meeting-Token", s.token)
+	recorder := httptest.NewRecorder()
+	s.Handler().ServeHTTP(recorder, req)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("preview failed: %d %s", recorder.Code, recorder.Body.String())
+	}
+	var response struct {
+		Artifact model.Artifact `json:"artifact"`
+	}
+	if err := json.Unmarshal(recorder.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if duration, err := audio.PCM16WAVDurationMS(response.Artifact.Path); err != nil || duration != 180000 {
+		t.Fatalf("preview duration=%d error=%v, want 180000", duration, err)
+	}
+	file, err := os.Open(response.Artifact.Path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := audio.ReadWAVInfo(file)
+	_ = file.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.DataSize != 180000*32 {
+		t.Fatalf("preview data=%d, want %d", info.DataSize, 180000*32)
+	}
+}

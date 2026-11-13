@@ -87,6 +87,8 @@ func (s *Server) meetingPath(w http.ResponseWriter, r *http.Request) {
 	switch parts[1] {
 	case "split":
 		s.splitMeeting(w, r, uid)
+	case "preview-audio":
+		s.splitPreviewAudio(w, r, uid)
 	case "artifacts":
 		if len(parts) == 2 {
 			s.artifacts(w, r, uid)

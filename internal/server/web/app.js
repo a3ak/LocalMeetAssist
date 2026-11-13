@@ -819,7 +819,18 @@ async function openSplitDialog() {
     toast(t("split.tooShort"));
     return;
   }
-  const artifact = preferredAudioArtifact(detail.artifacts || [], "mixed");
+  const hasMixed = (detail.artifacts || []).some((item) => ["mixed_wav", "imported_mixed_wav", "mixed_opus", "mixed_mp3"].includes(item.type));
+  let artifact = preferredAudioArtifact(detail.artifacts || [], "mixed");
+  if (!hasMixed) toast(t("split.preparingAudio"));
+  try {
+    const prepared = await api(`/api/v1/meetings/${encodeURIComponent(uid)}/preview-audio`, { method: "POST", timeoutMs: 10 * 60 * 1000 });
+    if (prepared?.artifact) {
+      artifact = prepared.artifact;
+      detail.artifacts = [...(detail.artifacts || []).filter((item) => item.type !== prepared.artifact.type), prepared.artifact];
+    }
+  } catch {
+    // Fall back to the microphone or system track; the warning below explains it.
+  }
   const url = artifact ? audioArtifactURL(uid, artifact) : "";
   state.split = { uid, meeting, duration, splitMS: Math.round((60000 + duration - 60000) / 2 / 1000) * 1000, audioURL: url };
   $("#splitMeta").textContent = `${meeting.title} · ${formatDuration(duration)}`;
