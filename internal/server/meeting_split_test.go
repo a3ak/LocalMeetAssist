@@ -175,6 +175,29 @@ func TestSplitMeetingKeepsTranscriptAndSpeakerLinks(t *testing.T) {
 		if part.Summary != "" || part.SummaryStatus == "completed" {
 			t.Fatalf("summary must be reset for %s: %+v", part.UID, part)
 		}
+		jobs, err := st.Jobs(part.UID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		byStage := make(map[string]model.Job, len(jobs))
+		for _, job := range jobs {
+			byStage[job.Stage] = job
+		}
+		for _, stage := range []string{"transcribing", "diarizing", "deduplicating", "merging", "matching", "summarizing", "enrolling", "encoding"} {
+			if _, ok := byStage[stage]; !ok {
+				t.Fatalf("missing %s job for split part %s: %+v", stage, part.UID, jobs)
+			}
+		}
+		for _, stage := range []string{"transcribing", "diarizing", "deduplicating", "merging"} {
+			if byStage[stage].Status != "completed" {
+				t.Fatalf("%s job for %s must be completed: %+v", stage, part.UID, byStage[stage])
+			}
+		}
+		for _, stage := range []string{"matching", "summarizing", "enrolling", "encoding"} {
+			if byStage[stage].Status != "not_started" {
+				t.Fatalf("%s job for %s must be not_started: %+v", stage, part.UID, byStage[stage])
+			}
+		}
 	}
 }
 
@@ -258,5 +281,39 @@ func TestSplitMeetingFallsBackToMixedForMissingSystem(t *testing.T) {
 				t.Fatalf("%s is silent for %s; mixed fallback was not used", name, part.UID)
 			}
 		}
+	}
+}
+
+func TestBackfillSplitJobs(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.App.DataDir = t.TempDir()
+	cfg.Storage.DatabasePath = filepath.Join(cfg.App.DataDir, "database", "meetings.db")
+	st, err := store.Open(cfg.Storage.DatabasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	started := time.Now()
+	meeting := model.Meeting{
+		UID: "old-split-part", Title: "Old split", StartedAt: started, Status: "completed",
+		SummaryStatus: "disabled", Metadata: map[string]string{"split_from": "original"}, CreatedAt: started, UpdatedAt: started,
+	}
+	if err := st.SaveMeeting(meeting); err != nil {
+		t.Fatal(err)
+	}
+	s := New(cfg, st, log.New(io.Discard, "", 0))
+	if repaired := s.BackfillSplitJobs(); repaired != 1 {
+		t.Fatalf("repaired=%d, want 1", repaired)
+	}
+	jobs, err := st.Jobs(meeting.UID)
+	if err != nil || len(jobs) == 0 {
+		t.Fatalf("jobs were not restored: %+v %v", jobs, err)
+	}
+	updated, _ := st.Meeting(meeting.UID)
+	if updated.SummaryStatus != "pending" {
+		t.Fatalf("summary status=%q, want pending", updated.SummaryStatus)
+	}
+	if repaired := s.BackfillSplitJobs(); repaired != 0 {
+		t.Fatalf("second backfill repaired %d meetings, want 0", repaired)
 	}
 }

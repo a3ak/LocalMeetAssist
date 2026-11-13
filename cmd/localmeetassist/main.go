@@ -150,6 +150,9 @@ func main() {
 	if recovered := app.RecoverInterruptedRecordings(); recovered > 0 {
 		appLogging.Infof(logger, "interrupted recordings recovered count=%d", recovered)
 	}
+	if repaired := app.BackfillSplitJobs(); repaired > 0 {
+		appLogging.Infof(logger, "split processing jobs restored count=%d", repaired)
+	}
 	app.PrepareInference()
 	listener, err := app.Listen()
 	if err != nil {

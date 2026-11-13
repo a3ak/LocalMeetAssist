@@ -260,7 +260,7 @@ func (s *Store) DeleteMeeting(uid string) ([]model.Artifact, error) {
 // SplitMeetingState atomically replaces one meeting with two parts. The caller
 // prepares audio, transcript files and artifact records; either both parts and
 // all their state appear in bbolt, or the original meeting stays untouched.
-func (s *Store) SplitMeetingState(originalUID string, first, second model.Meeting, artifacts []model.Artifact, speakers []model.Speaker, segments map[string][]model.Segment) error {
+func (s *Store) SplitMeetingState(originalUID string, first, second model.Meeting, artifacts []model.Artifact, speakers []model.Speaker, segments map[string][]model.Segment, jobs []model.Job) error {
 	if originalUID == "" || first.UID == "" || second.UID == "" || first.UID == second.UID {
 		return errors.New("invalid split meeting state")
 	}
@@ -324,6 +324,14 @@ func (s *Store) SplitMeetingState(originalUID string, first, second model.Meetin
 				return errors.New("invalid split speaker")
 			}
 			if err := putJSON(tx.Bucket(bSpeakers), speaker.MeetingUID+"/"+speaker.ID, speaker); err != nil {
+				return err
+			}
+		}
+		for _, job := range jobs {
+			if job.UID == "" || job.Stage == "" || (job.MeetingUID != first.UID && job.MeetingUID != second.UID) {
+				return errors.New("invalid split job")
+			}
+			if err := putJSON(tx.Bucket(bJobs), job.MeetingUID+"/"+job.Stage, job); err != nil {
 				return err
 			}
 		}

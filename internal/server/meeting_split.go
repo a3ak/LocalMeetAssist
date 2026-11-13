@@ -91,7 +91,8 @@ func (s *Server) splitMeeting(w http.ResponseWriter, r *http.Request, uid string
 		}
 		renamed = true
 	}
-	if err := s.store.SplitMeetingState(meeting.UID, first, second, artifacts, speakers, segments); err != nil {
+	jobs := append(splitMeetingJobs(first.UID), splitMeetingJobs(second.UID)...)
+	if err := s.store.SplitMeetingState(meeting.UID, first, second, artifacts, speakers, segments, jobs); err != nil {
 		if renamed {
 			_ = os.Rename(backupDir, originalDir)
 		}
@@ -127,7 +128,7 @@ func (s *Server) splitPartMeeting(original model.Meeting, duration, startMS int6
 	part.LastError = ""
 	part.Transcript = ""
 	part.Summary = ""
-	part.SummaryStatus = "disabled"
+	part.SummaryStatus = "pending"
 	part.ArtifactUIDs = nil
 	part.SpeakerCount = 0
 	part.CreatedAt = now
@@ -215,6 +216,87 @@ func (s *Server) buildSplitState(original model.Meeting, first, second *model.Me
 	}
 	speakers := append(append([]model.Speaker(nil), firstSpeakers...), secondSpeakers...)
 	return artifacts, speakers, map[string][]model.Segment{first.UID: firstSegments, second.UID: secondSegments}, nil
+}
+
+// BackfillSplitJobs restores the processing rows for meetings split before
+// jobs were copied into the parts. It only touches meetings marked with
+// split_from and leaves meetings that already have jobs untouched.
+func (s *Server) BackfillSplitJobs() int {
+	meetings, err := s.store.ListMeetings(nil, nil)
+	if err != nil {
+		s.logger.Printf("split job backfill: list meetings: %v", err)
+		return 0
+	}
+	repaired := 0
+	for _, meeting := range meetings {
+		if meeting.Metadata["split_from"] == "" {
+			continue
+		}
+		jobs, err := s.store.Jobs(meeting.UID)
+		if err != nil {
+			continue
+		}
+		existing := make(map[string]bool, len(jobs))
+		for _, job := range jobs {
+			existing[job.Stage] = true
+		}
+		added := 0
+		for _, job := range splitMeetingJobs(meeting.UID) {
+			if existing[job.Stage] {
+				continue
+			}
+			if err := s.store.SaveJob(job); err != nil {
+				s.logger.Printf("split job backfill: save %s/%s: %v", meeting.UID, job.Stage, err)
+				continue
+			}
+			added++
+		}
+		if added == 0 {
+			continue
+		}
+		if meeting.SummaryStatus == "disabled" && meeting.Summary == "" {
+			meeting.SummaryStatus = "pending"
+			meeting.UpdatedAt = time.Now()
+			_ = s.store.SaveMeeting(meeting)
+		}
+		repaired++
+	}
+	return repaired
+}
+
+// splitMeetingJobs initializes the processing tab for a split part. Transcription
+// and diarization were carried over from the source, while summary, matching,
+// enrollment and audio archiving still need to be run manually.
+func splitMeetingJobs(meetingUID string) []model.Job {
+	now := time.Now()
+	statuses := []struct {
+		stage  string
+		status string
+	}{
+		{"transcribing", "completed"},
+		{"diarizing", "completed"},
+		{"deduplicating", "completed"},
+		{"merging", "completed"},
+		{"matching", "not_started"},
+		{"summarizing", "not_started"},
+		{"enrolling", "not_started"},
+		{"encoding", "not_started"},
+	}
+	jobs := make([]model.Job, 0, len(statuses))
+	for _, item := range statuses {
+		progress := 0
+		attempts := 0
+		if item.status == "completed" {
+			progress = 100
+			attempts = 1
+		}
+		jobs = append(jobs, model.Job{
+			UID: uuidv7.New(), MeetingUID: meetingUID, Stage: item.stage,
+			Status: item.status, Attempts: attempts, Progress: progress,
+			CreatedAt: now, UpdatedAt: now,
+		})
+	}
+	return jobs
 }
 
 func speakerNames(speakers []model.Speaker) map[string]string {
