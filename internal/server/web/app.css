@@ -704,6 +704,20 @@ main{grid-template-columns:minmax(0,1fr) minmax(260px,340px)!important}
 
 /* Диалог известных спикеров повторяет поведение моделей: фиксированная
    высота, прокручивается только список профилей. */
+#splitDialog{max-width:min(760px,calc(100vw - 24px));padding:0}
+#splitDialog .split-card{width:100%}
+.split-body{display:flex;flex-direction:column;gap:14px;padding:4px 0 10px}
+.split-body audio{width:100%}
+.split-timeline{display:flex;flex-direction:column;gap:6px}
+.split-timeline input[type=range]{width:100%;accent-color:var(--accent)}
+.split-time-row{display:flex;justify-content:space-between;color:var(--muted);font-size:11px;font-variant-numeric:tabular-nums}
+.split-time-row #splitPoint{color:var(--accent-ink);font-weight:700}
+.split-fields{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.split-fields label{display:flex;flex-direction:column;gap:6px;font-size:12px;font-weight:700;margin:0}
+.split-fields label:first-child{grid-column:1/-1}
+.split-fields input{width:100%}
+.split-error{color:var(--danger);font-size:12px;min-height:16px}
+@media(max-width:600px){.split-fields{grid-template-columns:1fr}}
 #peopleDialog{max-width:min(760px,calc(100vw - 24px));max-height:min(86vh,900px);overflow:hidden;padding:0}
 #peopleDialog .people-card{display:flex;flex-direction:column;width:100%;height:min(86vh,900px);max-height:min(86vh,900px);min-height:0;overflow:hidden;padding-bottom:0}
 #peopleDialog .people-list{flex:1 1 auto;min-height:0;overflow-y:auto;overscroll-behavior:contain;padding-bottom:22px}

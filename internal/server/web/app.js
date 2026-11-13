@@ -29,6 +29,7 @@ const state = {
   searchRequest: 0,
   conferenceCandidate: null,
   selectedMeetings: new Set(),
+  split: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -717,12 +718,16 @@ function toggleMeetingSelection(uid) {
 function updateMeetingSelectionHeader() {
   const count = state.selectedMeetings.size;
   const label = $("#selectedMeetingCount");
-  const button = $("#mergeMeetings");
+  const merge = $("#mergeMeetings");
+  const split = $("#splitMeeting");
   label.textContent = t("meetings.selected", { count });
-  button.setAttribute("aria-label", t("meetings.merge"));
+  merge.setAttribute("aria-label", t("meetings.merge"));
+  split.setAttribute("aria-label", t("meetings.split"));
   label.classList.toggle("hidden", count === 0);
-  button.classList.toggle("hidden", count === 0);
-  button.disabled = count < 2;
+  merge.classList.toggle("hidden", count === 0);
+  merge.disabled = count < 2;
+  split.classList.toggle("hidden", count !== 1);
+  split.disabled = count !== 1;
 }
 
 async function mergeSelectedMeetings() {
@@ -739,6 +744,149 @@ async function mergeSelectedMeetings() {
   } catch (error) {
     toast(error.message);
     updateMeetingSelectionHeader();
+  }
+}
+
+function splitTimecode(ms) {
+  const total = Math.max(0, Math.floor(Number(ms || 0) / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  const pad = (value) => String(value).padStart(2, "0");
+  return hours > 0 ? `${hours}:${pad(minutes)}:${pad(seconds)}` : `${pad(minutes)}:${pad(seconds)}`;
+}
+
+function parseSplitTimecode(value) {
+  const parts = String(value || "").trim().split(":").map(Number);
+  if (!parts.length || parts.some((part) => !Number.isFinite(part) || part < 0)) return null;
+  if (parts.length === 1) return parts[0] * 1000;
+  if (parts.length === 2) return (parts[0] * 60 + parts[1]) * 1000;
+  if (parts.length === 3) return (parts[0] * 3600 + parts[1] * 60 + parts[2]) * 1000;
+  return null;
+}
+
+function resetSplitAudio() {
+  const audio = $("#splitAudio");
+  if (audio) {
+    audio.pause();
+    audio.removeAttribute("src");
+    audio.load();
+  }
+  state.split = null;
+}
+
+function setSplitPoint(value, seek = false) {
+  const split = state.split;
+  if (!split) return;
+  const range = $("#splitRange");
+  const min = Number(range.min);
+  const max = Number(range.max);
+  const clamped = Math.max(min, Math.min(max, Math.round(Number(value || 0) / 1000) * 1000));
+  split.splitMS = clamped;
+  range.value = String(clamped);
+  $("#splitTimeInput").value = splitTimecode(clamped);
+  $("#splitPoint").textContent = splitTimecode(clamped);
+  if (seek) {
+    const audio = $("#splitAudio");
+    if (audio && audio.src) {
+      try { audio.currentTime = clamped / 1000; } catch {}
+    }
+  }
+}
+
+async function openSplitDialog() {
+  if (state.selectedMeetings.size !== 1) return;
+  const uid = [...state.selectedMeetings][0];
+  let detail;
+  try {
+    detail = await api(`/api/v1/meetings/${uid}`);
+  } catch (error) {
+    toast(error.message);
+    return;
+  }
+  if (detail.processing_active) {
+    toast(t("split.processing"));
+    return;
+  }
+  const meeting = detail.meeting;
+  if (meeting.status !== "completed" && meeting.status !== "warning") {
+    toast(t("split.notCompleted"));
+    return;
+  }
+  const duration = Number(meeting.duration_ms || 0);
+  if (duration < 2 * 60 * 1000) {
+    toast(t("split.tooShort"));
+    return;
+  }
+  const artifact = preferredAudioArtifact(detail.artifacts || [], "system");
+  const url = artifact ? audioArtifactURL(uid, artifact) : "";
+  state.split = { uid, meeting, duration, splitMS: Math.round((60000 + duration - 60000) / 2 / 1000) * 1000, audioURL: url };
+  $("#splitMeta").textContent = `${meeting.title} · ${formatDuration(duration)}`;
+  $("#splitDuration").textContent = splitTimecode(duration);
+  $("#splitCurrent").textContent = "00:00";
+  $("#splitFirstTitle").value = `${meeting.title} — часть 1`;
+  $("#splitSecondTitle").value = `${meeting.title} — часть 2`;
+  const range = $("#splitRange");
+  range.min = "60000";
+  range.max = String(duration - 60000);
+  range.step = "1000";
+  const audio = $("#splitAudio");
+  audio.pause();
+  audio.removeAttribute("src");
+  audio.load();
+  const confirm = $("#confirmSplit");
+  const error = $("#splitError");
+  error.textContent = "";
+  confirm.disabled = false;
+  if (url) {
+    audio.src = url;
+    audio.load();
+    audio.addEventListener("loadedmetadata", () => {
+      if (!state.split) return;
+      try { audio.currentTime = state.split.splitMS / 1000; } catch {}
+    }, { once: true });
+  } else {
+    confirm.disabled = true;
+    error.textContent = t("split.audioUnavailable");
+  }
+  setSplitPoint(state.split.splitMS, false);
+  $("#splitDialog").showModal();
+}
+
+async function confirmSplitMeeting() {
+  const split = state.split;
+  if (!split) return;
+  const firstTitle = $("#splitFirstTitle").value.trim();
+  const secondTitle = $("#splitSecondTitle").value.trim();
+  const error = $("#splitError");
+  const typedTime = parseSplitTimecode($("#splitTimeInput").value);
+  if (typedTime === null) {
+    error.textContent = t("split.invalidTime");
+    return;
+  }
+  setSplitPoint(typedTime, false);
+  if (!firstTitle || !secondTitle) {
+    error.textContent = t("split.titlesRequired");
+    return;
+  }
+  const button = $("#confirmSplit");
+  button.disabled = true;
+  error.textContent = "";
+  try {
+    const result = await api(`/api/v1/meetings/${encodeURIComponent(split.uid)}/split`, {
+      method: "POST",
+      timeoutMs: 10 * 60 * 1000,
+      json: { split_ms: split.splitMS, first_title: firstTitle, second_title: secondTitle },
+    });
+    state.selectedMeetings.clear();
+    updateMeetingSelectionHeader();
+    closeDialog("#splitDialog");
+    await loadMeetings();
+    toast(t("split.done"));
+    if (result?.first?.uid) await openDetail(result.first.uid);
+  } catch (errorValue) {
+    error.textContent = errorValue.message;
+    button.disabled = false;
   }
 }
 
@@ -2506,6 +2654,28 @@ $("#startBtn").onclick = async () => {
 };
 $("#stopBtn").onclick = stopRecording;
 $("#mergeMeetings").onclick = mergeSelectedMeetings;
+$("#splitMeeting").onclick = openSplitDialog;
+$("#closeSplit").onclick = () => closeDialog("#splitDialog");
+$("#cancelSplit").onclick = () => closeDialog("#splitDialog");
+$("#confirmSplit").onclick = confirmSplitMeeting;
+$("#splitDialog").addEventListener("close", resetSplitAudio);
+$("#splitRange").oninput = () => setSplitPoint(Number($("#splitRange").value), true);
+$("#splitTimeInput").onchange = () => {
+  const parsed = parseSplitTimecode($("#splitTimeInput").value);
+  if (parsed === null) {
+    $("#splitError").textContent = t("split.invalidTime");
+    return;
+  }
+  $("#splitError").textContent = "";
+  setSplitPoint(parsed, true);
+};
+$("#splitAudio").addEventListener("play", () => pauseOtherAudio($("#splitAudio")));
+$("#splitAudio").addEventListener("timeupdate", () => {
+  const audio = $("#splitAudio");
+  if (state.split && Number.isFinite(audio.currentTime)) {
+    $("#splitCurrent").textContent = splitTimecode(audio.currentTime * 1000);
+  }
+});
 $("#recordForm").onsubmit = (event) => { event.preventDefault(); startRecording(); };
 $("#closeRecord").onclick = $("#cancelRecord").onclick = () => closeDialog("#recordDialog");
 $("#conferenceDialog").addEventListener("cancel", (event) => {

@@ -64,7 +64,7 @@
     </section>
 
     <aside class="sidebar">
-      <div class="sidebar-head"><h2 id="meetingListTitle" data-i18n="meetings.title">Встречи</h2><div class="sidebar-counts"><span id="selectedMeetingCount" class="count selected-count hidden"></span><button id="mergeMeetings" type="button" class="icon-action hidden" data-i18n-title="meetings.merge" title="Объединить выбранные встречи" aria-label="Объединить выбранные встречи"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 3v5a4 4 0 0 0 4 4h6"/><path d="M7 21v-5a4 4 0 0 1 4-4"/><path d="m14 8 4 4-4 4"/></svg></button><span id="meetingCount" class="count">0</span></div></div>
+      <div class="sidebar-head"><h2 id="meetingListTitle" data-i18n="meetings.title">Встречи</h2><div class="sidebar-counts"><span id="selectedMeetingCount" class="count selected-count hidden"></span><button id="mergeMeetings" type="button" class="icon-action hidden" data-i18n-title="meetings.merge" title="Объединить выбранные встречи" aria-label="Объединить выбранные встречи"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M7 3v5a4 4 0 0 0 4 4h6"/><path d="M7 21v-5a4 4 0 0 1 4-4"/><path d="m14 8 4 4-4 4"/></svg></button><button id="splitMeeting" type="button" class="icon-action hidden" data-i18n-title="meetings.split" title="Разделить встречу" aria-label="Разделить встречу"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M20 4 8.12 15.88"/><path d="M14.47 14.48 20 20"/><path d="M8.12 8.12 12 12"/></svg></button><span id="meetingCount" class="count">0</span></div></div>
       <div id="meetingList" class="meeting-list"></div>
     </aside>
   </main>
@@ -125,6 +125,27 @@
     <div class="dialog-card people-card">
       <div class="dialog-head"><div><h2 data-i18n="people.title">Спикеры</h2><div class="meta" data-i18n="people.meta">Сохранённые голоса. Здесь можно прослушать образцы, уточнить имя и удалить ошибочные записи.</div></div><div class="dialog-head-actions"><button id="deleteAllPeople" type="button" class="danger ghost small" data-i18n="people.deleteAll">Удалить всех</button><button id="closePeople" type="button" class="icon-btn">×</button></div></div>
       <div id="peopleList" class="people-list"></div>
+    </div>
+  </dialog>
+
+  <dialog id="splitDialog">
+    <div class="dialog-card split-card">
+      <div class="dialog-head"><div><h2 data-i18n="split.title">Разделить встречу</h2><div class="meta" id="splitMeta" data-i18n="split.meta">Выберите точку разделения, прослушайте запись и задайте названия частей.</div></div><button id="closeSplit" type="button" class="icon-btn" aria-label="Закрыть">×</button></div>
+      <div class="split-body">
+        <audio id="splitAudio" controls preload="metadata"></audio>
+        <div class="split-timeline">
+          <input id="splitRange" type="range" min="60000" max="120000" step="1000" value="60000" aria-label="Точка разделения">
+          <div class="split-time-row"><span id="splitCurrent">00:00</span><span id="splitPoint">00:00</span><span id="splitDuration">00:00</span></div>
+        </div>
+        <div class="split-fields">
+          <label><span data-i18n="split.time">Время разделения</span><input id="splitTimeInput" value="00:00" autocomplete="off"></label>
+          <label><span data-i18n="split.firstTitle">Название первой части</span><input id="splitFirstTitle" autocomplete="off"></label>
+          <label><span data-i18n="split.secondTitle">Название второй части</span><input id="splitSecondTitle" autocomplete="off"></label>
+        </div>
+        <div class="hint" data-i18n="split.hint">Минимум по одной минуте в каждой части. Транскрипт, спикеры и служебные файлы будут разделены по выбранному времени.</div>
+        <div id="splitError" class="split-error"></div>
+      </div>
+      <div class="dialog-actions"><button id="cancelSplit" type="button" class="ghost" data-i18n="common.cancel">Отмена</button><button id="confirmSplit" type="button" class="primary" data-i18n="split.confirm">Разделить</button></div>
     </div>
   </dialog>
 

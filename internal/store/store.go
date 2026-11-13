@@ -257,6 +257,80 @@ func (s *Store) DeleteMeeting(uid string) ([]model.Artifact, error) {
 	return arts, err
 }
 
+// SplitMeetingState atomically replaces one meeting with two parts. The caller
+// prepares audio, transcript files and artifact records; either both parts and
+// all their state appear in bbolt, or the original meeting stays untouched.
+func (s *Store) SplitMeetingState(originalUID string, first, second model.Meeting, artifacts []model.Artifact, speakers []model.Speaker, segments map[string][]model.Segment) error {
+	if originalUID == "" || first.UID == "" || second.UID == "" || first.UID == second.UID {
+		return errors.New("invalid split meeting state")
+	}
+	if first.UID == originalUID || second.UID == originalUID {
+		return errors.New("split parts must have new uids")
+	}
+	return s.db.Update(func(tx *bolt.Tx) error {
+		meetings := tx.Bucket(bMeetings)
+		if meetings.Get([]byte(originalUID)) == nil {
+			return os.ErrNotExist
+		}
+		// Remove the original meeting and every record owned by it.
+		if err := meetings.Delete([]byte(originalUID)); err != nil {
+			return err
+		}
+		artifactBucket := tx.Bucket(bArtifacts)
+		var artifactKeys [][]byte
+		if err := artifactBucket.ForEach(func(k, v []byte) error {
+			var artifact model.Artifact
+			if err := json.Unmarshal(v, &artifact); err != nil {
+				return err
+			}
+			if artifact.MeetingUID == originalUID {
+				artifactKeys = append(artifactKeys, append([]byte(nil), k...))
+			}
+			return nil
+		}); err != nil {
+			return err
+		}
+		for _, key := range artifactKeys {
+			if err := artifactBucket.Delete(key); err != nil {
+				return err
+			}
+		}
+		for _, bucket := range []*bolt.Bucket{tx.Bucket(bJobs), tx.Bucket(bSpeakers)} {
+			if err := deletePrefix(bucket, originalUID+"/"); err != nil {
+				return err
+			}
+		}
+		if err := tx.Bucket(bSegments).Delete([]byte(originalUID)); err != nil {
+			return err
+		}
+		for _, meeting := range []model.Meeting{first, second} {
+			if err := putJSON(meetings, meeting.UID, meeting); err != nil {
+				return err
+			}
+			if err := putJSON(tx.Bucket(bSegments), meeting.UID, segments[meeting.UID]); err != nil {
+				return err
+			}
+		}
+		for _, artifact := range artifacts {
+			if artifact.UID == "" || (artifact.MeetingUID != first.UID && artifact.MeetingUID != second.UID) {
+				return errors.New("invalid split artifact")
+			}
+			if err := putJSON(artifactBucket, artifact.UID, artifact); err != nil {
+				return err
+			}
+		}
+		for _, speaker := range speakers {
+			if speaker.ID == "" || (speaker.MeetingUID != first.UID && speaker.MeetingUID != second.UID) {
+				return errors.New("invalid split speaker")
+			}
+			if err := putJSON(tx.Bucket(bSpeakers), speaker.MeetingUID+"/"+speaker.ID, speaker); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
 // SaveArtifact inserts or replaces an artifact by UID.
 func (s *Store) SaveArtifact(a model.Artifact) error {
 	if a.UID == "" || a.MeetingUID == "" {
