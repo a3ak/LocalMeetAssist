@@ -526,7 +526,7 @@ func (s *Server) settings(w http.ResponseWriter, r *http.Request) {
 			dynamicChanged = true
 			appliedKeys = append(appliedKeys, key)
 		}
-		if strings.HasPrefix(key, "models.") || strings.HasPrefix(key, "inference.") || key == "transcription.model_path" || key == "transcription.vad_model_path" || strings.HasPrefix(key, "diarization.") {
+		if strings.HasPrefix(key, "models.") || strings.HasPrefix(key, "inference.") || key == "transcription.model_path" || key == "transcription.vad_model_path" || strings.HasPrefix(key, "diarization.") || key == "summary.engine" || key == "summary.model_path" {
 			modelSettingsChanged = true
 		}
 	}
