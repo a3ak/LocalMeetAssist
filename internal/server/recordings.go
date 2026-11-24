@@ -206,6 +206,10 @@ func audioWarningText(language, source, event string, at time.Time) string {
 		return config.Localized(language,
 			"Системный звук потерян в "+stamp+": устройство вывода недоступно, голоса собеседников могли не записаться.",
 			"System audio was lost at "+stamp+": the output device became unavailable, so remote voices may be missing.")
+	case "truncated":
+		return config.Localized(language,
+			"Системный звук записался только до "+stamp+": голоса собеседников после этого могли не записаться.",
+			"System audio was recorded only until "+stamp+": remote voices after that may be missing.")
 	case "restored":
 		if microphone {
 			return config.Localized(language,

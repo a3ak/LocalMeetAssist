@@ -374,3 +374,16 @@ func TestStopTimeoutWhenHealthWatcherIsStuck(t *testing.T) {
 	close(healthBlock)
 	time.Sleep(50 * time.Millisecond)
 }
+
+func TestTruncatedSystemTrack(t *testing.T) {
+	mic := audio.WAVInfo{SampleRate: 16000, Channels: 1, BitsPerSample: 16, DataSize: int64(58 * 60 * 32000)}
+	system := audio.WAVInfo{SampleRate: 16000, Channels: 1, BitsPerSample: 16, DataSize: int64(21 * 60 * 32000)}
+	duration, truncated := truncatedSystemTrack(mic, system)
+	if !truncated || duration != 21*time.Minute {
+		t.Fatalf("truncated=%v duration=%s, want true/21m", truncated, duration)
+	}
+	system.DataSize = mic.DataSize
+	if _, truncated := truncatedSystemTrack(mic, system); truncated {
+		t.Fatal("equal durations must not be reported as truncated")
+	}
+}

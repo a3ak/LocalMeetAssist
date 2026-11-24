@@ -380,6 +380,10 @@ func (m *Manager) watchSystem(session *Session) {
 // stream is more important than a successful rebuild, so it replaces an earlier
 // "restored" and keeps the moment of the loss.
 func (session *Session) setSystemEvent(event string) {
+	session.setSystemEventAt(event, time.Now())
+}
+
+func (session *Session) setSystemEventAt(event string, at time.Time) {
 	session.mu.Lock()
 	defer session.mu.Unlock()
 	if session.SystemEvent == event || session.SystemEvent == "lost" {
@@ -389,7 +393,7 @@ func (session *Session) setSystemEvent(event string) {
 		return
 	}
 	session.SystemEvent = event
-	session.SystemEventAt = time.Now()
+	session.SystemEventAt = at
 }
 
 // SystemIssue returns the recorded system audio event, if any.
@@ -495,9 +499,36 @@ func (m *Manager) Stop(uid string) (*Session, error) {
 	}
 	if systemInfo.DataSize == 0 {
 		appLogging.Warnf(m.logger, "native recording warning uid=%s source=system reason=%q", uid, "empty stream: no system audio played during the meeting, or macOS did not deliver audio samples")
+	} else if systemDuration, truncated := truncatedSystemTrack(micInfo, systemInfo); truncated {
+		session.setSystemEventAt("truncated", session.StartedAt.Add(systemDuration))
+		appLogging.Warnf(m.logger, "native recording system stream ended early uid=%s system_duration=%s mic_duration=%s", uid, systemDuration.Round(time.Second), wavDuration(micInfo).Round(time.Second))
 	}
 	m.logger.Printf("native recording stopped uid=%s duration=%s microphone_bytes=%d system_bytes=%d", uid, time.Since(session.StartedAt).Round(time.Millisecond), micInfo.DataSize, systemInfo.DataSize)
 	return session, nil
+}
+
+func wavDuration(info audio.WAVInfo) time.Duration {
+	if info.SampleRate <= 0 || info.Channels <= 0 || info.BitsPerSample <= 0 {
+		return 0
+	}
+	frameBytes := int64(info.Channels * info.BitsPerSample / 8)
+	if frameBytes <= 0 {
+		return 0
+	}
+	frames := info.DataSize / frameBytes
+	return time.Duration(frames) * time.Second / time.Duration(info.SampleRate)
+}
+
+// truncatedSystemTrack reports a system stream that covers less than 80% of
+// the microphone timeline. The tap can stop silently after a Bluetooth device
+// change; without this warning the meeting looks complete until playback.
+func truncatedSystemTrack(mic, system audio.WAVInfo) (time.Duration, bool) {
+	micDuration := wavDuration(mic)
+	systemDuration := wavDuration(system)
+	if micDuration <= 0 || systemDuration <= 0 {
+		return 0, false
+	}
+	return systemDuration, systemDuration*5 < micDuration*4
 }
 
 func validateWAV(path, source string, requireData bool) (audio.WAVInfo, error) {

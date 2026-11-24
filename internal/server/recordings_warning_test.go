@@ -25,6 +25,10 @@ func TestAudioWarningText(t *testing.T) {
 	if got := audioWarningText("en", "system", "", at); got != "" {
 		t.Fatalf("an empty event must not produce a message: %q", got)
 	}
+	truncated := audioWarningText("ru", "system", "truncated", at)
+	if !strings.Contains(truncated, "14:32") || !strings.Contains(truncated, "только до") {
+		t.Fatalf("unexpected truncated message: %q", truncated)
+	}
 	microphone := audioWarningText("ru", "microphone", "lost", at)
 	if !strings.Contains(microphone, "Микрофон потерян") {
 		t.Fatalf("unexpected microphone message: %q", microphone)

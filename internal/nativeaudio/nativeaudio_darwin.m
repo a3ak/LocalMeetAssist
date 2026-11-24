@@ -353,6 +353,12 @@ typedef struct {
     // тап заявляет 48 кГц, а поток идёт в частоте устройства (44.1 кГц).
     double input_rate;
     double step;
+    // Measure the rate at which CoreAudio actually delivers frames before
+    // trusting the advertised stream format. A Bluetooth aggregate can report
+    // 16 kHz while the tap's buffers arrive at 6.4 kHz.
+    uint64_t rate_measure_host;
+    uint64_t rate_measure_frames;
+    int rate_measured;
     // Выравнивание по времени хоста: между колбэками (и при пересоздании
     // агрегата) CoreAudio может отдать больше или меньше данных, чем прошло
     // времени. Лишнее пропускаем, недостающее дополняем тишиной, чтобы дорожка
@@ -540,6 +546,8 @@ static void lm_tap_flush(lm_macos_capture* capture)
     }
 }
 
+static void lm_tap_reset_resamplers(lm_macos_capture* capture);
+
 // lm_tap_handle_audio converts one IO callback buffer into the WAV sink.
 static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList* input, uint64_t host_time)
 {
@@ -566,12 +574,38 @@ static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList
         pthread_mutex_unlock(&capture->lock);
         return;
     }
+    // Learn the real delivery rate from host timestamps. The advertised stream
+    // rate and the aggregate clock are not reliable with Bluetooth devices: a
+    // 6.4 kHz tap behind a 16 kHz aggregate was written without resampling and
+    // made the whole system track play 2.5x too fast.
+    if (!capture->rate_measured && host_time != 0) {
+        if (capture->rate_measure_host == 0) {
+            capture->rate_measure_host = host_time;
+        } else {
+            capture->rate_measure_frames += frames;
+            double measured_elapsed = (double)(host_time - capture->rate_measure_host) / lm_tap_ticks_per_second();
+            if (measured_elapsed >= 0.2) {
+                double observed = (double)capture->rate_measure_frames / measured_elapsed;
+                if (observed >= 1000.0 && observed <= 384000.0) {
+                    capture->input_rate = observed;
+                    capture->step = observed / (double)capture->target_rate;
+                    fprintf(stderr, "system audio tap: measured %.0f Hz (advertised %.0f Hz), step %.4f\n",
+                        observed, capture->source_format.mSampleRate, capture->step);
+                }
+                capture->rate_measured = 1;
+                lm_tap_reset_resamplers(capture);
+            }
+        }
+    }
     size_t skip = 0;
-    if (host_time != 0 && capture->last_host_time != 0 && capture->input_rate > 0) {
+    if (capture->rate_measured && host_time != 0 && capture->last_host_time != 0 && capture->input_rate > 0) {
         double elapsed = (double)(host_time - capture->last_host_time) / lm_tap_ticks_per_second();
         double expected = elapsed * capture->input_rate;
         double delta = (double)frames - expected;
-        double tolerance = 0.08 * capture->input_rate;
+        // A fraction of the frames expected in this callback, not of the sample
+        // rate: an 8% rate-sized window would hide a 2.5x clock mismatch for
+        // normal 100 ms callbacks.
+        double tolerance = 0.08 * expected;
         if (delta > tolerance) {
             skip = (size_t)(delta > (double)frames ? (double)frames : delta);
         } else if (delta < -tolerance) {
@@ -767,19 +801,26 @@ static int lm_tap_create_aggregate(lm_macos_capture* capture, char* error_text, 
         capture->aggregate_id = kAudioObjectUnknown;
         return -1;
     }
-    // Шаг пересчёта считается по частоте агрегатного устройства: IOProc отдаёт
-    // кадры в его такте, даже если тап заявляет другую частоту.
+    // Resample by the rate of the stream we actually decode. The aggregate's
+    // nominal clock can differ from the tap stream: with a Bluetooth headset the
+    // aggregate may advertise 16 kHz while the tap delivers 6.4 kHz. Using the
+    // aggregate clock here wrote 6.4k frames into a 16 kHz WAV without
+    // resampling, so the system track was sped up about 2.5x. That is the
+    // "meeting recorded at double speed" failure.
     capture->input_rate = capture->source_format.mSampleRate;
     Float64 clock_rate = 0;
     UInt32 clock_size = sizeof(clock_rate);
     AudioObjectPropertyAddress rate_address = {kAudioDevicePropertyNominalSampleRate, kAudioObjectPropertyScopeGlobal, kAudioObjectPropertyElementMain};
-    if (AudioObjectGetPropertyData(aggregate, &rate_address, 0, NULL, &clock_size, &clock_rate) == noErr && clock_rate > 0) {
-        capture->input_rate = clock_rate;
+    if (AudioObjectGetPropertyData(aggregate, &rate_address, 0, NULL, &clock_size, &clock_rate) != noErr) {
+        clock_rate = 0;
     }
     capture->step = capture->input_rate / (double)capture->target_rate;
+    capture->rate_measure_host = 0;
+    capture->rate_measure_frames = 0;
+    capture->rate_measured = 0;
     lm_tap_reset_resamplers(capture);
-    fprintf(stderr, "system audio tap: capturing %.0f Hz into %.0f Hz (step %.4f)\n",
-        capture->input_rate, (double)capture->target_rate, capture->step);
+    fprintf(stderr, "system audio tap: stream %.0f Hz, aggregate clock %.0f Hz, capturing %.0f Hz into %.0f Hz (step %.4f)\n",
+        capture->source_format.mSampleRate, clock_rate, capture->input_rate, (double)capture->target_rate, capture->step);
     return 0;
 }
 
