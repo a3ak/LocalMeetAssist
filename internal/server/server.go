@@ -43,25 +43,26 @@ type Server struct {
 	// pendingConfig marks settings that were saved while a recording or the
 	// pipeline was running. They are written to config.toml immediately but
 	// applied to the process only when the next meeting starts.
-	pendingMu      sync.Mutex
-	pendingConfig  bool
-	store          *store.Store
-	recorder       *recording.Manager
-	pipeline       *pipeline.Runner
-	voiceprints    *voice.Service
-	models         *modelmanager.Manager
-	token          string
-	nonces         *uiNonceState
-	effectivePort  int
-	browser        *browserSession
-	recording      *recordingTracker
-	conference     *conferenceDetectionState
-	activity       conferenceActivityProvider
-	logger         *log.Logger
-	logLevel       *appLogging.Controller
-	eventsMu       sync.Mutex
-	events         map[chan []byte]struct{}
-	splitPreviewMu sync.Mutex
+	pendingMu       sync.Mutex
+	pendingConfig   bool
+	store           *store.Store
+	recorder        *recording.Manager
+	pipeline        *pipeline.Runner
+	voiceprints     *voice.Service
+	models          *modelmanager.Manager
+	token           string
+	nonces          *uiNonceState
+	effectivePort   int
+	browser         *browserSession
+	recording       *recordingTracker
+	conference      *conferenceDetectionState
+	activity        conferenceActivityProvider
+	logger          *log.Logger
+	logLevel        *appLogging.Controller
+	eventsMu        sync.Mutex
+	events          map[chan []byte]struct{}
+	splitPreviewMu  sync.Mutex
+	statusWatchOnce sync.Once
 }
 
 func (s *Server) config() config.Config {

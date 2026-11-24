@@ -31,6 +31,7 @@ const state = {
   selectedMeetings: new Set(),
   split: null,
   calibration: null,
+  meetingsRefreshTimer: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -174,6 +175,8 @@ function monthBounds(date) {
 }
 
 async function loadMeetings() {
+  const list = $("#meetingList");
+  const previousScrollTop = list ? list.scrollTop : 0;
   const { from, to } = calendarBounds(state.month);
   const result = await api(`/api/v1/meetings?from=${encodeURIComponent(from.toISOString())}&to=${encodeURIComponent(to.toISOString())}`);
   state.meetings = Array.isArray(result) ? result : [];
@@ -183,7 +186,16 @@ async function loadMeetings() {
   state.listDay = null;
   renderCalendar();
   renderList();
+  if (list) list.scrollTop = previousScrollTop;
   if (state.searchQuery) scheduleMeetingSearch();
+}
+
+function scheduleMeetingsRefresh() {
+  clearTimeout(state.meetingsRefreshTimer);
+  state.meetingsRefreshTimer = setTimeout(() => {
+    state.meetingsRefreshTimer = null;
+    loadMeetings().catch(() => {});
+  }, 300);
 }
 
 function meetingMatchesSearch(meeting) {
@@ -350,6 +362,8 @@ function connectEvents() {
         const changed = renderRecordingState(payload.active ? payload.meeting : null);
         if (payload.active) renderConferenceCandidate(null);
         if (changed) loadMeetings().catch(() => {});
+      } else if (message.type === "meetings") {
+        scheduleMeetingsRefresh();
       } else if (message.type === "conference_detection") {
         renderConferenceCandidate(payload.candidate || null);
       }

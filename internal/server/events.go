@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"time"
 
 	"localmeetassist/internal/model"
@@ -40,6 +41,7 @@ func (s *Server) eventStream(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	s.statusWatchOnce.Do(func() { go s.watchMeetingStatuses() })
 	subscriber := make(chan []byte, 8)
 	s.eventsMu.Lock()
 	s.events[subscriber] = struct{}{}
@@ -92,4 +94,47 @@ func (s *Server) activeRecording() (*model.Meeting, error) {
 		}
 	}
 	return nil, nil
+}
+
+// watchMeetingStatuses publishes a meetings event when any meeting changes
+// status, processing stage, summary state or speaker count. The list and the
+// calendar otherwise stayed stale until the user opened a meeting.
+func (s *Server) watchMeetingStatuses() {
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	previous := ""
+	first := true
+	for range ticker.C {
+		meetings, err := s.store.ListMeetings(nil, nil)
+		if err != nil {
+			return
+		}
+		type snapshot struct {
+			UID       string `json:"uid"`
+			Status    string `json:"status"`
+			Stage     string `json:"processing_stage"`
+			Summary   string `json:"summary_status"`
+			Speakers  int    `json:"speaker_count"`
+			UpdatedAt int64  `json:"updated_at"`
+		}
+		items := make([]snapshot, 0, len(meetings))
+		for _, meeting := range meetings {
+			items = append(items, snapshot{
+				UID: meeting.UID, Status: meeting.Status, Stage: meeting.ProcessingStage,
+				Summary: meeting.SummaryStatus, Speakers: meeting.SpeakerCount,
+				UpdatedAt: meeting.UpdatedAt.UnixNano(),
+			})
+		}
+		sort.Slice(items, func(i, j int) bool { return items[i].UID < items[j].UID })
+		data, err := json.Marshal(items)
+		if err != nil {
+			continue
+		}
+		signature := string(data)
+		if first || (previous != "" && signature != previous) {
+			s.publishEvent("meetings", map[string]any{"changed": true})
+			first = false
+		}
+		previous = signature
+	}
 }
