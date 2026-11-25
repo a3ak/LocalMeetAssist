@@ -182,34 +182,30 @@ func onnxRuntimeSpec(cfg config.Config) Spec {
 		version = "1.23.2"
 	}
 	path := ResolveRuntimeLibrary(cfg.Inference.RuntimePath, version)
-	type platformAsset struct {
-		archive, wanted, sha string
-		size                 int64
+	// The upstream GitHub repository disappeared in November 2026. The
+	// official Microsoft.ML.OnnxRuntime NuGet package still contains the same
+	// native CPU libraries and is served from NuGet's immutable flat container.
+	const nugetSHA = "25fe172f7fcdf34f2b5b02c8b997f6b88abc282956849d4af4335af23d0c4e4a"
+	const nugetBytes = int64(123_371_574)
+	assets := map[string]string{
+		"linux/amd64":   "runtimes/linux-x64/native/libonnxruntime.so",
+		"linux/arm64":   "runtimes/linux-arm64/native/libonnxruntime.so",
+		"darwin/arm64":  "runtimes/osx-arm64/native/libonnxruntime.dylib",
+		"darwin/amd64":  "runtimes/osx-x64/native/libonnxruntime.dylib",
+		"windows/amd64": "runtimes/win-x64/native/onnxruntime.dll",
+		"windows/arm64": "runtimes/win-arm64/native/onnxruntime.dll",
 	}
-	assets := map[string]platformAsset{
-		"linux/amd64": {"onnxruntime-linux-x64-" + version + ".tgz", "libonnxruntime.so." + version, "1fa4dcaef22f6f7d5cd81b28c2800414350c10116f5fdd46a2160082551c5f9b", 8_309_231},
-		"linux/arm64": {"onnxruntime-linux-aarch64-" + version + ".tgz", "libonnxruntime.so." + version, "7c63c73560ed76b1fac6cff8204ffe34fe180e70d6582b5332ec094810241e5c", 7_254_068},
-		// In the official macOS archives libonnxruntime.dylib is a symlink.
-		// Extract the real regular file so installation also works on file
-		// systems and archive readers that do not preserve symlinks.
-		"darwin/arm64":  {"onnxruntime-osx-arm64-" + version + ".tgz", "libonnxruntime." + version + ".dylib", "b4d513ab2b26f088c66891dbbc1408166708773d7cc4163de7bdca0e9bbb7856", 9_999_931},
-		"darwin/amd64":  {"onnxruntime-osx-x86_64-" + version + ".tgz", "libonnxruntime." + version + ".dylib", "d10359e16347b57d9959f7e80a225a5b4a66ed7d7e007274a15cae86836485a6", 11_676_322},
-		"windows/amd64": {"onnxruntime-win-x64-" + version + ".zip", "onnxruntime.dll", "0b38df9af21834e41e73d602d90db5cb06dbd1ca618948b8f1d66d607ac9f3cd", 78_127_794},
-		"windows/arm64": {"onnxruntime-win-arm64-" + version + ".zip", "onnxruntime.dll", "1cfe88b6435df3b5fb0e9f6bd7d6f5df1e887b6174de7f6e2a47bab956f3f168", 78_932_411},
-	}
-	asset, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
+	entry, ok := assets[runtime.GOOS+"/"+runtime.GOARCH]
 	spec := Spec{ID: "onnx-runtime", MinRAMBytes: 536870912, MinDiskBytes: 209715200, Name: "ONNX Runtime " + version, Path: path, Group: "runtime", Recommended: true, Description: "Нативная среда выполнения ONNX для этой ОС и архитектуры. Загружается один раз; CLI-приложения не используются.", Selected: true, License: "MIT"}
 	if !ok || version != "1.23.2" {
 		return spec
 	}
-	spec.URL = "https://github.com/microsoft/onnxruntime/releases/download/v" + version + "/" + asset.archive
-	spec.DownloadSHA256 = asset.sha
-	spec.ApproxBytes = asset.size
-	if strings.HasSuffix(asset.archive, ".zip") {
-		spec.Archive = "zip:" + asset.wanted
-	} else {
-		spec.Archive = "tgz:" + asset.wanted
-	}
+	spec.URL = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/" + version + "/microsoft.ml.onnxruntime." + version + ".nupkg"
+	spec.DownloadSHA256 = nugetSHA
+	spec.ApproxBytes = nugetBytes
+	// Exact path extraction matters: a NuGet package contains several
+	// libonnxruntime.so files (x64 and arm64) with the same basename.
+	spec.Archive = "zipexact:" + entry
 	return spec
 }
 
@@ -1121,6 +1117,8 @@ func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 	// без каталога-обёртки. Так устроена сборка llama.cpp под Windows.
 	wanted = filepath.ToSlash(strings.TrimSpace(wanted))
 	kind = strings.ToLower(strings.TrimSpace(kind))
+	exact := strings.HasSuffix(kind, "exact")
+	kind = strings.TrimSuffix(kind, "exact")
 	librariesOnly := strings.HasSuffix(kind, "libs")
 	directoryMode := strings.HasSuffix(kind, "dir") || librariesOnly
 	if directoryMode {
@@ -1138,7 +1136,11 @@ func extractArchiveFile(archivePath, outputPath, descriptor string) error {
 	accept := func(name string) (string, bool) {
 		clean := filepath.ToSlash(filepath.Clean(name))
 		if !directoryMode {
-			if clean != wanted && filepath.Base(clean) != filepath.Base(wanted) {
+			if exact {
+				if clean != wanted {
+					return "", false
+				}
+			} else if clean != wanted && filepath.Base(clean) != filepath.Base(wanted) {
 				return "", false
 			}
 			return "", true

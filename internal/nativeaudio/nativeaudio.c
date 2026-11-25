@@ -42,6 +42,7 @@
 #if defined(__APPLE__)
 void* lm_macos_system_start(const char* path, unsigned int sample_rate, unsigned int channels, char* error_text, size_t error_size);
 int lm_macos_system_stop(void* handle, char* error_text, size_t error_size);
+int lm_macos_system_health(void* handle);
 int lm_macos_audio_activity(int* microphone_active, int* system_active, char* error_text, size_t error_size);
 int lm_macos_active_input_app(char* name, size_t name_size, int* found, char* error_text, size_t error_size);
 int lm_macos_active_audio_apps(char* names, size_t names_size, int* found, char* error_text, size_t error_size);
@@ -744,6 +745,26 @@ static int lm_system_restart(lm_capture* capture, const char* device_id)
 }
 #endif
 
+// lm_current_microphone_present reports whether the capture device is still
+// listed. The default input may change (speakers -> headset), but restarting a
+// healthy device on every default change can block ma_device_stop; keep the
+// current microphone until it actually disappears.
+static int lm_current_microphone_present(lm_capture* capture)
+{
+    if (!capture->microphone_has_current) return 0;
+    ma_device_info* devices = NULL;
+    ma_uint32 count = 0;
+    if (ma_context_get_devices(&capture->context, NULL, NULL, &devices, &count) != MA_SUCCESS || devices == NULL) {
+        return 1;
+    }
+    for (ma_uint32 index = 0; index < count; index++) {
+        if (memcmp(&devices[index].id, &capture->microphone_current_id, sizeof(ma_device_id)) == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 // lm_audio_microphone_health checks the microphone stream, follows a changed
 // default input and recreates the device after it disappeared. Returns 0 while it
 // runs, 1 when it was just recreated, 2 when it is lost.
@@ -754,8 +775,7 @@ int lm_audio_microphone_health(lm_capture* capture)
     ma_device_id desired;
     int have_desired = lm_resolve_capture_device(capture, &desired) == 0;
     int running = capture->microphone_started && ma_device_get_state(&capture->microphone) == ma_device_state_started;
-    int unchanged = !have_desired || (capture->microphone_has_current && memcmp(&desired, &capture->microphone_current_id, sizeof(ma_device_id)) == 0);
-    if (running && unchanged) return 0;
+    if (running && (lm_current_microphone_present(capture) || !have_desired)) return 0;
     char error[256] = {0};
     if (have_desired && lm_microphone_restart(capture, &desired, error, sizeof(error)) == 0) {
         capture->microphone_restored++;
@@ -780,7 +800,8 @@ int lm_audio_system_health(lm_capture* capture)
     if (capture == NULL) return 0;
 #if defined(__APPLE__)
     // На macOS агрегатное устройство пересобирает слушатель CoreAudio.
-    return 0;
+    // Дополнительно сообщаем Go-слою, что тап перестал отдавать кадры.
+    return lm_macos_system_health(capture->macos_system);
 #else
     if (!capture->system_initialized) return 0;
     if (capture->system_lost) return 2;

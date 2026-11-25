@@ -371,6 +371,8 @@ typedef struct {
     int failed;
     char failure_reason[512];
     uint64_t frames_written;
+    uint64_t last_progress_frames;
+    uint64_t last_progress_host;
 } lm_macos_capture;
 
 static void lm_macos_capture_fail(lm_macos_capture* capture, const char* message)
@@ -642,6 +644,10 @@ static void lm_tap_handle_audio(lm_macos_capture* capture, const AudioBufferList
         resampler->pending_frames += (int)frames;
     }
     lm_tap_flush(capture);
+    if (capture->frames_written != capture->last_progress_frames) {
+        capture->last_progress_frames = capture->frames_written;
+        capture->last_progress_host = mach_absolute_time();
+    }
     pthread_mutex_unlock(&capture->lock);
 }
 
@@ -913,6 +919,23 @@ static void lm_tap_free(lm_macos_capture* capture)
     free(capture);
 }
 
+// lm_macos_system_health reports a tap that stopped delivering frames. The
+// output-device listener may already be rebuilding it; this lets the Go layer
+// show a warning instead of recording an empty system.wav in silence.
+int lm_macos_system_health(void* opaque)
+{
+    if (opaque == NULL) return 0;
+    lm_macos_capture* capture = (lm_macos_capture*)opaque;
+    pthread_mutex_lock(&capture->lock);
+    int lost = capture->failed ? 1 : 0;
+    if (!lost && capture->last_progress_host != 0) {
+        double quiet = (double)(mach_absolute_time() - capture->last_progress_host) / lm_tap_ticks_per_second();
+        if (quiet > 3.0) lost = 1;
+    }
+    pthread_mutex_unlock(&capture->lock);
+    return lost ? 2 : 0;
+}
+
 void* lm_macos_system_start(const char* path, unsigned int sample_rate, unsigned int channels, char* error_text, size_t error_size)
 {
     if (@available(macOS 14.2, *)) {
@@ -985,6 +1008,9 @@ void* lm_macos_system_start(const char* path, unsigned int sample_rate, unsigned
                 lm_tap_free(capture);
                 return NULL;
             }
+
+            capture->last_progress_frames = capture->frames_written;
+            capture->last_progress_host = mach_absolute_time();
 
             // Смена устройства вывода не должна обрывать запись: пересобираем
             // агрегатное устройство на новом устройстве, тап и WAV остаются.

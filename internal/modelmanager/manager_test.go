@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,6 +74,55 @@ func TestExtractRuntimeArchives(t *testing.T) {
 				t.Fatalf("unexpected payload %q", got)
 			}
 		})
+	}
+}
+
+func TestONNXRuntimeUsesNuGetSource(t *testing.T) {
+	spec := onnxRuntimeSpec(config.Defaults())
+	if !strings.Contains(spec.URL, "api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/1.23.2/") {
+		t.Fatalf("unexpected ONNX runtime URL %q", spec.URL)
+	}
+	if spec.DownloadSHA256 != "25fe172f7fcdf34f2b5b02c8b997f6b88abc282956849d4af4335af23d0c4e4a" {
+		t.Fatalf("unexpected ONNX runtime hash %q", spec.DownloadSHA256)
+	}
+	if !strings.HasPrefix(spec.Archive, "zipexact:runtimes/") {
+		t.Fatalf("ONNX runtime must use an exact archive path, got %q", spec.Archive)
+	}
+}
+
+func TestExtractExactArchivePathIgnoresOtherArchitectures(t *testing.T) {
+	dir := t.TempDir()
+	archivePath := filepath.Join(dir, "runtime.zip")
+	var data bytes.Buffer
+	zw := zip.NewWriter(&data)
+	for name, payload := range map[string]string{
+		"runtimes/linux-x64/native/libonnxruntime.so":   "x64-library",
+		"runtimes/linux-arm64/native/libonnxruntime.so": "arm64-library",
+	} {
+		entry, err := zw.Create(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := entry.Write([]byte(payload)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(archivePath, data.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	output := filepath.Join(dir, "libonnxruntime.so")
+	if err := extractArchiveFile(archivePath, output, "zipexact:runtimes/linux-arm64/native/libonnxruntime.so"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(output)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "arm64-library" {
+		t.Fatalf("exact extraction picked %q", got)
 	}
 }
 
